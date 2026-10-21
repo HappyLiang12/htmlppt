@@ -1,10 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { startHost } from '@htmlppt/host';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { describe, expect, it } from 'vitest';
-import { runCli } from '../src/index.js';
+import { formatHostStartError, runCli } from '../src/index.js';
 
 function capture() {
   const stdout: string[] = [];
@@ -305,56 +304,70 @@ describe('htmlppt cli', () => {
     expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
   });
 
-  it('does not map a listen EACCES to an unreadable deck', async () => {
-    const cwd = await makeTempDir('htmlppt-cli-');
-    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+  describe('formatHostStartError', () => {
+    const deckPath = join('decks', 'deck.html');
 
-    const probe = createServer();
-    const probeError = await new Promise<NodeJS.ErrnoException | undefined>(
-      (resolve) => {
-        probe.once('error', (error) => {
-          resolve(error as NodeJS.ErrnoException);
-        });
-        probe.listen(80, '127.0.0.1', () => {
-          probe.close(() => resolve(undefined));
-        });
-      }
-    );
-
-    if (probeError?.code === 'EACCES') {
-      const output = capture();
-      const code = await runCli(
-        ['open', 'deck.html', '--port=80', '--no-browser'],
-        { cwd, ...output.io }
-      );
-
-      expect(code).toBe(1);
-      expect(output.stderr.join('\n')).not.toContain(
-        'Deck file could not be read'
-      );
-      expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
-      return;
+    function errnoError(
+      code: string,
+      details: Partial<NodeJS.ErrnoException> = {}
+    ): NodeJS.ErrnoException {
+      return Object.assign(new Error(`${code}: synthetic failure`), {
+        code,
+        ...details
+      });
     }
 
-    if (probeError) {
-      throw new Error(
-        `Port 80 could not be probed: ${String(probeError.code)}.`
+    it('maps ENOENT for the deck path to the missing-deck message', () => {
+      const message = formatHostStartError(
+        errnoError('ENOENT', { path: deckPath }),
+        deckPath,
+        4321
       );
-    }
 
-    // This Windows account is allowed to bind port 80, so a real listen EACCES
-    // cannot be produced. Assert the host can start and stop on that port.
-    const host = await startHost({
-      filePath: join(cwd, 'deck.html'),
-      token: 'listen-eacces-test',
-      editorDir: cwd,
-      port: 80
+      expect(message).toBe(
+        `Deck file not found: ${deckPath}. Create one with "htmlppt new ${deckPath}".`
+      );
     });
-    try {
-      expect(host.port).toBe(80);
-    } finally {
-      await host.close();
-    }
+
+    it('does not map ENOENT for another path', () => {
+      const message = formatHostStartError(
+        errnoError('ENOENT', { path: join('other', 'deck.html') }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBeNull();
+    });
+
+    it('does not map a listen EACCES to an unreadable deck', () => {
+      const message = formatHostStartError(
+        errnoError('EACCES', { syscall: 'listen' }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBeNull();
+    });
+
+    it('maps an open EACCES on the deck path to the unreadable message', () => {
+      const message = formatHostStartError(
+        errnoError('EACCES', { syscall: 'open', path: deckPath }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBe(`Deck file could not be read: ${deckPath}.`);
+    });
+
+    it('maps EISDIR on the deck path to the unreadable message', () => {
+      const message = formatHostStartError(
+        errnoError('EISDIR', { path: deckPath }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBe(`Deck file could not be read: ${deckPath}.`);
+    });
   });
 
   it('reports a missing editor build with an actionable error', async () => {

@@ -42,6 +42,30 @@ function printDiagnostics(result: ValidationResult, io: CliIO): void {
   );
 }
 
+export function formatHostStartError(
+  error: unknown,
+  filePath: string,
+  port: number,
+  displayPath: string = filePath
+): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const { code, path: errorPath, syscall } = error as NodeJS.ErrnoException;
+  if (code === 'ENOENT' && errorPath === filePath) {
+    return `Deck file not found: ${displayPath}. Create one with "htmlppt new ${displayPath}".`;
+  }
+  const unreadableDeck =
+    code === 'EISDIR' ||
+    (code === 'EACCES' &&
+      (errorPath === filePath || syscall === 'open' || syscall === 'read'));
+  if (unreadableDeck) {
+    return `Deck file could not be read: ${displayPath}.`;
+  }
+  if (code === 'EADDRINUSE') {
+    return `Port ${port} is already in use. Omit --port or choose another.`;
+  }
+  return null;
+}
+
 export async function runCli(
   argv: string[],
   overrides: Partial<CliIO> = {}
@@ -186,30 +210,18 @@ export async function runCli(
           port: Number(options.port)
         });
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        const message = error instanceof Error ? error.message : String(error);
-        if (code === 'ENOENT' && message.includes(filePath)) {
-          throw new Error(
-            `Deck file not found: ${file}. Create one with "htmlppt new ${file}".`
-          );
+        const message = formatHostStartError(
+          error,
+          filePath,
+          Number(options.port),
+          file
+        );
+        if (message === null) {
+          throw error;
         }
-        const syscall = (error as NodeJS.ErrnoException).syscall;
-        const deckPath = (error as NodeJS.ErrnoException).path;
-        const unreadableDeck =
-          code === 'EISDIR' ||
-          (code === 'EACCES' &&
-            (deckPath === filePath ||
-              syscall === 'open' ||
-              syscall === 'read'));
-        if (unreadableDeck) {
-          throw new Error(`Deck file could not be read: ${file}.`);
-        }
-        if (code === 'EADDRINUSE') {
-          throw new Error(
-            `Port ${options.port} is already in use. Omit --port or choose another.`
-          );
-        }
-        throw error;
+        io.stderr(message);
+        exitCode = 1;
+        return;
       }
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
