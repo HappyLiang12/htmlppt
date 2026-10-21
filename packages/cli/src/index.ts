@@ -187,10 +187,14 @@ export async function runCli(
         });
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === 'ENOENT') {
+        const message = error instanceof Error ? error.message : String(error);
+        if (code === 'ENOENT' && message.includes(filePath)) {
           throw new Error(
             `Deck file not found: ${file}. Create one with "htmlppt new ${file}".`
           );
+        }
+        if (code === 'EISDIR' || code === 'EACCES') {
+          throw new Error(`Deck file could not be read: ${file}.`);
         }
         if (code === 'EADDRINUSE') {
           throw new Error(

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { makeTempDir } from '@htmlppt/test-utils';
@@ -287,6 +287,21 @@ describe('htmlppt cli', () => {
         probe.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
+
+  it('reports a directory deck path as unreadable', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await mkdir(join(cwd, 'deck-dir'));
+    const output = capture();
+
+    const code = await runCli(['open', 'deck-dir', '--no-browser'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain('Deck file could not be read');
+    expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
   });
 
   it('reports a missing editor build with an actionable error', async () => {
