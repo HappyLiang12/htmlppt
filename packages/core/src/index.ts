@@ -1,5 +1,7 @@
 export { detectSlides, readCanvasSize } from './detect.js';
 export type { CanvasSize, SlideInfo } from './detect.js';
+export { getOutline, readSlide } from './outline.js';
+export type { DeckOutline, OutlineElement, OutlineSlide, SlideReadModel } from './outline.js';
 export { validateDeck } from './validate.js';
 export type { Diagnostic, DiagnosticSeverity, ValidationResult } from './types.js';
 export { serializeDeck, serializeExport } from './serialize.js';
