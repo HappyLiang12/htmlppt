@@ -9,9 +9,9 @@ const deck = (body: string) =>
   );
 
 describe('normalizeDeck', () => {
-  it('assigns missing slide ids in order without colliding', () => {
+  it('assigns missing slide ids in order', () => {
     const doc = deck(
-      '<section class="slide" data-slide-id="s2"></section><section class="slide"></section><section class="slide"></section>'
+      '<section class="slide"></section><section class="slide"></section><section class="slide"></section>'
     );
 
     const result = normalizeDeck(doc);
@@ -21,7 +21,32 @@ describe('normalizeDeck', () => {
       Array.from(doc.querySelectorAll('[data-slide-id]')).map((slide) =>
         slide.getAttribute('data-slide-id')
       )
-    ).toEqual(['s2', 's1', 's3']);
+    ).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('follows detection precedence for partially annotated decks', () => {
+    // Detection lets [data-slide-id] shadow classed siblings. Normalization
+    // must not silently promote those siblings into slides.
+    const doc = deck(
+      '<section class="slide" data-slide-id="s2"></section><section class="slide">Ignored by detection</section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides.map((slide) => slide.id)).toEqual(['s2']);
+    expect(doc.querySelectorAll('[data-slide-id]')).toHaveLength(1);
+    expect(doc.querySelectorAll('.slide')[1].hasAttribute('data-ppt-el')).toBe(false);
+  });
+
+  it('avoids collisions with existing ids', () => {
+    const doc = deck(
+      '<section class="slide"><h1 data-ppt-el="e3">A</h1><p>B</p></section><section class="slide"><h2>C</h2></section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides[0].elementIds).toEqual(['e3', 'e1']);
+    expect(result.slides[1].elementIds).toEqual(['e1']);
   });
 
   it('assigns top-level object ids per slide and skips notes and scripts', () => {
@@ -40,6 +65,18 @@ describe('normalizeDeck', () => {
     expect(group?.querySelector('span')?.hasAttribute('data-ppt-el')).toBe(false);
     expect(doc.querySelector('aside')?.hasAttribute('data-ppt-el')).toBe(false);
     expect(doc.querySelector('script')?.hasAttribute('data-ppt-el')).toBe(false);
+  });
+
+  it('avoids ids used by nested objects', () => {
+    const doc = deck(
+      '<section class="slide" data-slide-id="s1"><div data-ppt-group><span data-ppt-el="e2">Nested</span></div></section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides).toEqual([{ id: 's1', elementIds: ['e1'] }]);
+    expect(doc.querySelector('div')?.getAttribute('data-ppt-el')).toBe('e1');
+    expect(doc.querySelector('span')?.getAttribute('data-ppt-el')).toBe('e2');
   });
 
   it('is idempotent and preserves unrelated markup', () => {
@@ -96,6 +133,35 @@ describe('normalizeDeck', () => {
     );
   });
 
+  it('appends position without disturbing existing declarations', () => {
+    const doc = deck(
+      '<section class="slide" data-slide-id="s1" style="color: red"></section>'
+    );
+
+    normalizeDeck(doc, { isStaticPosition: () => true });
+
+    expect(doc.querySelector('[data-slide-id="s1"]')?.getAttribute('style')).toBe(
+      'color: red; position: relative;'
+    );
+  });
+
+  it('is idempotent when positioning is injected', () => {
+    const doc = deck(
+      '<section class="slide" data-slide-id="s1" style="color: red"></section>'
+    );
+    const isStaticPosition = () => true;
+
+    normalizeDeck(doc, { isStaticPosition });
+    const once = serializeDeck(doc);
+    const second = normalizeDeck(doc, { isStaticPosition });
+
+    expect(second.changed).toBe(false);
+    expect(serializeDeck(doc)).toBe(once);
+    expect(doc.querySelector('[data-slide-id="s1"]')?.getAttribute('style')).toBe(
+      'color: red; position: relative;'
+    );
+  });
+
   it('does not touch positioning without the predicate', () => {
     const doc = deck('<section class="slide" data-slide-id="s1"></section>');
 
@@ -130,5 +196,19 @@ describe('normalizeDeck', () => {
     expect(doc.querySelector('.slide')?.getAttribute('data-slide-id')).toBe(
       'custom-slide'
     );
+  });
+
+  it('reports the assigned id instead of the body fallback label', () => {
+    const doc = deck('<section class="slide"></section>');
+
+    const result = normalizeDeck(doc, {
+      ids: {
+        slideId: () => '  ',
+        elementId: () => 'e1'
+      }
+    });
+
+    expect(result.slides[0].id).not.toBe('body');
+    expect(result.slides[0].id).toBe('');
   });
 });

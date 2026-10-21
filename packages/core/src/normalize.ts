@@ -17,60 +17,9 @@ export interface NormalizeResult {
   slides: NormalizedSlide[];
 }
 
-interface SlideRoot {
-  element: Element;
-  index: number;
-  hasId: boolean;
-}
-
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
 const EDITOR_ATTRIBUTES = ['data-ppt-editing', 'data-ppt-frame-slide'];
 const POSITION_PATTERN = /(?:^|;)\s*position\s*:/i;
-const SLIDE_MARKER_SELECTOR = '.slide, .page, .slide-page';
-
-function hasSlideId(element: Element): boolean {
-  return Boolean(element.getAttribute('data-slide-id')?.trim());
-}
-
-/**
- * detectSlides prefers id-bearing roots whenever any exist, which would skip
- * unlabelled classed siblings in a partially annotated deck. Normalization has
- * to cover every slide root, so id-driven results are widened to classed
- * siblings of the detected roots. Document order is restored from the DOM.
- */
-function slideRoots(doc: Document): SlideRoot[] {
-  const detected = detectSlides(doc);
-  if (detected.length === 0) return [];
-  if (detected.some((slide) => slide.element === doc.body)) {
-    return detected.map((slide, index) => ({
-      element: slide.element,
-      index,
-      hasId: slide.hasId
-    }));
-  }
-
-  const elements = new Set(detected.map((slide) => slide.element));
-  if (detected.some((slide) => slide.element.hasAttribute('data-slide-id'))) {
-    const parents = new Set<Element>();
-    for (const slide of detected) {
-      const parent = slide.element.parentElement;
-      if (parent) parents.add(parent);
-    }
-    for (const parent of parents) {
-      for (const child of Array.from(parent.children)) {
-        if (child.matches(SLIDE_MARKER_SELECTOR)) elements.add(child);
-      }
-    }
-  }
-
-  return Array.from(doc.querySelectorAll('*'))
-    .filter((element) => elements.has(element))
-    .map((element, index) => ({
-      element,
-      index,
-      hasId: hasSlideId(element)
-    }));
-}
 
 function isObject(element: Element): boolean {
   return (
@@ -104,32 +53,34 @@ export function normalizeDeck(
   options: NormalizeOptions = {}
 ): NormalizeResult {
   const ids = options.ids ?? defaultIdFactory;
-  const roots = slideRoots(doc);
+  const slides = detectSlides(doc);
   const usedSlideIds = new Set(
-    roots
-      .map((root) => root.element.getAttribute('data-slide-id')?.trim())
+    slides
+      .map((slide) => slide.element.getAttribute('data-slide-id')?.trim())
       .filter((id): id is string => Boolean(id))
   );
   let changed = false;
   const normalized: NormalizedSlide[] = [];
 
-  for (const root of roots) {
-    if (root.element !== doc.body && !root.hasId) {
+  for (const slide of slides) {
+    if (slide.element !== doc.body && !slide.hasId) {
       const id = ids.slideId(usedSlideIds);
-      root.element.setAttribute('data-slide-id', id);
+      slide.element.setAttribute('data-slide-id', id);
       usedSlideIds.add(id);
       changed = true;
     }
 
-    const objects = topLevelObjects(root.element);
+    const objects = topLevelObjects(slide.element);
     const usedElementIds = new Set(
-      objects.map(objectId).filter((id): id is string => id !== null)
+      Array.from(slide.element.querySelectorAll('[data-ppt-el]'))
+        .map(objectId)
+        .filter((id): id is string => id !== null)
     );
     const elementIds: string[] = [];
     for (const element of objects) {
       let id = objectId(element);
       if (!id) {
-        id = ids.elementId(usedElementIds, root.index);
+        id = ids.elementId(usedElementIds, slide.index);
         element.setAttribute('data-ppt-el', id);
         usedElementIds.add(id);
         changed = true;
@@ -138,14 +89,17 @@ export function normalizeDeck(
     }
 
     if (
-      root.element !== doc.body &&
-      options.isStaticPosition?.(root.element)
+      slide.element !== doc.body &&
+      options.isStaticPosition?.(slide.element)
     ) {
-      changed = ensureRelativePosition(root.element) || changed;
+      changed = ensureRelativePosition(slide.element) || changed;
     }
 
     normalized.push({
-      id: root.element.getAttribute('data-slide-id')?.trim() || 'body',
+      id:
+        slide.element === doc.body
+          ? 'body'
+          : (slide.element.getAttribute('data-slide-id')?.trim() ?? ''),
       elementIds
     });
   }
