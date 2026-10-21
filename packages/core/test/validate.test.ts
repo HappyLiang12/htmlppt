@@ -18,6 +18,16 @@ describe('validateDeck', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('reports the slide count as info', () => {
+    const result = validateDeck(
+      deck(`<section data-slide-id="s1"></section><section data-slide-id="s2"></section>`)
+    );
+
+    expect(result.info).toEqual([
+      { severity: 'info', code: 'slide-count', message: '2 slide(s) detected.' }
+    ]);
+  });
+
   it('reports duplicate slide ids', () => {
     const result = validateDeck(
       deck(`<section data-slide-id="same"></section><section data-slide-id="same"></section>`)
@@ -50,6 +60,18 @@ describe('validateDeck', () => {
     );
   });
 
+  it('warns when the title is only whitespace', () => {
+    const doc = parseDeckHtml(
+      '<!doctype html><html><head><title>   </title></head><body><section data-slide-id="s1"></section></body></html>'
+    );
+
+    const result = validateDeck(doc);
+
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ code: 'missing-title' })
+    );
+  });
+
   it('rejects invalid chart JSON', () => {
     const result = validateDeck(
       deck(`<section data-slide-id="s1"><figure data-ppt-chart="{oops}"></figure></section>`)
@@ -72,5 +94,9 @@ describe('validateDeck', () => {
     expect(result.errors).toContainEqual(
       expect.objectContaining({ code: 'empty-document' })
     );
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([
+      { severity: 'info', code: 'slide-count', message: '0 slide(s) detected.' }
+    ]);
   });
 });

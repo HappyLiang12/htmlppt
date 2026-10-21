@@ -15,7 +15,9 @@ export function validateDeck(doc: Document): ValidationResult {
   const warnings: Diagnostic[] = [];
   const info: Diagnostic[] = [];
 
-  if (!doc.body || doc.body.children.length === 0) {
+  const bodyIsEmpty = !doc.body || doc.body.children.length === 0;
+
+  if (bodyIsEmpty) {
     errors.push(
       diagnostic('error', 'empty-document', 'The document has no content.')
     );
@@ -27,8 +29,9 @@ export function validateDeck(doc: Document): ValidationResult {
     );
   }
 
-  const slides = detectSlides(doc);
-  if (slides.length === 0) {
+  const slides = bodyIsEmpty ? [] : detectSlides(doc);
+  if (!bodyIsEmpty && slides.length === 0) {
+    // parseDeckHtml always yields a body, so this guards externally built documents.
     errors.push(
       diagnostic('error', 'no-slides', 'No slides were found in the document.')
     );

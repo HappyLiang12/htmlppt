@@ -24,5 +24,11 @@ describe('serialization', () => {
     const html = serializeExport(parseDeckHtml(source));
 
     expect(html).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
+    expect(
+      html.startsWith('<!doctype html>\n<!-- Edited with htmlppt. Format: htmldeck/v1. -->')
+    ).toBe(true);
+    expect(
+      html.match(/<!-- Edited with htmlppt\. Format: htmldeck\/v1\. -->/g)
+    ).toHaveLength(1);
   });
 });
