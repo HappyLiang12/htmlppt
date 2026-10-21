@@ -1,5 +1,7 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { join, parse, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
   serializeExport,
@@ -7,6 +9,7 @@ import {
   type ValidationResult
 } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
+import { startHost } from '@htmlppt/host';
 import { Command, CommanderError } from 'commander';
 
 export interface CliIO {
@@ -19,6 +22,13 @@ const DEFAULT_STREAMS = {
   stdout: (line: string) => console.log(line),
   stderr: (line: string) => console.error(line)
 };
+
+function editorDir(): string {
+  return (
+    process.env.HTMLPPT_EDITOR_DIR ??
+    fileURLToPath(new URL('../../editor/dist', import.meta.url))
+  );
+}
 
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
   for (const diagnostic of result.errors) {
@@ -121,6 +131,55 @@ export async function runCli(
         : join(parsedPath.dir, `${parsedPath.name}.export.html`);
       await writeFile(destination, serializeExport(doc), 'utf8');
       io.stdout(`Exported ${destination}`);
+    });
+
+  program
+    .command('open <file>')
+    .description('Open the visual editor for a deck')
+    .option('--port <port>', 'port to listen on', '0')
+    .option('--no-browser', 'do not open a browser')
+    .action(async (file: string, options: { port: string; browser: boolean }) => {
+      if (!/^\d+$/.test(options.port) || Number(options.port) > 65_535) {
+        throw new Error(
+          'Invalid --port. Use an integer between 0 and 65535.'
+        );
+      }
+      const filePath = resolve(io.cwd, file);
+      const directory = editorDir();
+      try {
+        await access(join(directory, 'index.html'));
+      } catch {
+        throw new Error('Editor build not found. Run "npm run build" first.');
+      }
+      const host = await startHost({
+        filePath,
+        token: randomUUID(),
+        editorDir: directory,
+        port: Number(options.port)
+      });
+
+      io.stdout(`HTMLPPT_URL=${host.url}`);
+
+      await new Promise<void>((resolvePromise) => {
+        const stop = () => {
+          void host.close().finally(() => resolvePromise());
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+
+        if (options.browser) {
+          void (async () => {
+            try {
+              const { default: openUrl } = await import('open');
+              await openUrl(host.url);
+            } catch (cause) {
+              io.stderr(
+                `Could not open a browser: ${cause instanceof Error ? cause.message : String(cause)}. Open the URL manually.`
+              );
+            }
+          })();
+        }
+      });
     });
 
   try {

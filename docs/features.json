@@ -1,6 +1,6 @@
 {
   "features": [
-    { "id": "skeleton", "spec": "16", "status": "planned", "tests": ["@feature:skeleton"] },
+    { "id": "skeleton", "spec": "16", "status": "active", "tests": ["@feature:skeleton"] },
     { "id": "slides", "spec": "4.Slides", "status": "planned", "tests": ["@feature:slides"] },
     { "id": "objects-transform", "spec": "4.Objects", "status": "planned", "tests": ["@feature:objects-transform"] },
     { "id": "rich-text", "spec": "4.Text", "status": "planned", "tests": ["@feature:rich-text"] },
