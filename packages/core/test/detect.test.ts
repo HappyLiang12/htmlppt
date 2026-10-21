@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectSlides } from '../src/detect.js';
+import { detectSlides, readCanvasSize } from '../src/detect.js';
 import { parseDeckHtml } from '../src/node.js';
 
 const documentFor = (body: string) =>
@@ -129,5 +129,68 @@ describe('detectSlides', () => {
 
     expect(slides[0].width).toBe(1280);
     expect(slides[1].width).toBe(1600);
+  });
+
+  it('rejects malformed numeric size attributes and inline styles', () => {
+    const doc = documentFor(`
+      <section class="slide" data-width="1.2.3"></section>
+      <section class="slide" style="width: 10..5px"></section>
+    `);
+
+    expect(detectSlides(doc).map((slide) => slide.width)).toEqual([1600, 1600]);
+  });
+
+  it('accepts decimal sizes with and without a px suffix', () => {
+    const doc = documentFor(`
+      <section class="slide" data-width="1600.5px"></section>
+      <section class="slide" data-width=".5px"></section>
+      <section class="slide" data-width="1600"></section>
+    `);
+
+    expect(detectSlides(doc).map((slide) => slide.width)).toEqual([1600.5, 0.5, 1600]);
+  });
+
+  it('rejects zero and negative size attributes', () => {
+    const doc = documentFor(`
+      <section class="slide" data-height="0"></section>
+      <section class="slide" data-height="-5"></section>
+    `);
+
+    const slides = detectSlides(doc);
+
+    expect(slides.map((slide) => slide.height)).toEqual([900, 900]);
+    expect(slides.map((slide) => slide.heightValid)).toEqual([false, false]);
+  });
+});
+
+describe('readCanvasSize', () => {
+  const canvasFor = (attributes: string) => {
+    const doc = documentFor(`<section ${attributes}></section>`);
+    const element = doc.querySelector('section');
+    if (!element) throw new Error('Missing section element.');
+    return readCanvasSize(element);
+  };
+
+  it('reports validity for missing, valid, and malformed attributes', () => {
+    expect(canvasFor('')).toEqual({
+      width: 1600,
+      height: 900,
+      widthValid: true,
+      heightValid: true
+    });
+
+    expect(canvasFor('data-width="1600.5" data-height="900"')).toEqual({
+      width: 1600.5,
+      height: 900,
+      widthValid: true,
+      heightValid: true
+    });
+
+    expect(canvasFor('data-width="1.2.3" data-height="0"')).toEqual({
+      width: 1600,
+      height: 900,
+      widthValid: false,
+      heightValid: false
+    });
   });
 });

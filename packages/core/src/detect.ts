@@ -19,18 +19,20 @@ export interface SlideInfo {
 const SLIDE_SELECTORS = ['[data-slide-id]', '.slide', '.page', '.slide-page'];
 const DEFAULT_WIDTH = 1600;
 const DEFAULT_HEIGHT = 900;
+const NUMBER = String.raw`(?:\d+(?:\.\d*)?|\.\d+)`;
+const ATTRIBUTE_SIZE = new RegExp(`^${NUMBER}(?:px)?$`, 'i');
 
 function positiveNumber(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
 function readAttributeSize(value: string | null): number {
-  const match = value?.trim().match(/^([\d.]+)(?:px)?$/i);
-  return match ? Number.parseFloat(match[1]) : Number.NaN;
+  const match = value?.trim().match(ATTRIBUTE_SIZE);
+  return match ? Number.parseFloat(match[0]) : Number.NaN;
 }
 
 function readStyleSize(style: string, property: 'width' | 'height'): number {
-  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([\\d.]+)px`, 'gi');
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*(${NUMBER})px`, 'gi');
   const matches = Array.from(style.matchAll(pattern));
   const value = matches.at(-1)?.[1];
   return value === undefined ? Number.NaN : Number.parseFloat(value);

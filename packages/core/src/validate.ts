@@ -33,11 +33,22 @@ function slideFor(
   element: Element,
   slides: SlideInfo[]
 ): SlideInfo | undefined {
-  const elements = new Set(slides.map((slide) => slide.element));
   let current: Element | null = element;
   while (current) {
     const match = slides.find((slide) => slide.element === current);
-    if (match && elements.has(current)) return match;
+    if (match) return match;
+    current = current.parentElement;
+  }
+  return undefined;
+}
+
+function owningSlideElement(
+  element: Element,
+  slideElements: Set<Element>
+): Element | undefined {
+  let current: Element | null = element;
+  while (current) {
+    if (slideElements.has(current)) return current;
     current = current.parentElement;
   }
   return undefined;
@@ -63,6 +74,7 @@ export function validateDeck(doc: Document): ValidationResult {
   }
 
   const slides = bodyIsEmpty ? [] : detectSlides(doc);
+  const slideElements = new Set(slides.map((slide) => slide.element));
 
   for (const slide of slides) {
     if (slide.element === doc.body) continue;
@@ -103,14 +115,19 @@ export function validateDeck(doc: Document): ValidationResult {
       );
     }
 
+    const elements = Array.from(
+      slide.element.querySelectorAll('[data-ppt-el]')
+    ).filter(
+      (element) => owningSlideElement(element, slideElements) === slide.element
+    );
     const elementIds = new Map<string, number>();
-    for (const element of Array.from(slide.element.querySelectorAll('[data-ppt-el]'))) {
+    for (const element of elements) {
       const id = element.getAttribute('data-ppt-el')?.trim();
       if (id) elementIds.set(id, (elementIds.get(id) ?? 0) + 1);
     }
     for (const [id, count] of elementIds) {
       if (count > 1) {
-        const first = Array.from(slide.element.querySelectorAll('[data-ppt-el]')).find(
+        const first = elements.find(
           (element) => element.getAttribute('data-ppt-el')?.trim() === id
         );
         errors.push(
@@ -172,22 +189,35 @@ export function validateDeck(doc: Document): ValidationResult {
 
   const markers = Array.from(doc.querySelectorAll(`[${RUNTIME_ATTRIBUTE}]`));
   let validRuntimes = 0;
+  let secondRuntime: { element: Element; owner: SlideInfo | undefined } | undefined;
   for (const marker of markers) {
+    const owner = slideFor(marker, slides);
     if (marker.tagName !== 'SCRIPT' || marker.getAttribute(RUNTIME_ATTRIBUTE)?.trim() !== '1') {
       errors.push(
         diagnostic(
           'error',
           'invalid-runtime-marker',
-          'Runtime marker must be data-ppt-runtime="1" on a script element.'
+          'Runtime marker must be data-ppt-runtime="1" on a script element.',
+          owner?.id,
+          elementLocation(owner, marker)
         )
       );
     } else {
       validRuntimes += 1;
+      if (validRuntimes === 2) {
+        secondRuntime = { element: marker, owner };
+      }
     }
   }
-  if (validRuntimes > 1) {
+  if (secondRuntime) {
     errors.push(
-      diagnostic('error', 'duplicate-runtime', 'More than one runtime script is present.')
+      diagnostic(
+        'error',
+        'duplicate-runtime',
+        'More than one runtime script is present.',
+        secondRuntime.owner?.id,
+        elementLocation(secondRuntime.owner, secondRuntime.element)
+      )
     );
   }
 

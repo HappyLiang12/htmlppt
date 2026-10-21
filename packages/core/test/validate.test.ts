@@ -113,6 +113,7 @@ describe('validateDeck error rules', () => {
     const duplicate = run(
       '<section data-slide-id="s1"><h1 data-ppt-el="e1">A</h1><p data-ppt-el="e1">B</p></section>'
     );
+    expect(duplicate.errors.map((error) => error.code)).toEqual(['duplicate-element-id']);
     expect(duplicate.errors).toContainEqual(
       expect.objectContaining({
         code: 'duplicate-element-id',
@@ -127,10 +128,22 @@ describe('validateDeck error rules', () => {
     expect(across.errors).toEqual([]);
   });
 
+  it('does not count nested slides objects as duplicates of the outer slide', () => {
+    const result = run(
+      '<section data-slide-id="outer"><h1 data-ppt-el="e1">A</h1><section data-slide-id="inner"><p data-ppt-el="e1">B</p></section></section>'
+    );
+
+    expect(result.errors).toEqual([]);
+  });
+
   it('rejects invalid canvas attributes', () => {
     const result = run(
       '<section data-slide-id="s1" data-width="wide" data-height="0"></section>'
     );
+    expect(result.errors.map((error) => error.code)).toEqual([
+      'invalid-canvas-size',
+      'invalid-canvas-size'
+    ]);
     expect(result.errors).toContainEqual(
       expect.objectContaining({
         code: 'invalid-canvas-size',
@@ -151,6 +164,7 @@ describe('validateDeck error rules', () => {
     const invalid = run(
       '<section data-slide-id="s1" data-ppt-transition="zoom"></section>'
     );
+    expect(invalid.errors.map((error) => error.code)).toEqual(['invalid-transition']);
     expect(invalid.errors).toContainEqual(
       expect.objectContaining({
         code: 'invalid-transition',
@@ -167,23 +181,36 @@ describe('validateDeck error rules', () => {
   });
 
   it('rejects invalid and duplicate runtime markers', () => {
-    const nonScript = run('<div data-ppt-runtime="1"></div><section data-slide-id="s1"></section>');
+    const nonScript = run(
+      '<section data-slide-id="s1"><div data-ppt-runtime="1"></div></section>'
+    );
+    expect(nonScript.errors.map((error) => error.code)).toEqual(['invalid-runtime-marker']);
     expect(nonScript.errors).toContainEqual(
-      expect.objectContaining({ code: 'invalid-runtime-marker' })
+      expect.objectContaining({
+        code: 'invalid-runtime-marker',
+        slideId: 's1',
+        location: 's1 > div'
+      })
     );
 
     const wrongValue = run(
       '<section data-slide-id="s1"></section><script data-ppt-runtime="0"></script>'
     );
+    expect(wrongValue.errors.map((error) => error.code)).toEqual(['invalid-runtime-marker']);
     expect(wrongValue.errors).toContainEqual(
-      expect.objectContaining({ code: 'invalid-runtime-marker' })
+      expect.objectContaining({ code: 'invalid-runtime-marker', location: 'script' })
     );
 
     const duplicate = run(
-      '<section data-slide-id="s1"></section><script data-ppt-runtime="1"></script><script data-ppt-runtime="1"></script>'
+      '<section data-slide-id="s1"><script id="first" data-ppt-runtime="1"></script><script id="second" data-ppt-runtime="1"></script></section>'
     );
+    expect(duplicate.errors.map((error) => error.code)).toEqual(['duplicate-runtime']);
     expect(duplicate.errors).toContainEqual(
-      expect.objectContaining({ code: 'duplicate-runtime' })
+      expect.objectContaining({
+        code: 'duplicate-runtime',
+        slideId: 's1',
+        location: 's1 > script#second'
+      })
     );
   });
 
@@ -191,6 +218,7 @@ describe('validateDeck error rules', () => {
     const nested = run(
       '<section data-slide-id="s1"><div><aside data-ppt-notes hidden>Nested</aside></div></section>'
     );
+    expect(nested.errors.map((error) => error.code)).toEqual(['notes-nested-incorrectly']);
     expect(nested.errors).toContainEqual(
       expect.objectContaining({
         code: 'notes-nested-incorrectly',
@@ -205,10 +233,22 @@ describe('validateDeck error rules', () => {
     expect(direct.errors).toEqual([]);
   });
 
+  it('accepts notes directly under the body fallback', () => {
+    const result = run(
+      '<aside data-ppt-notes hidden>Body notes</aside><h1>Only page</h1>'
+    );
+
+    expect(result.errors).toEqual([]);
+  });
+
   it('rejects editor artifacts', () => {
     const result = run(
       '<section data-slide-id="s1"><h1 data-ppt-editing="true">A</h1><p data-ppt-frame-slide="abc">B</p></section>'
     );
+    expect(result.errors.map((error) => error.code)).toEqual([
+      'editor-artifacts',
+      'editor-artifacts'
+    ]);
     expect(result.errors).toContainEqual(
       expect.objectContaining({
         code: 'editor-artifacts',
