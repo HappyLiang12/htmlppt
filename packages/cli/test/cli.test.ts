@@ -176,18 +176,45 @@ describe('htmlppt cli', () => {
     expect(exported).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
   });
 
-  it('rejects an invalid port before starting the host', async () => {
+  it.each(['abc', '-1', '1.5', '70000'])(
+    'rejects --port %s before starting the host',
+    async (port) => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      const output = capture();
+
+      const code = await runCli(
+        ['open', 'deck.html', `--port=${port}`, '--no-browser'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain(
+        'Invalid --port. Use an integer between 0 and 65535.'
+      );
+    }
+  );
+
+  it('reports a missing editor build with an actionable error', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
+    const emptyEditorDir = await makeTempDir('htmlppt-editor-empty-');
     const output = capture();
+    const previous = process.env.HTMLPPT_EDITOR_DIR;
+    process.env.HTMLPPT_EDITOR_DIR = emptyEditorDir;
 
-    const code = await runCli(
-      ['open', 'deck.html', '--port', '70000', '--no-browser'],
-      { cwd, ...output.io }
-    );
+    try {
+      const code = await runCli(['open', 'deck.html', '--no-browser'], {
+        cwd,
+        ...output.io
+      });
 
-    expect(code).toBe(1);
-    expect(output.stderr.join('\n')).toContain(
-      'Invalid --port. Use an integer between 0 and 65535.'
-    );
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain('Editor build not found');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HTMLPPT_EDITOR_DIR;
+      } else {
+        process.env.HTMLPPT_EDITOR_DIR = previous;
+      }
+    }
   });
 });

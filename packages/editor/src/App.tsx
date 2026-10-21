@@ -3,13 +3,14 @@ import { detectSlides, type SlideInfo } from '@htmlppt/core';
 import { fetchDeck, saveDeck, tokenFromLocation } from './api';
 import { buildSlideSrcDoc, commitSlide, parseDeck } from './slide-doc';
 
-type SaveStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'error';
+type SaveStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'load-error' | 'error';
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   loading: '載入中…',
   ready: '已載入',
   saving: '儲存中…',
   saved: '已儲存',
+  'load-error': '載入失敗',
   error: '儲存失敗'
 };
 
@@ -50,7 +51,7 @@ export function App() {
         setStatus('ready');
         showSlide(doc, 0);
       } catch (cause) {
-        setStatus('error');
+        setStatus('load-error');
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     })();
@@ -60,13 +61,15 @@ export function App() {
     const updateScale = () => {
       if (!canvas.current || !activeSlide) return;
       const bounds = canvas.current.getBoundingClientRect();
-      setScale(
-        Math.min(
-          (bounds.width - 96) / activeSlide.width,
-          (bounds.height - 96) / activeSlide.height,
-          1
-        )
+      const widthScale = Math.max(
+        0.1,
+        (bounds.width - 96) / activeSlide.width
       );
+      const heightScale = Math.max(
+        0.1,
+        (bounds.height - 96) / activeSlide.height
+      );
+      setScale(Math.min(widthScale, heightScale, 1));
     };
     updateScale();
     window.addEventListener('resize', updateScale);
@@ -216,7 +219,7 @@ export function App() {
             >
               <iframe
                 ref={frame}
-                title="Slide preview"
+                title="投影片預覽"
                 sandbox="allow-same-origin"
                 srcDoc={srcDoc}
                 onLoad={onFrameLoad}
@@ -229,8 +232,10 @@ export function App() {
                 }}
               />
             </div>
+          ) : status === 'loading' ? (
+            <p className="text-sm text-zinc-500">載入中…</p>
           ) : (
-            <p className="text-sm text-zinc-500">No slides found.</p>
+            <p className="text-sm text-zinc-500">找不到投影片。</p>
           )}
         </main>
       </div>

@@ -146,7 +146,11 @@ export async function runCli(
       }
       const filePath = resolve(io.cwd, file);
       const directory = editorDir();
-      await access(join(directory, 'index.html'));
+      try {
+        await access(join(directory, 'index.html'));
+      } catch {
+        throw new Error('Editor build not found. Run "npm run build" first.');
+      }
       const host = await startHost({
         filePath,
         token: randomUUID(),
@@ -156,17 +160,25 @@ export async function runCli(
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 
-      if (options.browser) {
-        const { default: openUrl } = await import('open');
-        await openUrl(host.url);
-      }
-
       await new Promise<void>((resolvePromise) => {
         const stop = () => {
           void host.close().finally(() => resolvePromise());
         };
         process.once('SIGINT', stop);
         process.once('SIGTERM', stop);
+
+        if (options.browser) {
+          void (async () => {
+            try {
+              const { default: openUrl } = await import('open');
+              await openUrl(host.url);
+            } catch (cause) {
+              io.stderr(
+                `Could not open a browser: ${cause instanceof Error ? cause.message : String(cause)}. Open the URL manually.`
+              );
+            }
+          })();
+        }
       });
     });
 

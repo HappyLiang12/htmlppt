@@ -27,7 +27,7 @@ test(
 
       host = await startCliHost(cliPath, directory, 'demo.html');
       await page.goto(host.url);
-      const frame = page.frameLocator('iframe[title="Slide preview"]');
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
       await expect(frame.locator('h1')).toContainText('Untitled deck');
 
       await frame.locator('h1').dblclick();
@@ -38,6 +38,11 @@ test(
       const saved = await readFile(join(directory, 'demo.html'), 'utf8');
       expect(saved).toContain('Updated deck title');
       expect(saved).not.toContain('contenteditable');
+
+      await page.getByRole('button', { name: '下一頁' }).click();
+      await expect(frame.locator('h1')).toContainText('Untitled deck — 2');
+      await page.getByRole('button', { name: '上一頁' }).click();
+      await expect(frame.locator('h1')).toContainText('Updated deck title');
 
       await execa(
         'node',
