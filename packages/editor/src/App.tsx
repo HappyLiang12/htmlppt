@@ -85,7 +85,7 @@ export function App() {
 
       editable.removeAttribute('contenteditable');
       try {
-        const html = commitSlide(doc, slide.id, frameDocument);
+        const html = commitSlide(doc, slide, frameDocument);
         setStatus('saving');
         const result = await saveDeck(token.current, html, revision.current);
         revision.current = result.revision;
@@ -107,7 +107,7 @@ export function App() {
 
     frameDocument.addEventListener('dblclick', (event) => {
       const target = event.target as HTMLElement | null;
-      if (!target || !target.closest('[data-slide-id]')) return;
+      if (!target || !frameDocument.body.contains(target)) return;
       const editable = target.closest(
         'h1, h2, h3, p, li, span, td, th, blockquote, figcaption'
       ) as HTMLElement | null;

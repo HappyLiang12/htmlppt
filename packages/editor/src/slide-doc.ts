@@ -10,26 +10,33 @@ export function parseDeck(html: string): Document {
 }
 
 export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
-  return `<!doctype html><html><head>${doc.head.innerHTML}<style data-ppt-editor-base>${BASE_STYLE}</style></head><body>${slide.element.outerHTML}</body></html>`;
+  const slideHtml =
+    slide.element.tagName === 'BODY'
+      ? slide.element.innerHTML
+      : slide.element.outerHTML;
+  return `<!doctype html><html><head>${doc.head.innerHTML}<style data-ppt-editor-base>${BASE_STYLE}</style></head><body>${slideHtml}</body></html>`;
 }
 
 export function commitSlide(
   doc: Document,
-  slideId: string,
+  slide: SlideInfo,
   frameDocument: Document
 ): string {
-  const current = frameDocument.querySelector('[data-slide-id]');
-  if (!current) throw new Error('Slide is missing from the editor frame.');
+  const isBodyFallback = slide.element.tagName === 'BODY';
+  const frameSlide = isBodyFallback
+    ? frameDocument.body
+    : frameDocument.body.firstElementChild;
+  if (!frameSlide) throw new Error('Slide is missing from the editor frame.');
 
-  current
+  frameSlide
     .querySelectorAll('[contenteditable]')
     .forEach((element) => element.removeAttribute('contenteditable'));
+  frameSlide.removeAttribute('contenteditable');
 
-  const target = doc.querySelector(
-    `[data-slide-id="${CSS.escape(slideId)}"]`
-  );
-  if (!target) throw new Error(`Slide ${slideId} is missing from the deck.`);
-
-  target.outerHTML = current.outerHTML;
+  if (isBodyFallback) {
+    slide.element.innerHTML = frameSlide.innerHTML;
+  } else {
+    slide.element.outerHTML = frameSlide.outerHTML;
+  }
   return serializeDeck(doc);
 }
