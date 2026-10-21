@@ -539,6 +539,8 @@ Diagnostics include slide id and a short location hint. The CLI and MCP return t
 
 ## 14. Testing and verification
 
+The concrete framework — test layers, tooling, fixtures, determinism rules, visual round-trip methodology, TDD workflow, feature traceability, and CI gates — is specified in [Test Framework Design](2026-10-21-test-framework-design.md). Test harness construction and a walking-skeleton acceptance test are milestone M0, before feature implementation.
+
 ### Unit (Vitest)
 
 - Slide detection, canvas inference, normalization, id assignment.
