@@ -42,6 +42,30 @@ function printDiagnostics(result: ValidationResult, io: CliIO): void {
   );
 }
 
+export function formatHostStartError(
+  error: unknown,
+  filePath: string,
+  port: number,
+  displayPath: string = filePath
+): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const { code, path: errorPath, syscall } = error as NodeJS.ErrnoException;
+  if (code === 'ENOENT' && errorPath === filePath) {
+    return `Deck file not found: ${displayPath}. Create one with "htmlppt new ${displayPath}".`;
+  }
+  const unreadableDeck =
+    code === 'EISDIR' ||
+    (code === 'EACCES' &&
+      (errorPath === filePath || syscall === 'open' || syscall === 'read'));
+  if (unreadableDeck) {
+    return `Deck file could not be read: ${displayPath}.`;
+  }
+  if (code === 'EADDRINUSE') {
+    return `Port ${port} is already in use. Omit --port or choose another.`;
+  }
+  return null;
+}
+
 export async function runCli(
   argv: string[],
   overrides: Partial<CliIO> = {}
@@ -177,12 +201,28 @@ export async function runCli(
       } catch {
         throw new Error('Editor build not found. Run "npm run build" first.');
       }
-      const host = await startHost({
-        filePath,
-        token: randomUUID(),
-        editorDir: directory,
-        port: Number(options.port)
-      });
+      let host: Awaited<ReturnType<typeof startHost>>;
+      try {
+        host = await startHost({
+          filePath,
+          token: randomUUID(),
+          editorDir: directory,
+          port: Number(options.port)
+        });
+      } catch (error) {
+        const message = formatHostStartError(
+          error,
+          filePath,
+          Number(options.port),
+          file
+        );
+        if (message === null) {
+          throw error;
+        }
+        io.stderr(message);
+        exitCode = 1;
+        return;
+      }
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 

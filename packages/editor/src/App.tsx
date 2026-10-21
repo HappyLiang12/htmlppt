@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { detectSlides, type SlideInfo } from '@htmlppt/core';
 import { fetchDeck, saveDeck, tokenFromLocation } from './api';
-import { buildSlideSrcDoc, commitSlide, parseDeck } from './slide-doc';
+import {
+  buildSlideSrcDoc,
+  commitSlide,
+  EDITING_ATTRIBUTE,
+  parseDeck
+} from './slide-doc';
 
 type SaveStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'load-error' | 'error';
 
@@ -20,6 +25,7 @@ export function App() {
   const revision = useRef('');
   const frame = useRef<HTMLIFrameElement | null>(null);
   const canvas = useRef<HTMLElement | null>(null);
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
 
   const [slides, setSlides] = useState<SlideInfo[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -83,17 +89,29 @@ export function App() {
       const frameDocument = frame.current?.contentDocument;
       if (!doc || !slide || !frameDocument) return;
 
+      // Drop the editing marker first: removing contenteditable from the
+      // focused element can fire another focusout, which must not re-commit.
+      editable.removeAttribute(EDITING_ATTRIBUTE);
       editable.removeAttribute('contenteditable');
       try {
         const html = commitSlide(doc, slide.index, frameDocument);
         setStatus('saving');
-        const result = await saveDeck(token.current, html, revision.current);
-        revision.current = result.revision;
-        setSlides(detectSlides(doc));
-        setStatus('saved');
-        setError('');
+        const task = saveChain.current.then(async () => {
+          const result = await saveDeck(
+            token.current,
+            html,
+            revision.current
+          );
+          revision.current = result.revision;
+          setSlides(detectSlides(doc));
+          setStatus('saved');
+          setError('');
+        });
+        saveChain.current = task.catch(() => undefined);
+        await task;
       } catch (cause) {
         editable.setAttribute('contenteditable', 'true');
+        editable.setAttribute(EDITING_ATTRIBUTE, 'true');
         setStatus('error');
         setError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -114,20 +132,21 @@ export function App() {
       if (!editable || !editable.textContent?.trim()) return;
       event.preventDefault();
       editable.setAttribute('contenteditable', 'true');
+      editable.setAttribute(EDITING_ATTRIBUTE, 'true');
       editable.focus();
     });
 
     frameDocument.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
       const editable = frameDocument.querySelector(
-        '[contenteditable]'
+        `[${EDITING_ATTRIBUTE}]`
       ) as HTMLElement | null;
       editable?.blur();
     });
 
     frameDocument.addEventListener('focusout', (event) => {
       const target = event.target as HTMLElement | null;
-      if (target?.hasAttribute('contenteditable')) {
+      if (target?.hasAttribute(EDITING_ATTRIBUTE)) {
         void commit(target);
       }
     });

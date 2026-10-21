@@ -1,8 +1,9 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { describe, expect, it } from 'vitest';
-import { runCli } from '../src/index.js';
+import { formatHostStartError, runCli } from '../src/index.js';
 
 function capture() {
   const stdout: string[] = [];
@@ -242,6 +243,134 @@ describe('htmlppt cli', () => {
       );
     }
   );
+
+  it('reports a missing deck file with actionable guidance', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(['open', 'missing.html', '--no-browser'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Deck file not found: missing.html. Create one with "htmlppt new missing.html".'
+    );
+    expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+  });
+
+  it('reports an occupied port with actionable guidance', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', resolve);
+    });
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Probe server did not expose a TCP port.');
+    }
+    const output = capture();
+    try {
+      const code = await runCli(
+        ['open', 'deck.html', `--port=${address.port}`, '--no-browser'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain(
+        `Port ${address.port} is already in use. Omit --port or choose another.`
+      );
+      expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        probe.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('reports a directory deck path as unreadable', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await mkdir(join(cwd, 'deck-dir'));
+    const output = capture();
+
+    const code = await runCli(['open', 'deck-dir', '--no-browser'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain('Deck file could not be read');
+    expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+  });
+
+  describe('formatHostStartError', () => {
+    const deckPath = join('decks', 'deck.html');
+
+    function errnoError(
+      code: string,
+      details: Partial<NodeJS.ErrnoException> = {}
+    ): NodeJS.ErrnoException {
+      return Object.assign(new Error(`${code}: synthetic failure`), {
+        code,
+        ...details
+      });
+    }
+
+    it('maps ENOENT for the deck path to the missing-deck message', () => {
+      const message = formatHostStartError(
+        errnoError('ENOENT', { path: deckPath }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBe(
+        `Deck file not found: ${deckPath}. Create one with "htmlppt new ${deckPath}".`
+      );
+    });
+
+    it('does not map ENOENT for another path', () => {
+      const message = formatHostStartError(
+        errnoError('ENOENT', { path: join('other', 'deck.html') }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBeNull();
+    });
+
+    it('does not map a listen EACCES to an unreadable deck', () => {
+      const message = formatHostStartError(
+        errnoError('EACCES', { syscall: 'listen' }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBeNull();
+    });
+
+    it('maps an open EACCES on the deck path to the unreadable message', () => {
+      const message = formatHostStartError(
+        errnoError('EACCES', { syscall: 'open', path: deckPath }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBe(`Deck file could not be read: ${deckPath}.`);
+    });
+
+    it('maps EISDIR on the deck path to the unreadable message', () => {
+      const message = formatHostStartError(
+        errnoError('EISDIR', { path: deckPath }),
+        deckPath,
+        4321
+      );
+
+      expect(message).toBe(`Deck file could not be read: ${deckPath}.`);
+    });
+  });
 
   it('reports a missing editor build with an actionable error', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');

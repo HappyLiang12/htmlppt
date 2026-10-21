@@ -226,6 +226,152 @@ describe('host', () => {
     expect(await check.json()).toMatchObject({ html: updated, revision });
   });
 
+  it('reads external file changes and rejects a stale save', async () => {
+    const ctx = await setup();
+    const externalHtml = ctx.deckHtml.replaceAll(
+      'Basic deck',
+      'External writer wins'
+    );
+    await writeFile(ctx.deckPath, externalHtml, 'utf8');
+
+    const health = await fetch(`${ctx.base}/api/health`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(health.status).toBe(200);
+    const healthBody = (await health.json()) as { revision: string };
+    expect(healthBody.revision).not.toBe(ctx.revision);
+
+    const deckResponse = await fetch(`${ctx.base}/api/deck`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(deckResponse.status).toBe(200);
+    expect(await deckResponse.json()).toMatchObject({
+      html: externalHtml,
+      revision: healthBody.revision
+    });
+
+    const saveResponse = await fetch(`${ctx.base}/api/deck`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${ctx.token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        html: ctx.deckHtml.replaceAll('Basic deck', 'Editor tries to save'),
+        baseRevision: ctx.revision
+      })
+    });
+    expect(saveResponse.status).toBe(409);
+    expect(await readFile(ctx.deckPath, 'utf8')).toBe(externalHtml);
+
+    const followUp = await fetch(`${ctx.base}/api/deck`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(await followUp.json()).toMatchObject({
+      html: externalHtml,
+      revision: healthBody.revision
+    });
+  });
+
+  it('keeps GETs consistent with saves under interleaved reads and writes', async () => {
+    const ctx = await setup();
+    const authorization = { authorization: `Bearer ${ctx.token}` };
+    const updates = Array.from({ length: 12 }, (_, index) =>
+      ctx.deckHtml.replace('Basic deck', `Interleaved save ${index}`)
+    );
+
+    const requests: Promise<Response>[] = [];
+    for (const html of updates) {
+      requests.push(
+        fetch(`${ctx.base}/api/deck`, {
+          method: 'PUT',
+          headers: {
+            ...authorization,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({ html, baseRevision: ctx.revision })
+        })
+      );
+      requests.push(fetch(`${ctx.base}/api/deck`, { headers: authorization }));
+    }
+
+    const responses = await Promise.all(requests);
+    await Promise.all(responses.map((response) => response.text()));
+    const putStatuses = responses
+      .filter((_response, index) => index % 2 === 0)
+      .map((response) => response.status)
+      .sort((a, b) => a - b);
+    expect(putStatuses).toEqual([200, ...Array(11).fill(409)]);
+
+    const onDisk = await readFile(ctx.deckPath, 'utf8');
+    const deckResponse = await fetch(`${ctx.base}/api/deck`, {
+      headers: authorization
+    });
+    expect(deckResponse.status).toBe(200);
+    const deck = (await deckResponse.json()) as {
+      html: string;
+      revision: string;
+    };
+    expect(deck.html).toBe(onDisk);
+
+    const healthResponse = await fetch(`${ctx.base}/api/health`, {
+      headers: authorization
+    });
+    expect(healthResponse.status).toBe(200);
+    expect(await healthResponse.json()).toEqual({
+      ok: true,
+      revision: deck.revision
+    });
+  });
+
+  it('returns a structured error when the deck cannot be read', async () => {
+    const ctx = await setup();
+    const authorization = { authorization: `Bearer ${ctx.token}` };
+    await rm(ctx.deckPath);
+
+    const deckResponse = await fetch(`${ctx.base}/api/deck`, {
+      headers: authorization
+    });
+    expect(deckResponse.status).toBe(500);
+    expect(deckResponse.headers.get('content-type')).toContain(
+      'application/json'
+    );
+    expect(await deckResponse.json()).toEqual({ error: 'deck-unreadable' });
+
+    const healthResponse = await fetch(`${ctx.base}/api/health`, {
+      headers: authorization
+    });
+    expect(healthResponse.status).toBe(500);
+    expect(await healthResponse.json()).toEqual({ error: 'deck-unreadable' });
+
+    const putResponse = await fetch(`${ctx.base}/api/deck`, {
+      method: 'PUT',
+      headers: {
+        ...authorization,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        html: ctx.deckHtml.replace('Basic deck', 'Should not be written'),
+        baseRevision: ctx.revision
+      })
+    });
+    expect(putResponse.status).toBe(500);
+    expect(await putResponse.json()).toEqual({ error: 'deck-unreadable' });
+    await expect(readFile(ctx.deckPath, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+
+    await writeFile(ctx.deckPath, ctx.deckHtml, 'utf8');
+    const restored = await fetch(`${ctx.base}/api/deck`, {
+      headers: authorization
+    });
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({
+      html: ctx.deckHtml,
+      revision: ctx.revision
+    });
+  });
+
   it('rejects a null JSON body', async () => {
     const ctx = await setup();
 
