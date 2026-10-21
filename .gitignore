@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.worktrees/
+*.log
+.DS_Store
+.htmlppt/
