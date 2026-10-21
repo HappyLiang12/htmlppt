@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { access, readFile, writeFile } from 'node:fs/promises';
-import { join, parse, resolve } from 'node:path';
+import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -66,7 +66,8 @@ export async function runCli(
     .option('--title <title>', 'deck title', 'Untitled deck')
     .option('--slides <count>', 'number of slides', '2')
     .option('--size <size>', 'canvas size, for example 1600x900', '1600x900')
-    .action(async (file: string, options: { title: string; slides: string; size: string }) => {
+    .option('--force', 'overwrite an existing file')
+    .action(async (file: string, options: { title: string; slides: string; size: string; force?: boolean }) => {
       const match = /^(\d+)x(\d+)$/.exec(options.size);
       if (!match) {
         throw new Error(
@@ -86,7 +87,32 @@ export async function runCli(
         throw new Error('Invalid --slides. Use a positive integer up to 1000.');
       }
       const html = createDeckHtml({ title: options.title, slides, width, height });
-      await writeFile(resolve(io.cwd, file), html, 'utf8');
+      const destination = resolve(io.cwd, file);
+
+      if (!options.force) {
+        try {
+          await writeFile(destination, html, { encoding: 'utf8', flag: 'wx' });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+            throw new Error(
+              `Refusing to overwrite ${file}. Pass --force to replace it.`
+            );
+          }
+          throw error;
+        }
+      } else {
+        const temporary = join(
+          dirname(destination),
+          `.${basename(destination)}.${randomUUID()}.tmp`
+        );
+        try {
+          await writeFile(temporary, html, 'utf8');
+          await rename(temporary, destination);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      }
+
       io.stdout(`Created ${file}`);
     });
 

@@ -33,6 +33,55 @@ describe('htmlppt cli', () => {
     expect(html).toContain('data-ppt-runtime="1"');
   });
 
+  it('refuses to overwrite an existing deck without --force', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const original = '<!doctype html><title>Keep me</title>';
+    await writeFile(join(cwd, 'existing.html'), original, 'utf8');
+    const output = capture();
+
+    const code = await runCli(['new', 'existing.html'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Refusing to overwrite existing.html.'
+    );
+    expect(output.stderr.join('\n')).toContain('Pass --force to replace it.');
+    expect(await readFile(join(cwd, 'existing.html'), 'utf8')).toBe(original);
+  });
+
+  it('overwrites an existing deck with --force', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await writeFile(join(cwd, 'existing.html'), 'stale', 'utf8');
+    const output = capture();
+
+    const code = await runCli(['new', 'existing.html', '--force'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(0);
+    const html = await readFile(join(cwd, 'existing.html'), 'utf8');
+    expect(html).toContain('<title>Untitled deck</title>');
+    expect(html).toContain('data-ppt-runtime="1"');
+  });
+
+  it('creates a new deck with --force when the target is absent', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(['new', 'fresh.html', '--force'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(0);
+    const html = await readFile(join(cwd, 'fresh.html'), 'utf8');
+    expect(html).toContain('data-slide-id="s1"');
+  });
+
   it('validates a generated deck as JSON', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
     await runCli(['new', 'deck.html'], { cwd, ...capture().io });
