@@ -85,7 +85,7 @@ export function App() {
 
       editable.removeAttribute('contenteditable');
       try {
-        const html = commitSlide(doc, slide, frameDocument);
+        const html = commitSlide(doc, slide.index, frameDocument);
         setStatus('saving');
         const result = await saveDeck(token.current, html, revision.current);
         revision.current = result.revision;

@@ -58,14 +58,38 @@ test(
       await frame.locator('h1').press('Escape');
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
 
-      const saved = await readFile(join(directory, 'demo.html'), 'utf8');
-      expect(saved).toContain('Updated deck title');
-      expect(saved).not.toContain('contenteditable');
+      const savedAfterFirstEdit = await readFile(
+        join(directory, 'demo.html'),
+        'utf8'
+      );
+      expect(savedAfterFirstEdit).toContain('Updated deck title');
+      expect(savedAfterFirstEdit).not.toContain('contenteditable');
+
+      // The status already reads 已儲存 from the first save, so wait for the
+      // second PUT itself before asserting the file contents.
+      const secondSave = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === '/api/deck'
+      );
+      await frame.locator('h1').dblclick();
+      await frame.locator('h1').fill('Final deck title');
+      await frame.locator('h1').press('Escape');
+      expect((await secondSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const savedAfterSecondEdit = await readFile(
+        join(directory, 'demo.html'),
+        'utf8'
+      );
+      expect(savedAfterSecondEdit).toContain('Final deck title');
+      expect(savedAfterSecondEdit).not.toContain('Updated deck title');
+      expect(savedAfterSecondEdit).not.toContain('contenteditable');
 
       await page.getByRole('button', { name: '下一頁' }).click();
       await expect(frame.locator('h1')).toContainText('Untitled deck — 2');
       await page.getByRole('button', { name: '上一頁' }).click();
-      await expect(frame.locator('h1')).toContainText('Updated deck title');
+      await expect(frame.locator('h1')).toContainText('Final deck title');
 
       await execa(
         'node',
@@ -79,7 +103,8 @@ test(
       expect(exported).toContain(
         '<!-- Edited with htmlppt. Format: htmldeck/v1. -->'
       );
-      expect(exported).toContain('Updated deck title');
+      expect(exported).toContain('Final deck title');
+      expect(exported).not.toContain('Updated deck title');
       expect(exported).not.toContain('contenteditable');
 
       const flexed = exported.replace(
