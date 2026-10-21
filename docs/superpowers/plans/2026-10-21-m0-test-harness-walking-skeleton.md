@@ -1789,6 +1789,7 @@ git commit -m "feat(core): add presentation runtime and deck template"
 **Files:**
 - Create: `packages/host/src/server.ts`
 - Modify: `packages/host/src/index.ts`
+- Modify: `packages/host/tsconfig.json` (add DOM libs for core's DOM types)
 - Create: `packages/host/vitest.config.ts`
 - Create: `packages/host/test/server.test.ts`
 
@@ -1807,8 +1808,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
-      '@htmlppt/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
+      // Vite aliases match by prefix, so the more specific entry must come first.
       '@htmlppt/core/node': fileURLToPath(new URL('../core/src/node.ts', import.meta.url)),
+      '@htmlppt/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
+      '@htmlppt/runtime': fileURLToPath(new URL('../runtime/src/index.ts', import.meta.url)),
       '@htmlppt/test-utils': fileURLToPath(new URL('../../test-utils/src/index.ts', import.meta.url))
     }
   },
@@ -1817,6 +1820,16 @@ export default defineConfig({
     include: ['test/**/*.test.ts']
   }
 });
+```
+
+Modify `packages/host/tsconfig.json` to compile against core's DOM types:
+
+```json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["node"] },
+  "include": ["src", "test", "vitest.config.ts"]
+}
 ```
 
 Create `packages/host/test/server.test.ts`:
@@ -2117,7 +2130,7 @@ export type { HostHandle, HostOptions } from './server.js';
 
 Run: `npm run test -w @htmlppt/host`
 
-Expected: 6 tests pass.
+Expected: all host tests pass (the reviewed implementation has 17, including the hardening tests).
 
 - [ ] **Step 5: Commit**
 
@@ -2133,6 +2146,7 @@ git commit -m "feat(host): serve decks and save revisions atomically"
 **Files:**
 - Modify: `packages/cli/src/index.ts`
 - Modify: `packages/cli/src/bin.ts`
+- Modify: `packages/cli/tsconfig.json` (add DOM libs for core's DOM types)
 - Create: `packages/cli/vitest.config.ts`
 - Create: `packages/cli/test/cli.test.ts`
 
@@ -2151,17 +2165,29 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
-      '@htmlppt/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
       '@htmlppt/core/node': fileURLToPath(new URL('../core/src/node.ts', import.meta.url)),
+      '@htmlppt/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
+      '@htmlppt/runtime': fileURLToPath(new URL('../runtime/src/index.ts', import.meta.url)),
       '@htmlppt/host': fileURLToPath(new URL('../host/src/index.ts', import.meta.url)),
       '@htmlppt/test-utils': fileURLToPath(new URL('../../test-utils/src/index.ts', import.meta.url))
     }
   },
   test: {
     environment: 'node',
-    include: ['test/**/*.test.ts']
+    include: ['test/**/*.test.ts'],
+    testTimeout: 30_000
   }
 });
+```
+
+Modify `packages/cli/tsconfig.json` to compile against core's DOM types:
+
+```json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["node"] },
+  "include": ["src", "test", "tsup.config.ts", "vitest.config.ts"]
+}
 ```
 
 `packages/cli/test/cli.test.ts`:
@@ -2423,7 +2449,7 @@ process.exitCode = code;
 
 Run: `npm run test -w @htmlppt/cli`
 
-Expected: 5 tests pass.
+Expected: all CLI tests pass (the reviewed implementation has 13, including validation and IO-routing tests).
 
 - [ ] **Step 5: Build the CLI and verify the binary**
 
