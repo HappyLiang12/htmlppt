@@ -3,11 +3,14 @@ export const RUNTIME_SOURCE = String.raw`
   var slides = Array.prototype.slice.call(document.querySelectorAll('[data-slide-id]'));
   if (!slides.length) return;
   var index = 0;
+  var originalDisplay = slides.map(function (slide) {
+    return slide.style.display;
+  });
 
   function show(next) {
     index = Math.max(0, Math.min(slides.length - 1, next));
     slides.forEach(function (slide, i) {
-      slide.style.display = i === index ? '' : 'none';
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
     history.replaceState(null, '', '#/' + (index + 1));
   }
