@@ -254,7 +254,9 @@ describe('htmlppt cli', () => {
     });
 
     expect(code).toBe(1);
-    expect(output.stderr.join('\n')).toContain('Deck file not found');
+    expect(output.stderr.join('\n')).toContain(
+      'Deck file not found: missing.html. Create one with "htmlppt new missing.html".'
+    );
     expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
   });
 
