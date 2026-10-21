@@ -15,16 +15,24 @@ function positiveNumber(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
+function readAttributeSize(value: string | null): number {
+  const match = value?.trim().match(/^([\d.]+)(?:px)?$/i);
+  return match ? Number.parseFloat(match[1]) : Number.NaN;
+}
+
+function readStyleSize(style: string, property: 'width' | 'height'): number {
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([\\d.]+)px`, 'gi');
+  const matches = Array.from(style.matchAll(pattern));
+  const value = matches.at(-1)?.[1];
+  return value === undefined ? Number.NaN : Number.parseFloat(value);
+}
+
 function readSize(element: Element): { width: number; height: number } {
-  const attributeWidth = Number(element.getAttribute('data-width'));
-  const attributeHeight = Number(element.getAttribute('data-height'));
+  const attributeWidth = readAttributeSize(element.getAttribute('data-width'));
+  const attributeHeight = readAttributeSize(element.getAttribute('data-height'));
   const inlineStyle = element.getAttribute('style') ?? '';
-  const styleWidth = Number.parseFloat(
-    /(?:^|;)\s*width\s*:\s*([\d.]+)px/.exec(inlineStyle)?.[1] ?? ''
-  );
-  const styleHeight = Number.parseFloat(
-    /(?:^|;)\s*height\s*:\s*([\d.]+)px/.exec(inlineStyle)?.[1] ?? ''
-  );
+  const styleWidth = readStyleSize(inlineStyle, 'width');
+  const styleHeight = readStyleSize(inlineStyle, 'height');
 
   return {
     width: positiveNumber(attributeWidth)
@@ -42,9 +50,10 @@ function readSize(element: Element): { width: number; height: number } {
 
 function toSlideInfo(element: Element, index: number): SlideInfo {
   const rawId = element.getAttribute('data-slide-id');
+  const hasId = rawId !== null && rawId.trim() !== '';
   return {
-    id: rawId ?? `s${index + 1}`,
-    hasId: Boolean(rawId),
+    id: hasId ? rawId : `s${index + 1}`,
+    hasId,
     element,
     index,
     ...readSize(element)
@@ -79,6 +88,8 @@ export function detectSlides(doc: Document): SlideInfo[] {
     }
   }
 
+  // Body sentinel: the fallback is not an explicit slide, so hasId stays false,
+  // but it gets a fixed id so downstream consumers can address it.
   const body = doc.body;
   return body ? [{ ...toSlideInfo(body, 0), id: 'body' }] : [];
 }

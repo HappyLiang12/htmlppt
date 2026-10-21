@@ -65,4 +65,69 @@ describe('detectSlides', () => {
 
     expect(detectSlides(doc)[0]).toMatchObject({ width: 1280, height: 720 });
   });
+
+  it('treats an empty data-slide-id as absent and generates the id', () => {
+    const doc = documentFor(`
+      <div data-slide-id="">empty</div>
+      <div data-slide-id="explicit">explicit</div>
+    `);
+
+    const slides = detectSlides(doc);
+
+    expect(slides.map((slide) => slide.id)).toEqual(['s1', 'explicit']);
+    expect(slides.map((slide) => slide.hasId)).toEqual([false, true]);
+  });
+
+  it('treats a whitespace-only data-slide-id as absent', () => {
+    const doc = documentFor(`<section class="slide" data-slide-id="   "></section>`);
+
+    const slides = detectSlides(doc);
+
+    expect(slides[0]).toMatchObject({ id: 's1', hasId: false });
+  });
+
+  it('prefers size attributes over inline styles', () => {
+    const doc = documentFor(
+      `<section class="slide" data-width="800" data-height="600" style="width:1280px;height:720px"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 800, height: 600 });
+  });
+
+  it('accepts a case-insensitive px suffix on size attributes', () => {
+    const doc = documentFor(
+      `<section class="slide" data-width="800px" data-height="600PX"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 800, height: 600 });
+  });
+
+  it('uses the last inline style declaration regardless of case', () => {
+    const doc = documentFor(`
+      <section class="slide" style="WIDTH:1280PX; width:800px"></section>
+      <section class="slide" style="width:1280px; WIDTH:800PX"></section>
+    `);
+
+    expect(detectSlides(doc).map((slide) => slide.width)).toEqual([800, 800]);
+  });
+
+  it('reads uppercase inline style properties and units', () => {
+    const doc = documentFor(
+      `<section class="slide" style="WIDTH:1280PX;HEIGHT:720PX"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 1280, height: 720 });
+  });
+
+  it('falls through to style and defaults for invalid size attributes', () => {
+    const doc = documentFor(`
+      <section class="slide" data-width="0" style="width:1280px"></section>
+      <section class="slide" data-width="abc"></section>
+    `);
+
+    const slides = detectSlides(doc);
+
+    expect(slides[0].width).toBe(1280);
+    expect(slides[1].width).toBe(1600);
+  });
 });
