@@ -1113,6 +1113,7 @@ export interface Diagnostic {
   severity: DiagnosticSeverity;
   code: string;
   message: string;
+  /** Generated (`sN`) or sentinel (`body`) ids are used when a slide has no data-slide-id. */
   slideId?: string;
 }
 
@@ -1296,6 +1297,16 @@ describe('validateDeck', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('reports the slide count as info', () => {
+    const result = validateDeck(
+      deck(`<section data-slide-id="s1"></section><section data-slide-id="s2"></section>`)
+    );
+
+    expect(result.info).toEqual([
+      { severity: 'info', code: 'slide-count', message: '2 slide(s) detected.' }
+    ]);
+  });
+
   it('reports duplicate slide ids', () => {
     const result = validateDeck(
       deck(`<section data-slide-id="same"></section><section data-slide-id="same"></section>`)
@@ -1328,6 +1339,18 @@ describe('validateDeck', () => {
     );
   });
 
+  it('warns when the title is only whitespace', () => {
+    const doc = parseDeckHtml(
+      '<!doctype html><html><head><title>   </title></head><body><section data-slide-id="s1"></section></body></html>'
+    );
+
+    const result = validateDeck(doc);
+
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ code: 'missing-title' })
+    );
+  });
+
   it('rejects invalid chart JSON', () => {
     const result = validateDeck(
       deck(`<section data-slide-id="s1"><figure data-ppt-chart="{oops}"></figure></section>`)
@@ -1350,6 +1373,10 @@ describe('validateDeck', () => {
     expect(result.errors).toContainEqual(
       expect.objectContaining({ code: 'empty-document' })
     );
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([
+      { severity: 'info', code: 'slide-count', message: '0 slide(s) detected.' }
+    ]);
   });
 });
 ```
@@ -1382,7 +1409,9 @@ export function validateDeck(doc: Document): ValidationResult {
   const warnings: Diagnostic[] = [];
   const info: Diagnostic[] = [];
 
-  if (!doc.body || doc.body.children.length === 0) {
+  const bodyIsEmpty = !doc.body || doc.body.children.length === 0;
+
+  if (bodyIsEmpty) {
     errors.push(
       diagnostic('error', 'empty-document', 'The document has no content.')
     );
@@ -1394,8 +1423,9 @@ export function validateDeck(doc: Document): ValidationResult {
     );
   }
 
-  const slides = detectSlides(doc);
-  if (slides.length === 0) {
+  const slides = bodyIsEmpty ? [] : detectSlides(doc);
+  if (!bodyIsEmpty && slides.length === 0) {
+    // parseDeckHtml always yields a body, so this guards externally built documents.
     errors.push(
       diagnostic('error', 'no-slides', 'No slides were found in the document.')
     );
@@ -1457,7 +1487,7 @@ export function validateDeck(doc: Document): ValidationResult {
 
 Run: `npm run test -w @htmlppt/core -- test/validate.test.ts`
 
-Expected: 6 tests pass.
+Expected: 8 tests pass.
 
 - [ ] **Step 5: Write the failing serialization test**
 
@@ -1490,6 +1520,12 @@ describe('serialization', () => {
     const html = serializeExport(parseDeckHtml(source));
 
     expect(html).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
+    expect(
+      html.startsWith('<!doctype html>\n<!-- Edited with htmlppt. Format: htmldeck/v1. -->')
+    ).toBe(true);
+    expect(
+      html.match(/<!-- Edited with htmlppt\. Format: htmldeck\/v1\. -->/g)
+    ).toHaveLength(1);
   });
 });
 ```
