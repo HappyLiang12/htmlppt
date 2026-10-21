@@ -1143,7 +1143,8 @@ export function detectSlides(doc: Document): SlideInfo[] {
     }
   }
 
-  return doc.body ? [toSlideInfo(doc.body, 0)] : [];
+  const body = doc.body;
+  return body ? [{ ...toSlideInfo(body, 0), id: 'body' }] : [];
 }
 ```
 
