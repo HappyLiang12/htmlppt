@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { startHost } from '@htmlppt/host';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { describe, expect, it } from 'vitest';
 import { runCli } from '../src/index.js';
@@ -302,6 +303,58 @@ describe('htmlppt cli', () => {
     expect(code).toBe(1);
     expect(output.stderr.join('\n')).toContain('Deck file could not be read');
     expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+  });
+
+  it('does not map a listen EACCES to an unreadable deck', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+
+    const probe = createServer();
+    const probeError = await new Promise<NodeJS.ErrnoException | undefined>(
+      (resolve) => {
+        probe.once('error', (error) => {
+          resolve(error as NodeJS.ErrnoException);
+        });
+        probe.listen(80, '127.0.0.1', () => {
+          probe.close(() => resolve(undefined));
+        });
+      }
+    );
+
+    if (probeError?.code === 'EACCES') {
+      const output = capture();
+      const code = await runCli(
+        ['open', 'deck.html', '--port=80', '--no-browser'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).not.toContain(
+        'Deck file could not be read'
+      );
+      expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+      return;
+    }
+
+    if (probeError) {
+      throw new Error(
+        `Port 80 could not be probed: ${String(probeError.code)}.`
+      );
+    }
+
+    // This Windows account is allowed to bind port 80, so a real listen EACCES
+    // cannot be produced. Assert the host can start and stop on that port.
+    const host = await startHost({
+      filePath: join(cwd, 'deck.html'),
+      token: 'listen-eacces-test',
+      editorDir: cwd,
+      port: 80
+    });
+    try {
+      expect(host.port).toBe(80);
+    } finally {
+      await host.close();
+    }
   });
 
   it('reports a missing editor build with an actionable error', async () => {

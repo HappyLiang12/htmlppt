@@ -193,7 +193,15 @@ export async function runCli(
             `Deck file not found: ${file}. Create one with "htmlppt new ${file}".`
           );
         }
-        if (code === 'EISDIR' || code === 'EACCES') {
+        const syscall = (error as NodeJS.ErrnoException).syscall;
+        const deckPath = (error as NodeJS.ErrnoException).path;
+        const unreadableDeck =
+          code === 'EISDIR' ||
+          (code === 'EACCES' &&
+            (deckPath === filePath ||
+              syscall === 'open' ||
+              syscall === 'read'));
+        if (unreadableDeck) {
           throw new Error(`Deck file could not be read: ${file}.`);
         }
         if (code === 'EADDRINUSE') {
