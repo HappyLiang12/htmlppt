@@ -1009,6 +1009,71 @@ describe('detectSlides', () => {
 
     expect(detectSlides(doc)[0]).toMatchObject({ width: 1280, height: 720 });
   });
+
+  it('treats an empty data-slide-id as absent and generates the id', () => {
+    const doc = documentFor(`
+      <div data-slide-id="">empty</div>
+      <div data-slide-id="explicit">explicit</div>
+    `);
+
+    const slides = detectSlides(doc);
+
+    expect(slides.map((slide) => slide.id)).toEqual(['s1', 'explicit']);
+    expect(slides.map((slide) => slide.hasId)).toEqual([false, true]);
+  });
+
+  it('treats a whitespace-only data-slide-id as absent', () => {
+    const doc = documentFor(`<section class="slide" data-slide-id="   "></section>`);
+
+    const slides = detectSlides(doc);
+
+    expect(slides[0]).toMatchObject({ id: 's1', hasId: false });
+  });
+
+  it('prefers size attributes over inline styles', () => {
+    const doc = documentFor(
+      `<section class="slide" data-width="800" data-height="600" style="width:1280px;height:720px"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 800, height: 600 });
+  });
+
+  it('accepts a case-insensitive px suffix on size attributes', () => {
+    const doc = documentFor(
+      `<section class="slide" data-width="800px" data-height="600PX"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 800, height: 600 });
+  });
+
+  it('uses the last inline style declaration regardless of case', () => {
+    const doc = documentFor(`
+      <section class="slide" style="WIDTH:1280PX; width:800px"></section>
+      <section class="slide" style="width:1280px; WIDTH:800PX"></section>
+    `);
+
+    expect(detectSlides(doc).map((slide) => slide.width)).toEqual([800, 800]);
+  });
+
+  it('reads uppercase inline style properties and units', () => {
+    const doc = documentFor(
+      `<section class="slide" style="WIDTH:1280PX;HEIGHT:720PX"></section>`
+    );
+
+    expect(detectSlides(doc)[0]).toMatchObject({ width: 1280, height: 720 });
+  });
+
+  it('falls through to style and defaults for invalid size attributes', () => {
+    const doc = documentFor(`
+      <section class="slide" data-width="0" style="width:1280px"></section>
+      <section class="slide" data-width="abc"></section>
+    `);
+
+    const slides = detectSlides(doc);
+
+    expect(slides[0].width).toBe(1280);
+    expect(slides[1].width).toBe(1600);
+  });
 });
 ```
 
@@ -1079,16 +1144,24 @@ function positiveNumber(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
+function readAttributeSize(value: string | null): number {
+  const match = value?.trim().match(/^([\d.]+)(?:px)?$/i);
+  return match ? Number.parseFloat(match[1]) : Number.NaN;
+}
+
+function readStyleSize(style: string, property: 'width' | 'height'): number {
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([\\d.]+)px`, 'gi');
+  const matches = Array.from(style.matchAll(pattern));
+  const value = matches.at(-1)?.[1];
+  return value === undefined ? Number.NaN : Number.parseFloat(value);
+}
+
 function readSize(element: Element): { width: number; height: number } {
-  const attributeWidth = Number(element.getAttribute('data-width'));
-  const attributeHeight = Number(element.getAttribute('data-height'));
+  const attributeWidth = readAttributeSize(element.getAttribute('data-width'));
+  const attributeHeight = readAttributeSize(element.getAttribute('data-height'));
   const inlineStyle = element.getAttribute('style') ?? '';
-  const styleWidth = Number.parseFloat(
-    /(?:^|;)\s*width\s*:\s*([\d.]+)px/.exec(inlineStyle)?.[1] ?? ''
-  );
-  const styleHeight = Number.parseFloat(
-    /(?:^|;)\s*height\s*:\s*([\d.]+)px/.exec(inlineStyle)?.[1] ?? ''
-  );
+  const styleWidth = readStyleSize(inlineStyle, 'width');
+  const styleHeight = readStyleSize(inlineStyle, 'height');
 
   return {
     width: positiveNumber(attributeWidth)
@@ -1106,9 +1179,10 @@ function readSize(element: Element): { width: number; height: number } {
 
 function toSlideInfo(element: Element, index: number): SlideInfo {
   const rawId = element.getAttribute('data-slide-id');
+  const hasId = rawId !== null && rawId.trim() !== '';
   return {
-    id: rawId ?? `s${index + 1}`,
-    hasId: Boolean(rawId),
+    id: hasId ? rawId : `s${index + 1}`,
+    hasId,
     element,
     index,
     ...readSize(element)
@@ -1143,6 +1217,8 @@ export function detectSlides(doc: Document): SlideInfo[] {
     }
   }
 
+  // Body sentinel: the fallback is not an explicit slide, so hasId stays false,
+  // but it gets a fixed id so downstream consumers can address it.
   const body = doc.body;
   return body ? [{ ...toSlideInfo(body, 0), id: 'body' }] : [];
 }
@@ -1171,7 +1247,7 @@ export type { Diagnostic, DiagnosticSeverity, ValidationResult } from './types.j
 
 Run: `npm run test -w @htmlppt/core`
 
-Expected: 5 tests pass.
+Expected: all 12 detection tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -3001,7 +3077,8 @@ Configuration and documentation files are exempt from TDD. This lane can be deve
 
 Run: `npm run test:matrix`
 
-Expected: `Feature matrix OK: 1 active, 1 tagged test feature(s).`
+Expected on this base: `Feature matrix OK: 0 active, 0 tagged test feature(s).` (Lane E has not
+merged yet.) After Lane E merges, it becomes `Feature matrix OK: 1 active, 1 tagged test feature(s).`
 
 - [ ] **Step 2: Replace the minimal CI with the full gate**
 
@@ -3136,6 +3213,14 @@ jobs:
 
 This project follows strict TDD: write a failing test, confirm it fails for the right reason, then implement minimal code.
 
+## Setup
+
+After `npm ci`, install the Playwright Chromium browser once for local E2E runs:
+
+```bash
+npx playwright install chromium
+```
+
 ## Commands
 
 - `npm run test:unit` — core unit tests
@@ -3148,7 +3233,7 @@ This project follows strict TDD: write a failing test, confirm it fails for the 
 ## Adding a feature
 
 1. Add the feature id to `docs/features.json` with `status: "planned"`.
-2. Write an E2E or integration test tagged `@feature:<id>` and confirm it fails.
+2. Write an E2E test tagged `@feature:<id>` and confirm it fails.
 3. Flip the manifest entry to `status: "active"`.
 4. Implement the minimum to pass.
 5. Run `npm run verify` and commit.
