@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -24,7 +24,22 @@ function hash(html: string): string {
   return createHash('sha256').update(html).digest('hex');
 }
 
+let saveChain: Promise<unknown> = Promise.resolve();
+
+function withSaveLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = saveChain.then(task, task);
+  saveChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 export async function startHost(options: HostOptions): Promise<HostHandle> {
+  if (!options.token) {
+    throw new Error('Host requires a non-empty token.');
+  }
+
   let html = await readFile(options.filePath, 'utf8');
   let revision = hash(html);
   let port = 0;
@@ -33,7 +48,10 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
   app.use('/api/*', async (c, next) => {
     const authorization = c.req.header('authorization') ?? '';
-    const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const bearerPrefix = 'bearer ';
+    const bearer = authorization.toLowerCase().startsWith(bearerPrefix)
+      ? authorization.slice(bearerPrefix.length)
+      : '';
     const queryToken = new URL(c.req.url).searchParams.get('token') ?? '';
     if (bearer !== options.token && queryToken !== options.token) {
       return c.json({ error: 'unauthorized' }, 401);
@@ -41,10 +59,15 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
     const origin = c.req.header('origin');
     if (origin) {
-      const parsed = new URL(origin);
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        return c.json({ error: 'forbidden origin' }, 403);
+      }
       const isLocal =
         parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
-      if (!isLocal || parsed.port !== String(port)) {
+      if (parsed.protocol !== 'http:' || !isLocal || parsed.port !== String(port)) {
         return c.json({ error: 'forbidden origin' }, 403);
       }
     }
@@ -59,35 +82,50 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   );
 
   app.put('/api/deck', async (c) => {
-    let body: { html?: unknown; baseRevision?: unknown };
+    let body: unknown;
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: 'invalid json' }, 400);
     }
 
-    if (typeof body.html !== 'string') {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'invalid body' }, 400);
+    }
+
+    const { html: nextHtml, baseRevision } = body as {
+      html?: unknown;
+      baseRevision?: unknown;
+    };
+    if (typeof nextHtml !== 'string') {
       return c.json({ error: 'html is required' }, 400);
     }
-    if (typeof body.baseRevision === 'string' && body.baseRevision !== revision) {
-      return c.json({ error: 'conflict', revision }, 409);
-    }
 
-    const result = validateDeck(parseDeckHtml(body.html));
-    if (!result.valid) {
-      return c.json({ error: 'invalid deck', diagnostics: result.errors }, 400);
-    }
+    return withSaveLock(async () => {
+      if (typeof baseRevision === 'string' && baseRevision !== revision) {
+        return c.json({ error: 'conflict', revision }, 409);
+      }
 
-    const temporaryPath = path.join(
-      path.dirname(options.filePath),
-      `.${path.basename(options.filePath)}.htmlppt.tmp`
-    );
-    await writeFile(temporaryPath, body.html, 'utf8');
-    await rename(temporaryPath, options.filePath);
+      const result = validateDeck(parseDeckHtml(nextHtml));
+      if (!result.valid) {
+        return c.json({ error: 'invalid deck', diagnostics: result.errors }, 400);
+      }
 
-    html = body.html;
-    revision = hash(html);
-    return c.json({ revision });
+      const temporaryPath = path.join(
+        path.dirname(options.filePath),
+        `.${path.basename(options.filePath)}.${randomUUID()}.htmlppt.tmp`
+      );
+      try {
+        await writeFile(temporaryPath, nextHtml, 'utf8');
+        await rename(temporaryPath, options.filePath);
+      } finally {
+        await rm(temporaryPath, { force: true });
+      }
+
+      html = nextHtml;
+      revision = hash(html);
+      return c.json({ revision });
+    });
   });
 
   app.get('/', async (c) => {
@@ -117,11 +155,16 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   }
   port = address.port;
   const url = `http://127.0.0.1:${port}/?token=${encodeURIComponent(options.token)}`;
+  let closed = false;
 
   return {
     url,
     port,
     async close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
       (
         server as unknown as { closeAllConnections?: () => void }
       ).closeAllConnections?.();
