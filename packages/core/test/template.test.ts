@@ -85,6 +85,13 @@ describe('createDeckHtml', () => {
     expect(detectSlides(doc)).toHaveLength(expected);
   });
 
+  it('clamps zero and negative slide counts to one slide element', () => {
+    const zero = parseDeckHtml(createDeckHtml({ slides: 0 }));
+    expect(zero.querySelectorAll('[data-slide-id]')).toHaveLength(1);
+    const negative = parseDeckHtml(createDeckHtml({ slides: -3 }));
+    expect(negative.querySelectorAll('[data-slide-id]')).toHaveLength(1);
+  });
+
   it.each([
     { width: 0, height: 0 },
     { width: -1, height: Number.NaN },
@@ -109,5 +116,10 @@ describe('createDeckHtml', () => {
       expect(slide.getAttribute('data-height')).toBe('720');
     }
     expect(html).toContain('width: 1280px; height: 720px;');
+
+    const subPixel = parseDeckHtml(createDeckHtml({ width: 0.5, height: 0.5 }));
+    const subPixelSlide = subPixel.querySelector('[data-slide-id="s1"]');
+    expect(subPixelSlide?.getAttribute('data-width')).toBe('1');
+    expect(subPixelSlide?.getAttribute('data-height')).toBe('1');
   });
 });

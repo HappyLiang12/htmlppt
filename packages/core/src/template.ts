@@ -27,7 +27,7 @@ function slideCount(value: number | undefined): number {
 
 function finitePositive(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
+    ? Math.max(1, Math.trunc(value))
     : fallback;
 }
 
