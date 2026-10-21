@@ -44,6 +44,15 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   let revision = hash(html);
   let port = 0;
 
+  async function syncFromDisk(): Promise<void> {
+    const diskHtml = await readFile(options.filePath, 'utf8');
+    const diskRevision = hash(diskHtml);
+    if (diskRevision !== revision) {
+      html = diskHtml;
+      revision = diskRevision;
+    }
+  }
+
   const app = new Hono();
 
   app.use('/api/*', async (c, next) => {
@@ -75,11 +84,15 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     await next();
   });
 
-  app.get('/api/health', (c) => c.json({ ok: true, revision }));
+  app.get('/api/health', async (c) => {
+    await syncFromDisk();
+    return c.json({ ok: true, revision });
+  });
 
-  app.get('/api/deck', (c) =>
-    c.json({ html, revision, filePath: options.filePath })
-  );
+  app.get('/api/deck', async (c) => {
+    await syncFromDisk();
+    return c.json({ html, revision, filePath: options.filePath });
+  });
 
   app.put('/api/deck', async (c) => {
     let body: unknown;
@@ -102,6 +115,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     }
 
     return withSaveLock(async () => {
+      await syncFromDisk();
       if (typeof baseRevision === 'string' && baseRevision !== revision) {
         return c.json({ error: 'conflict', revision }, 409);
       }

@@ -226,6 +226,53 @@ describe('host', () => {
     expect(await check.json()).toMatchObject({ html: updated, revision });
   });
 
+  it('reads external file changes and rejects a stale save', async () => {
+    const ctx = await setup();
+    const externalHtml = ctx.deckHtml.replaceAll(
+      'Basic deck',
+      'External writer wins'
+    );
+    await writeFile(ctx.deckPath, externalHtml, 'utf8');
+
+    const health = await fetch(`${ctx.base}/api/health`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(health.status).toBe(200);
+    const healthBody = (await health.json()) as { revision: string };
+    expect(healthBody.revision).not.toBe(ctx.revision);
+
+    const deckResponse = await fetch(`${ctx.base}/api/deck`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(deckResponse.status).toBe(200);
+    expect(await deckResponse.json()).toMatchObject({
+      html: externalHtml,
+      revision: healthBody.revision
+    });
+
+    const saveResponse = await fetch(`${ctx.base}/api/deck`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${ctx.token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        html: ctx.deckHtml.replaceAll('Basic deck', 'Editor tries to save'),
+        baseRevision: ctx.revision
+      })
+    });
+    expect(saveResponse.status).toBe(409);
+    expect(await readFile(ctx.deckPath, 'utf8')).toBe(externalHtml);
+
+    const followUp = await fetch(`${ctx.base}/api/deck`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(await followUp.json()).toMatchObject({
+      html: externalHtml,
+      revision: healthBody.revision
+    });
+  });
+
   it('rejects a null JSON body', async () => {
     const ctx = await setup();
 
