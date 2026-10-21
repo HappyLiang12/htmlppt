@@ -263,9 +263,15 @@ test(
 
       await writeFile(join(directory, 'contested.html'), external, 'utf8');
 
+      const saveResponse = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === '/api/deck'
+      );
       await frame.locator('h1').dblclick();
       await frame.locator('h1').fill('Editor tries to save');
       await frame.locator('h1').press('Escape');
+      expect((await saveResponse).status()).toBe(409);
       await expect(page.getByTestId('save-status')).toHaveText('儲存失敗');
 
       const onDisk = await readFile(join(directory, 'contested.html'), 'utf8');
@@ -312,6 +318,63 @@ test(
         'Class only updated'
       );
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'ignores authored preview markers when committing an edit',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    try {
+      await writeFile(
+        join(directory, 'spoofed.html'),
+        `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta data-ppt-frame-slide="1">
+<title>Spoofed marker deck</title>
+<style>.slide { width: 800px; height: 600px; }</style>
+</head>
+<body>
+<div data-ppt-frame-slide="1">
+<section class="slide" data-slide-id="s1"><h1>First heading</h1></section>
+</div>
+<section class="slide" data-slide-id="s2"><h1>Second heading</h1></section>
+</body>
+</html>
+`,
+        'utf8'
+      );
+
+      host = await startCliHost(cliPath, directory, 'spoofed.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('First heading');
+
+      await frame.locator('h1').dblclick();
+      await frame.locator('h1').fill('Spoofed heading updated');
+      await frame.locator('h1').press('Escape');
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const saved = await readFile(join(directory, 'spoofed.html'), 'utf8');
+      expect(saved).toContain('Spoofed heading updated');
+      expect(saved).toContain('Second heading');
+      expect(saved).toContain('data-slide-id="s1"');
+      expect(saved).toContain('data-slide-id="s2"');
+      expect(saved).toMatch(/<meta[^>]*data-ppt-frame-slide="1"/);
+      expect(saved).not.toContain('contenteditable');
+      const firstSlideTag =
+        /<section[^>]*data-slide-id="s1"[^>]*>/.exec(saved)?.[0] ?? '';
+      expect(firstSlideTag).not.toBe('');
+      expect(firstSlideTag).not.toContain('data-ppt-frame-slide');
+      expect(saved.match(/data-ppt-frame-slide/g)).toHaveLength(2);
+    } finally {
+      await host?.stop();
       await rm(directory, { recursive: true, force: true });
     }
   }
@@ -464,8 +527,8 @@ test(
 
       await expect.poll(() => putStatuses.length).toBe(2);
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
-      // Let any late duplicate commit arrive before pinning the burst count.
-      await page.waitForTimeout(300);
+      // Wait for network quiescence before pinning the burst count.
+      await page.waitForLoadState('networkidle');
       expect(putStatuses).toEqual([200, 200]);
 
       const saved = await readFile(join(directory, 'burst.html'), 'utf8');

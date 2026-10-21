@@ -7,6 +7,10 @@ import {
 export const EDITING_ATTRIBUTE = 'data-ppt-editing';
 export const FRAME_SLIDE_ATTRIBUTE = 'data-ppt-frame-slide';
 
+// One preview is rendered at a time, so a module-level token is enough. A
+// fresh value per srcDoc keeps authored markup from guessing the marker.
+let frameSlideToken: string | null = null;
+
 const BASE_STYLE = `
 html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
 [data-slide-id] { margin: 0 !important; }
@@ -51,6 +55,7 @@ function ancestorsOf(doc: Document, element: Element): Element[] {
 }
 
 export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
+  frameSlideToken = crypto.randomUUID();
   const bodyAttributes = doc.body ? attributesOf(doc.body) : '';
   let content: string;
   if (slide.element.tagName === 'BODY') {
@@ -60,7 +65,7 @@ export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
     const open = ancestors.map(openTag).join('');
     const close = [...ancestors].reverse().map(closeTag).join('');
     const frameSlide = slide.element.cloneNode(true) as Element;
-    frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, '1');
+    frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, frameSlideToken);
     content = `${open}${frameSlide.outerHTML}${close}`;
   }
   return `<!doctype html><html><head>${doc.head.innerHTML}<style data-ppt-editor-base>${BASE_STYLE}</style></head><body${bodyAttributes}>${content}</body></html>`;
@@ -73,7 +78,11 @@ function findFrameSlide(
   if (slide.element.tagName === 'BODY') {
     return frameDocument.body;
   }
-  return frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}="1"]`);
+  if (!frameSlideToken) return null;
+  const candidate = frameDocument.body.querySelector(
+    `[${FRAME_SLIDE_ATTRIBUTE}="${frameSlideToken}"]`
+  );
+  return candidate?.tagName === slide.element.tagName ? candidate : null;
 }
 
 export function commitSlide(
