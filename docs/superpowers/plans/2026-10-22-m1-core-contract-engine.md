@@ -695,9 +695,9 @@ const deck = (body: string) =>
   );
 
 describe('normalizeDeck', () => {
-  it('assigns missing slide ids in order without colliding', () => {
+  it('assigns missing slide ids in order', () => {
     const doc = deck(
-      '<section class="slide" data-slide-id="s2"></section><section class="slide"></section><section class="slide"></section>'
+      '<section class="slide"></section><section class="slide"></section><section class="slide"></section>'
     );
 
     const result = normalizeDeck(doc);
@@ -707,7 +707,32 @@ describe('normalizeDeck', () => {
       Array.from(doc.querySelectorAll('[data-slide-id]')).map((slide) =>
         slide.getAttribute('data-slide-id')
       )
-    ).toEqual(['s2', 's1', 's3']);
+    ).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('follows detection precedence for partially annotated decks', () => {
+    // Detection lets [data-slide-id] shadow classed siblings. Normalization
+    // must not silently promote those siblings into slides.
+    const doc = deck(
+      '<section class="slide" data-slide-id="s2"></section><section class="slide">Ignored by detection</section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides.map((slide) => slide.id)).toEqual(['s2']);
+    expect(doc.querySelectorAll('[data-slide-id]')).toHaveLength(1);
+    expect(doc.querySelectorAll('.slide')[1].hasAttribute('data-ppt-el')).toBe(false);
+  });
+
+  it('avoids collisions with existing ids', () => {
+    const doc = deck(
+      '<section class="slide"><h1 data-ppt-el="e3">A</h1><p>B</p></section><section class="slide"><h2>C</h2></section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides[0].elementIds).toEqual(['e3', 'e1']);
+    expect(result.slides[1].elementIds).toEqual(['e1']);
   });
 
   it('assigns top-level object ids per slide and skips notes and scripts', () => {
@@ -2500,7 +2525,7 @@ git commit -m "test(core): add golden contract fixtures"
 ## Self-Review
 
 - **Spec coverage:** §4 contract attributes are validated and preserved; §11 normalization (ids, position injectable, artifact cleanup), validation errors/warnings, diagnostics with slide id and location; §6 read models `getOutline`/`readSlide`; MCP mutation list minus assets/tables/charts/groups (M4) and background (editor settings, M3/M4), all slide ops, notes, transitions, and element ops covered; runtime §Runtime initial state, print, navigation guards; test framework §5 fixtures and golden files.
-- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
+- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). Normalization follows detection precedence: partially annotated decks normalize only the detected slides; ignored classed siblings are a detection-semantics gap deferred to M2/M3, not silently promoted. `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
 - **Type consistency:** `SlideInfo` gains `widthValid`/`heightValid`; every consumer uses `readCanvasSize`; `DeckMutationError` is exported from both `target.ts` and `mutations.ts` (same class); `Transition` is used by template-independent mutations only.
 - **No placeholders:** every task names exact files, codes, messages, test code, and commands. The only generated artifacts are golden files, with an explicit inspection checklist.
 
