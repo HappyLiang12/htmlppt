@@ -5,3 +5,7 @@ export type { Diagnostic, DiagnosticSeverity, ValidationResult } from './types.j
 export { serializeDeck, serializeExport } from './serialize.js';
 export { createDeckHtml } from './template.js';
 export type { CreateDeckOptions } from './template.js';
+export { normalizeDeck } from './normalize.js';
+export type { NormalizeOptions, NormalizeResult, NormalizedSlide } from './normalize.js';
+export { defaultIdFactory } from './ids.js';
+export type { IdFactory } from './ids.js';
