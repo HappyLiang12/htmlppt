@@ -341,7 +341,7 @@ M0 builds the test framework and proves it with a walking skeleton before featur
 M0 deliverables:
 
 1. Monorepo scaffold: workspaces, TypeScript strict, ESLint, dependency-cruiser, Vitest workspace, Playwright config.
-2. `test-utils` package: fixtures, builders, id/clock injection, Playwright host/page fixtures, screenshot/export helpers.
+2. `test-utils` package: fixtures, temp-dir builders, and Playwright CLI-host/static-server helpers. Id/clock injection is introduced with the first production code that needs it (normalization in M1, autosave in M3).
 3. CI workflows and PR template; feature manifest and coverage script.
 4. Walking-skeleton acceptance test, written first and watched to fail:
    - `htmlppt new demo.html` in a temp dir.
@@ -350,7 +350,7 @@ M0 deliverables:
    - Change the title via the text editor; save; the file on disk contains the new title.
    - `htmlppt export demo.html --format html` writes an export with no editor artifacts.
 5. Thinnest vertical slice of production code to make the skeleton green: core parse/detect/validate/serialize, a minimal host with deck GET/PUT, a minimal editor that renders one slide and edits text, and the CLI `new`/`validate`/`open`/`export html`.
-6. Fixtures and golden files for the contract suite.
+6. One contract fixture used by integration and E2E tests; the full golden-file suite (normalization, outline, validation) lands in M1.
 7. Docs: `docs/testing.md` (how to add tests), feature manifest, commands.
 
 Exit criteria for M0: `npm run verify` is green, includes the skeleton E2E, and the CI pipeline runs it. Only then does feature TDD begin.
