@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 Companion to: `2026-10-21-html-ppt-editor-design.md`
-Status: awaiting review
+Status: approved for planning
 
 ## 1. Goals
 
@@ -299,7 +299,7 @@ test('moves an object by dragging', { tag: '@feature:objects-transform' }, async
 
 `npm run test:matrix`:
 
-1. Runs `playwright test --list --reporter=json`.
+1. Collects `@feature:<id>` tags from E2E test sources (and Playwright's list output when available).
 2. Extracts tags.
 3. Fails if an `active` feature in the manifest has no tagged test.
 4. Fails if a tag references an unknown feature id.

@@ -1,7 +1,7 @@
 # htmlppt — Design Spec
 
 Date: 2026-10-21
-Status: revised — awaiting review
+Status: approved for planning
 Package: `htmlppt` (npm, MIT)
 Project root: `html-ppt-editor`
 
