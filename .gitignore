@@ -3,6 +3,7 @@ dist/
 test-results/
 playwright-report/
 .worktrees/
+.superpowers/
 *.log
 .DS_Store
 .htmlppt/
