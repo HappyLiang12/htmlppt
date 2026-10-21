@@ -166,6 +166,123 @@ test(
 );
 
 test(
+  'exported deck without a runtime navigates with the injected runtime',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let staticServer: Awaited<ReturnType<typeof serveHtml>> | undefined;
+    try {
+      await writeFile(
+        join(directory, 'runtime-less.html'),
+        `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runtime-less deck</title>
+<style>.slide { position: relative; overflow: hidden; }</style>
+</head>
+<body>
+<main data-ppt-deck>
+<section class="slide" data-slide-id="s1" style="width:1600px;height:900px"><h1>Runtime-less one</h1></section>
+<section class="slide" data-slide-id="s2" style="width:1600px;height:900px"><h1>Runtime-less two</h1></section>
+</main>
+</body>
+</html>
+`,
+        'utf8'
+      );
+
+      await execa('node', [cliPath, 'validate', 'runtime-less.html'], {
+        cwd: directory
+      });
+      await execa(
+        'node',
+        [cliPath, 'export', 'runtime-less.html', '--format', 'html'],
+        { cwd: directory }
+      );
+
+      const exported = await readFile(
+        join(directory, 'runtime-less.export.html'),
+        'utf8'
+      );
+      expect(exported.match(/data-ppt-runtime="1"/g)).toHaveLength(1);
+
+      staticServer = await serveHtml(exported);
+      await page.goto(staticServer.url);
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+
+      await page.keyboard.press('ArrowRight');
+      await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s1"]')).toBeHidden();
+      expect(page.url()).toContain('#/2');
+
+      await page.keyboard.press('ArrowLeft');
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+      expect(page.url()).toContain('#/1');
+    } finally {
+      if (staticServer) await staticServer.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'editor reports an external writer and reloads its content',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    try {
+      const initial = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Contested deck</title>
+<style>.slide { width: 1600px; height: 900px; }</style>
+</head>
+<body>
+<main data-ppt-deck>
+<section class="slide" data-slide-id="s1"><h1>Original heading</h1></section>
+<section class="slide" data-slide-id="s2"><h1>Second slide</h1></section>
+</main>
+</body>
+</html>
+`;
+      const external = initial.replace(
+        'Original heading',
+        'External writer wins'
+      );
+      await writeFile(join(directory, 'contested.html'), initial, 'utf8');
+
+      host = await startCliHost(cliPath, directory, 'contested.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Original heading');
+
+      await writeFile(join(directory, 'contested.html'), external, 'utf8');
+
+      await frame.locator('h1').dblclick();
+      await frame.locator('h1').fill('Editor tries to save');
+      await frame.locator('h1').press('Escape');
+      await expect(page.getByTestId('save-status')).toHaveText('儲存失敗');
+
+      const onDisk = await readFile(join(directory, 'contested.html'), 'utf8');
+      expect(onDisk).toContain('External writer wins');
+      expect(onDisk).not.toContain('Editor tries to save');
+
+      await page.reload();
+      await expect(frame.locator('h1')).toContainText('External writer wins');
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+    } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
   'edits a deck whose slides only have a class selector',
   { tag: '@feature:skeleton' },
   async ({ page }) => {
@@ -347,12 +464,19 @@ test(
 
       await expect.poll(() => putStatuses.length).toBe(2);
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      // Let any late duplicate commit arrive before pinning the burst count.
+      await page.waitForTimeout(300);
       expect(putStatuses).toEqual([200, 200]);
 
       const saved = await readFile(join(directory, 'burst.html'), 'utf8');
       expect(saved).toContain('Burst first edit');
       expect(saved).toContain('Burst second edit');
       expect(saved).not.toContain('contenteditable');
+      expect(saved).not.toContain('data-ppt-editing');
+      expect(saved).not.toContain('data-ppt-frame-slide');
+      const headingTag = /<h1[^>]*>/.exec(saved)?.[0] ?? '';
+      expect(headingTag).not.toBe('');
+      expect(headingTag).not.toContain('contenteditable');
     } finally {
       await host?.stop();
       await rm(directory, { recursive: true, force: true });

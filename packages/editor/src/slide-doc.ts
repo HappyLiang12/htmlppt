@@ -5,6 +5,7 @@ import {
 } from '@htmlppt/core';
 
 export const EDITING_ATTRIBUTE = 'data-ppt-editing';
+export const FRAME_SLIDE_ATTRIBUTE = 'data-ppt-frame-slide';
 
 const BASE_STYLE = `
 html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
@@ -58,28 +59,21 @@ export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
     const ancestors = ancestorsOf(doc, slide.element);
     const open = ancestors.map(openTag).join('');
     const close = [...ancestors].reverse().map(closeTag).join('');
-    content = `${open}${slide.element.outerHTML}${close}`;
+    const frameSlide = slide.element.cloneNode(true) as Element;
+    frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, '1');
+    content = `${open}${frameSlide.outerHTML}${close}`;
   }
   return `<!doctype html><html><head>${doc.head.innerHTML}<style data-ppt-editor-base>${BASE_STYLE}</style></head><body${bodyAttributes}>${content}</body></html>`;
 }
 
 function findFrameSlide(
-  doc: Document,
   slide: SlideInfo,
   frameDocument: Document
 ): Element | null {
   if (slide.element.tagName === 'BODY') {
     return frameDocument.body;
   }
-  const path = [...ancestorsOf(doc, slide.element), slide.element];
-  let current: Element | null = frameDocument.body;
-  for (const expected of path) {
-    current = current?.firstElementChild ?? null;
-    if (!current || current.tagName !== expected.tagName) {
-      return null;
-    }
-  }
-  return current;
+  return frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}="1"]`);
 }
 
 export function commitSlide(
@@ -94,7 +88,7 @@ export function commitSlide(
     throw new Error(`Slide ${slideIndex + 1} is missing from the deck.`);
   }
 
-  const frameSlide = findFrameSlide(doc, slide, frameDocument);
+  const frameSlide = findFrameSlide(slide, frameDocument);
   if (!frameSlide) throw new Error('Slide is missing from the editor frame.');
 
   frameSlide
@@ -107,7 +101,11 @@ export function commitSlide(
   if (slide.element.tagName === 'BODY') {
     slide.element.innerHTML = frameSlide.innerHTML;
   } else {
-    slide.element.outerHTML = frameSlide.outerHTML;
+    // Strip the preview marker from the serialized clone so the live frame
+    // keeps it for queued follow-up commits.
+    const serialized = frameSlide.cloneNode(true) as Element;
+    serialized.removeAttribute(FRAME_SLIDE_ATTRIBUTE);
+    slide.element.outerHTML = serialized.outerHTML;
   }
 
   return serializeDeck(doc);
