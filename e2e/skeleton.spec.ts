@@ -283,3 +283,321 @@ test(
     }
   }
 );
+
+test(
+  'queues burst commits so both edits reach the file',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    try {
+      await execa('node', [cliPath, 'new', 'burst.html', '--slides', '2'], {
+        cwd: directory
+      });
+      host = await startCliHost(cliPath, directory, 'burst.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Untitled deck');
+
+      const putStatuses: number[] = [];
+      page.on('response', (response) => {
+        if (
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === '/api/deck'
+        ) {
+          putStatuses.push(response.status());
+        }
+      });
+
+      // Dispatch the same events the app's own handlers listen for: two
+      // complete edit-and-blur cycles in one task, before the first save can
+      // resolve.
+      await frame.locator('body').evaluate((body) => {
+        const scope = body as unknown as {
+          querySelector(selector: string): {
+            dispatchEvent(event: unknown): boolean;
+            textContent: string | null;
+          } | null;
+          ownerDocument: {
+            defaultView: {
+              MouseEvent: new (type: string, init: object) => unknown;
+              FocusEvent: new (type: string, init: object) => unknown;
+            } | null;
+          };
+        };
+        const view = scope.ownerDocument.defaultView;
+        if (!view) throw new Error('Preview has no window.');
+        const edit = (selector: string, text: string) => {
+          const target = scope.querySelector(selector);
+          if (!target) throw new Error(`Missing ${selector}`);
+          target.dispatchEvent(
+            new view.MouseEvent('dblclick', {
+              bubbles: true,
+              cancelable: true
+            })
+          );
+          target.textContent = text;
+          target.dispatchEvent(
+            new view.FocusEvent('focusout', { bubbles: true })
+          );
+        };
+        edit('h1', 'Burst first edit');
+        edit('.kicker', 'Burst second edit');
+      });
+
+      await expect.poll(() => putStatuses.length).toBe(2);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      expect(putStatuses).toEqual([200, 200]);
+
+      const saved = await readFile(join(directory, 'burst.html'), 'utf8');
+      expect(saved).toContain('Burst first edit');
+      expect(saved).toContain('Burst second edit');
+      expect(saved).not.toContain('contenteditable');
+    } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+const AUTHORED_EDITABLE_DECK = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Authored editable deck</title>
+<style>.slide { width: 800px; height: 600px; }</style>
+</head>
+<body>
+<main data-ppt-deck>
+<section class="slide" data-slide-id="s1">
+<div id="authored" contenteditable="true">Authored region</div>
+<div id="locked" contenteditable="false">Locked region</div>
+<h1>Editable heading</h1>
+</section>
+<section class="slide" data-slide-id="s2"><h1>Second slide</h1></section>
+</main>
+</body>
+</html>
+`;
+
+test(
+  'commits the edited element and keeps authored contenteditable',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    try {
+      await writeFile(
+        join(directory, 'authored.html'),
+        AUTHORED_EDITABLE_DECK,
+        'utf8'
+      );
+      host = await startCliHost(cliPath, directory, 'authored.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Editable heading');
+
+      await frame.locator('h1').dblclick();
+      await frame.locator('h1').fill('Edited heading');
+      await frame.locator('h1').press('Escape');
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const saved = await readFile(join(directory, 'authored.html'), 'utf8');
+      expect(saved).toContain('Edited heading');
+      expect(saved).toMatch(/<div id="authored"[^>]*contenteditable="true"/);
+      expect(saved).toMatch(/<div id="locked"[^>]*contenteditable="false"/);
+      expect(saved).not.toContain('data-ppt-editing');
+      await expect(frame.locator('h1')).not.toHaveAttribute(
+        'contenteditable',
+        'true'
+      );
+    } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'focusing an authored editable does not trigger a save',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    try {
+      await writeFile(
+        join(directory, 'authored.html'),
+        AUTHORED_EDITABLE_DECK,
+        'utf8'
+      );
+      host = await startCliHost(cliPath, directory, 'authored.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Editable heading');
+
+      const puts: string[] = [];
+      page.on('request', (request) => {
+        if (
+          request.method() === 'PUT' &&
+          new URL(request.url()).pathname === '/api/deck'
+        ) {
+          puts.push(request.url());
+        }
+      });
+
+      await frame.locator('#authored').click();
+      await page.getByRole('button', { name: '下一頁' }).click();
+      await expect(frame.locator('h1')).toContainText('Second slide');
+      await page.waitForTimeout(500);
+
+      expect(puts).toEqual([]);
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      const saved = await readFile(join(directory, 'authored.html'), 'utf8');
+      expect(saved).toMatch(/<div id="authored"[^>]*contenteditable="true"/);
+      expect(saved).toMatch(/<div id="locked"[^>]*contenteditable="false"/);
+    } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'preview preserves body and ancestor scoped CSS',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    let staticServer: Awaited<ReturnType<typeof serveHtml>> | undefined;
+    try {
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Themed deck</title>
+<style>
+.slide { width: 800px; height: 600px; }
+body.theme-midnight .slide { background: rgb(12, 34, 56); }
+main[data-ppt-deck] > .slide h1 { color: rgb(250, 204, 21); }
+</style>
+</head>
+<body class="theme-midnight" data-theme="midnight">
+<main data-ppt-deck>
+<section class="slide" data-slide-id="s1"><h1>Themed heading</h1></section>
+<section class="slide" data-slide-id="s2"><h1>Second slide</h1></section>
+</main>
+</body>
+</html>
+`;
+      await writeFile(join(directory, 'themed.html'), html, 'utf8');
+      staticServer = await serveHtml(html);
+      await page.goto(staticServer.url);
+      const readStyles = (body: unknown) => {
+        const scope = body as {
+          querySelector(selector: string): unknown;
+          ownerDocument: {
+            defaultView: {
+              getComputedStyle(element: unknown): {
+                backgroundColor: string;
+                color: string;
+              };
+            } | null;
+          };
+        };
+        const view = scope.ownerDocument.defaultView;
+        const slide = scope.querySelector('[data-slide-id="s1"]');
+        const heading = scope.querySelector('[data-slide-id="s1"] h1');
+        if (!view || !slide || !heading) throw new Error('Slide is missing');
+        return {
+          background: view.getComputedStyle(slide).backgroundColor,
+          color: view.getComputedStyle(heading).color
+        };
+      };
+      const authored = await page.locator('body').evaluate(readStyles);
+      expect(authored).toEqual({
+        background: 'rgb(12, 34, 56)',
+        color: 'rgb(250, 204, 21)'
+      });
+
+      host = await startCliHost(cliPath, directory, 'themed.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Themed heading');
+      const preview = await frame.locator('body').evaluate(readStyles);
+
+      expect(preview).toEqual(authored);
+    } finally {
+      await staticServer?.close();
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'preview keeps the body fallback background',
+  { tag: '@feature:skeleton' },
+  async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
+    let host: Awaited<ReturnType<typeof startCliHost>> | undefined;
+    let staticServer: Awaited<ReturnType<typeof serveHtml>> | undefined;
+    try {
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Body fallback deck</title>
+<style>
+body {
+  margin: 0;
+  background: linear-gradient(45deg, rgb(17, 24, 39), rgb(49, 46, 129));
+  color: rgb(248, 250, 252);
+}
+</style>
+</head>
+<body>
+<h1>Body fallback</h1>
+<p>Light text on a dark canvas</p>
+</body>
+</html>
+`;
+      await writeFile(join(directory, 'fallback.html'), html, 'utf8');
+      staticServer = await serveHtml(html);
+      await page.goto(staticServer.url);
+      const readStyles = (body: unknown) => {
+        const scope = body as {
+          ownerDocument: {
+            defaultView: {
+              getComputedStyle(element: unknown): {
+                backgroundImage: string;
+                color: string;
+              };
+            } | null;
+          };
+        };
+        const view = scope.ownerDocument.defaultView;
+        if (!view) throw new Error('Preview has no window.');
+        const style = view.getComputedStyle(body);
+        return {
+          backgroundImage: style.backgroundImage,
+          color: style.color
+        };
+      };
+      const authored = await page.locator('body').evaluate(readStyles);
+      expect(authored.backgroundImage).not.toBe('none');
+      expect(authored.color).toBe('rgb(248, 250, 252)');
+
+      host = await startCliHost(cliPath, directory, 'fallback.html');
+      await page.goto(host.url);
+      const frame = page.frameLocator('iframe[title="投影片預覽"]');
+      await expect(frame.locator('h1')).toContainText('Body fallback');
+      const preview = await frame.locator('body').evaluate(readStyles);
+
+      expect(preview).toEqual(authored);
+    } finally {
+      await staticServer?.close();
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
