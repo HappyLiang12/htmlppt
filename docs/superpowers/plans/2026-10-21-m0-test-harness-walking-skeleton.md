@@ -1,6 +1,6 @@
 # M0 — Test Harness + Walking Skeleton Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILLS: `superpowers:subagent-driven-development` (orchestration) and `superpowers:using-git-worktrees` (isolation). Execute one lane per worktree/branch/PR, never on `main`. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the test harness and a working vertical slice (CLI → host → editor → save → export) before implementing full deck features.
 
@@ -23,6 +23,104 @@
 - Tests use only local fixtures and no external network.
 - Every task ends with a commit. Conventional commit prefixes: `feat:`, `test:`, `chore:`, `docs:`.
 - M0 scope only. Do not implement selection, transform, slides CRUD, MCP, or full PowerPoint features here.
+
+## Execution model: parallel lanes, worktrees, and PRs
+
+### Prerequisites
+
+- A GitHub repository with a `main` branch, Actions enabled, and branch protection requiring a PR and green CI.
+- Explicit user approval for the initial push. Never push, open a PR against someone else's repository, or merge without confirmation.
+- The user presses Merge. Subagents never merge and never push to `main`.
+- Until Lane D merges, PR CI runs only the static job. Early lanes are gated by their local lane commands and orchestrator review. After Lane D merges, enable branch protection for all jobs.
+- If the remote is not available yet, run the same lane protocol locally: one branch and worktree per lane, integrate with `git merge --no-ff` only after review and explicit user confirmation. PR-based CI requires the GitHub remote.
+- Install `gh` and authenticate it. Use `gh pr create --body-file` for PR bodies.
+
+### Lanes and ownership
+
+| Lane | Tasks | Branch | Owned paths | Depends on | Merge order |
+|---|---|---|---|---|---|
+| 0 Bootstrap | Task 1 | `m0/bootstrap` | Root configs, root `package.json` + lockfile, `tsconfig.base.json`, ESLint, dependency-cruiser, Playwright config, `test-utils/**`, `packages/*/package.json` + tsconfigs, `docs/features.json`, `scripts/check-feature-coverage.mjs`, minimal CI | none | 1 |
+| A Core | Tasks 2–4 | `m0/core` | `packages/core/**`, `packages/runtime/**` | Lane 0 | 2 |
+| B Host | Task 5 | `m0/host` | `packages/host/**` | Lane A | 3 or 4 |
+| C CLI basics | Task 6 | `m0/cli` | `packages/cli/**` (without `open`) | Lane A | 3 or 4 |
+| D CI and docs | Task 8 | `m0/ci` | `.github/**`, `docs/testing.md` | Lane 0; final merge after Lane E | 6 |
+| E Editor | Task 7 | `m0/editor` | `packages/editor/**`, `e2e/**`, adds `open` to `packages/cli/src/index.ts`, updates `docs/features.json` | Lanes A, B, C | 5 |
+| F Verify | Task 9 | `m0/verify` or direct review | none | All merged | 7 |
+
+### Waves
+
+1. **Wave 0:** Lane 0. Merge before any other lane starts.
+2. **Wave 1:** Lane A and Lane D start in parallel. Lane D keeps its PR open until Wave 4 because its CI jobs need tests that do not exist yet.
+3. **Wave 2:** after Lane A merges, Lane B and Lane C start in parallel.
+4. **Wave 3:** after Lanes B and C merge, Lane E starts.
+5. **Wave 4:** Lane D finalizes and merges; then Lane F runs the M0 exit verification.
+
+Maximum two implementation lanes run at once. More concurrency would create merge conflicts in `packages/cli/src/index.ts` and `docs/features.json` without shortening the critical path.
+
+### Conflict rules
+
+- After Lane 0, no lane edits root `package.json`, `package-lock.json`, shared configs, or another lane's package.
+- All dependencies are declared in Task 1. Lanes run `npm ci`; they do not install new packages. If a lane needs a new dependency, stop and ask the orchestrator.
+- `docs/features.json` is owned by Lane E after bootstrap. No other lane edits it.
+- `packages/cli/src/index.ts` is owned by Lane C until its PR merges; Lane E then adds the `open` command on a branch rebased on `main`.
+- A lane that needs a shared-file change must stop and request an orchestrator decision instead of editing it.
+
+### Worktree and PR recipe
+
+Run from the main repository. Replace the branch/worktree names per lane.
+
+```bash
+git fetch origin
+git worktree add .worktrees/m0-core -b m0/core origin/main
+cd .worktrees/m0-core
+npm ci
+```
+
+Implement the task with TDD. Before opening the PR:
+
+```bash
+git fetch origin
+git rebase origin/main
+npm run lint
+npm run typecheck
+npm run test -w @htmlppt/core
+git push -u origin m0/core
+```
+
+Write the PR body to a file, then create the PR:
+
+```markdown
+## Summary
+M0 lane: core detect/validate/serialize/template.
+
+## TDD evidence
+- [x] Wrote failing tests first
+- [x] `npm run test -w @htmlppt/core` passes
+- [x] `npm run lint` and `npm run typecheck` pass
+
+## Risks
+```
+
+```bash
+gh pr create --base main --head m0/core --title "feat(core): add contract engine foundation" --body-file /tmp/m0-core-pr.md
+```
+
+- Wait for CI. Fix review findings, including minor ones. Rebase and re-push if `main` moved; use `git push --force-with-lease`.
+- The orchestrator performs a spec-compliance review and a code-quality review of every PR.
+- The user merges after CI is green. The orchestrator then removes the worktree: `git worktree remove .worktrees/m0-core`.
+- Run the final M0 verification on `main` after all merges; attach the output as evidence.
+
+### Lane test gates
+
+| Lane | Local gate before PR |
+|---|---|
+| 0 | `npm run lint && npm run typecheck` |
+| A | `npm run test -w @htmlppt/core` |
+| B | `npm run test -w @htmlppt/host` |
+| C | `npm run test -w @htmlppt/cli` |
+| D | `npm run test:matrix` (after Lane E merges) |
+| E | `npm run build && npx playwright test e2e/skeleton.spec.ts` |
+| F | `npm run verify` |
 
 ## File Structure (M0)
 
@@ -103,11 +201,13 @@ e2e/
 **Files:**
 - Create: `package.json`, `tsconfig.base.json`, `eslint.config.js`, `dependency-cruiser.cjs`, `playwright.config.ts`, `.gitignore`
 - Create: `packages/{core,host,cli,editor,runtime}/package.json` and `tsconfig.json`
-- Create: `test-utils/package.json`, `test-utils/tsconfig.json`
+- Create: `test-utils/package.json`, `test-utils/tsconfig.json`, `test-utils/src/index.ts`, `test-utils/fixtures/basic.deck.html`
 - Create: `docs/features.json`
+- Create: `scripts/check-feature-coverage.mjs`
+- Create: `.github/workflows/ci.yml` (minimal static checks; expanded in Task 8)
 
 **Interfaces:**
-- Produces: workspace package names `@htmlppt/core`, `@htmlppt/core/node`, `@htmlppt/host`, `@htmlppt/cli`, `@htmlppt/editor`, `@htmlppt/runtime`, `@htmlppt/test-utils`; scripts `build`, `lint`, `lint:deps`, `typecheck`, `test:unit`, `test:integration`, `test:e2e`, `test:matrix`, `verify:fast`, `verify`.
+- Produces: workspace package names `@htmlppt/core`, `@htmlppt/core/node`, `@htmlppt/host`, `@htmlppt/cli`, `@htmlppt/editor`, `@htmlppt/runtime`, `@htmlppt/test-utils`; scripts `build`, `lint`, `lint:deps`, `typecheck`, `test:unit`, `test:integration`, `test:e2e`, `test:matrix`, `verify:fast`, `verify`; `makeTempDir`, `copyFixture`, `fixturesDir`.
 
 Configuration files are exempt from TDD. Verify with commands instead of tests.
 
@@ -216,7 +316,25 @@ export default tseslint.config(
         process: 'readonly',
         console: 'readonly',
         Buffer: 'readonly',
-        URL: 'readonly'
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
+      }
+    }
+  },
+  {
+    files: ['packages/editor/**/*.ts', 'packages/editor/**/*.tsx'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
+        fetch: 'readonly',
+        DOMParser: 'readonly',
+        HTMLElement: 'readonly',
+        HTMLIFrameElement: 'readonly',
+        CSS: 'readonly',
+        URLSearchParams: 'readonly'
       }
     }
   }
@@ -293,6 +411,7 @@ node_modules/
 dist/
 test-results/
 playwright-report/
+.worktrees/
 *.log
 .DS_Store
 .htmlppt/
@@ -636,7 +755,108 @@ export default defineConfig({
 Create `test-utils/src/index.ts`:
 
 ```ts
-export {};
+import { cp, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export async function makeTempDir(prefix = 'htmlppt-'): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+export const fixturesDir = fileURLToPath(new URL('../fixtures', import.meta.url));
+
+export async function copyFixture(name: string, destinationDir: string): Promise<string> {
+  const destination = join(destinationDir, name);
+  await cp(join(fixturesDir, name), destination);
+  return destination;
+}
+```
+
+Create `test-utils/fixtures/basic.deck.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Basic deck</title>
+  <style>
+    .slide { width: 1600px; height: 900px; background: #fff; position: relative; overflow: hidden; }
+    h1 { font-size: 96px; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1">
+      <h1 data-ppt-el="e1">Basic deck</h1>
+      <p data-ppt-el="e2">First slide</p>
+    </section>
+    <section class="slide" data-slide-id="s2">
+      <h2 data-ppt-el="e3">Second slide</h2>
+    </section>
+  </main>
+</body>
+</html>
+```
+
+Create `scripts/check-feature-coverage.mjs`:
+
+```js
+import { existsSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = new URL('..', import.meta.url);
+const e2eDir = fileURLToPath(new URL('e2e/', root));
+const manifestPath = fileURLToPath(new URL('docs/features.json', root));
+const tagPattern = /@feature:([a-z0-9-]+)/g;
+
+async function collectFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...(await collectFiles(path)));
+    else if (entry.isFile() && entry.name.endsWith('.spec.ts')) files.push(path);
+  }
+  return files;
+}
+
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+const files = existsSync(e2eDir) ? await collectFiles(e2eDir) : [];
+const tags = new Set();
+
+for (const file of files) {
+  const source = await readFile(file, 'utf8');
+  for (const match of source.matchAll(tagPattern)) tags.add(match[1]);
+}
+
+const errors = [];
+const known = new Map(manifest.features.map((feature) => [feature.id, feature]));
+
+for (const feature of manifest.features) {
+  if (feature.status === 'active' && !tags.has(feature.id)) {
+    errors.push(`Active feature "${feature.id}" has no @feature:${feature.id} test.`);
+  }
+}
+
+for (const tag of tags) {
+  if (!known.has(tag)) {
+    errors.push(`Test tag @feature:${tag} has no entry in docs/features.json.`);
+  }
+}
+
+if (errors.length > 0) {
+  console.error('Feature matrix check failed:');
+  for (const error of errors) console.error(`- ${error}`);
+  process.exit(1);
+}
+
+console.log(
+  `Feature matrix OK: ${manifest.features.filter((f) => f.status === 'active').length} active, ${tags.size} tagged test feature(s).`
+);
 ```
 
 Create `docs/features.json`:
@@ -644,7 +864,7 @@ Create `docs/features.json`:
 ```json
 {
   "features": [
-    { "id": "skeleton", "spec": "16", "status": "active", "tests": ["@feature:skeleton"] },
+    { "id": "skeleton", "spec": "16", "status": "planned", "tests": ["@feature:skeleton"] },
     { "id": "slides", "spec": "4.Slides", "status": "planned", "tests": ["@feature:slides"] },
     { "id": "objects-transform", "spec": "4.Objects", "status": "planned", "tests": ["@feature:objects-transform"] },
     { "id": "rich-text", "spec": "4.Text", "status": "planned", "tests": ["@feature:rich-text"] },
@@ -658,6 +878,31 @@ Create `docs/features.json`:
 }
 ```
 
+Create the minimal `.github/workflows/ci.yml` (Task 8 replaces it with the full gate):
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run lint:deps
+      - run: npm run typecheck
+```
+
 - [ ] **Step 4: Install and verify the scaffold**
 
 Run:
@@ -666,12 +911,13 @@ Run:
 npm install
 npm run lint
 npm run typecheck
+npm run test:matrix
 ```
 
-Expected: install succeeds, lint and typecheck exit 0. Commit `package-lock.json`.
+Expected: install succeeds; lint, typecheck, and the feature matrix (0 active features) exit 0. Commit `package-lock.json`.
 
 ```bash
-git add package.json package-lock.json tsconfig.base.json eslint.config.js dependency-cruiser.cjs playwright.config.ts .gitignore packages test-utils docs/features.json
+git add package.json package-lock.json tsconfig.base.json eslint.config.js dependency-cruiser.cjs playwright.config.ts .gitignore packages test-utils docs/features.json scripts .github
 git commit -m "chore: scaffold npm workspace and tooling"
 ```
 
@@ -1419,62 +1665,12 @@ git commit -m "feat(core): add presentation runtime and deck template"
 - Modify: `packages/host/src/index.ts`
 - Create: `packages/host/vitest.config.ts`
 - Create: `packages/host/test/server.test.ts`
-- Create: `test-utils/src/index.ts`
-- Create: `test-utils/fixtures/basic.deck.html`
 
 **Interfaces:**
-- Consumes: `parseDeckHtml`, `validateDeck` from core.
+- Consumes: `parseDeckHtml`, `validateDeck` from core; `makeTempDir`, `copyFixture` and `basic.deck.html` from `@htmlppt/test-utils` (created in Task 1).
 - Produces: `startHost(options: { filePath: string; token: string; editorDir: string; port?: number }): Promise<{ url: string; port: number; close: () => Promise<void> }>`.
 
 - [ ] **Step 1: Write the failing host integration test**
-
-Create `test-utils/src/index.ts`:
-
-```ts
-import { cp, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-export async function makeTempDir(prefix = 'htmlppt-'): Promise<string> {
-  return mkdtemp(join(tmpdir(), prefix));
-}
-
-export const fixturesDir = fileURLToPath(new URL('../fixtures', import.meta.url));
-
-export async function copyFixture(name: string, destinationDir: string): Promise<string> {
-  const destination = join(destinationDir, name);
-  await cp(join(fixturesDir, name), destination);
-  return destination;
-}
-```
-
-Create `test-utils/fixtures/basic.deck.html`:
-
-```html
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Basic deck</title>
-  <style>
-    .slide { width: 1600px; height: 900px; background: #fff; position: relative; overflow: hidden; }
-    h1 { font-size: 96px; }
-  </style>
-</head>
-<body>
-  <main data-ppt-deck>
-    <section class="slide" data-slide-id="s1">
-      <h1 data-ppt-el="e1">Basic deck</h1>
-      <p data-ppt-el="e2">First slide</p>
-    </section>
-    <section class="slide" data-slide-id="s2">
-      <h2 data-ppt-el="e3">Second slide</h2>
-    </section>
-  </main>
-</body>
-</html>
-```
 
 Create `packages/host/vitest.config.ts`:
 
@@ -1741,7 +1937,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     return c.json({ revision });
   });
 
-  app.get('/', serveStatic({ path: '/index.html', root: options.editorDir }));
+  app.get('/', async (c) => {
+    const editorHtml = await readFile(
+      path.join(options.editorDir, 'index.html'),
+      'utf8'
+    );
+    return c.html(editorHtml);
+  });
   app.use('/*', serveStatic({ root: options.editorDir }));
 
   const server = await new Promise<ReturnType<typeof serve>>((resolve, reject) => {
@@ -1794,7 +1996,7 @@ Expected: 6 tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/host test-utils
+git add packages/host
 git commit -m "feat(host): serve decks and save revisions atomically"
 ```
 
@@ -1810,7 +2012,7 @@ git commit -m "feat(host): serve decks and save revisions atomically"
 
 **Interfaces:**
 - Consumes: `createDeckHtml`, `parseDeckHtml`, `validateDeck`, `serializeExport`.
-- Produces: `runCli(argv: string[], io?: Partial<CliIO>): Promise<number>`; `CliIO { cwd, stdout, stderr }`.
+- Produces: `runCli(argv: string[], io?: Partial<CliIO>): Promise<number>`; `CliIO { cwd, stdout, stderr }`. The `open` command is added in Task 7 after the host exists.
 
 - [ ] **Step 1: Write the failing CLI test**
 
@@ -1954,10 +2156,8 @@ Expected: FAIL because `runCli` is not implemented.
 `packages/cli/src/index.ts`:
 
 ```ts
-import { access, readFile, writeFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, parse, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
   serializeExport,
@@ -1965,7 +2165,6 @@ import {
   type ValidationResult
 } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
-import { startHost } from '@htmlppt/host';
 import { Command, CommanderError } from 'commander';
 
 export interface CliIO {
@@ -1979,13 +2178,6 @@ const DEFAULT_IO: CliIO = {
   stdout: (line) => console.log(line),
   stderr: (line) => console.error(line)
 };
-
-function editorDir(): string {
-  return (
-    process.env.HTMLPPT_EDITOR_DIR ??
-    fileURLToPath(new URL('../../editor/dist', import.meta.url))
-  );
-}
 
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
   for (const diagnostic of result.errors) {
@@ -2078,38 +2270,6 @@ export async function runCli(
       io.stdout(`Exported ${destination}`);
     });
 
-  program
-    .command('open <file>')
-    .description('Open the visual editor for a deck')
-    .option('--port <port>', 'port to listen on', '0')
-    .option('--no-browser', 'do not open a browser')
-    .action(async (file: string, options: { port: string; browser: boolean }) => {
-      const filePath = resolve(io.cwd, file);
-      const directory = editorDir();
-      await access(join(directory, 'index.html'));
-      const host = await startHost({
-        filePath,
-        token: randomUUID(),
-        editorDir: directory,
-        port: Number(options.port)
-      });
-
-      io.stdout(`HTMLPPT_URL=${host.url}`);
-
-      if (options.browser) {
-        const { default: openUrl } = await import('open');
-        await openUrl(host.url);
-      }
-
-      await new Promise<void>((resolvePromise) => {
-        const stop = () => {
-          void host.close().finally(() => resolvePromise());
-        };
-        process.once('SIGINT', stop);
-        process.once('SIGTERM', stop);
-      });
-    });
-
   try {
     await program.parseAsync(argv, { from: 'user' });
   } catch (error) {
@@ -2146,18 +2306,17 @@ Run:
 ```bash
 npm run build -w @htmlppt/runtime
 npm run build -w @htmlppt/core
-npm run build -w @htmlppt/host
 npm run build -w @htmlppt/cli
 node packages/cli/dist/bin.js --help
 ```
 
-Expected: help text lists `new`, `validate`, `export`, `open`.
+Expected: help text lists `new`, `validate`, and `export`. `open` is added in Task 7.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add packages/cli
-git commit -m "feat(cli): add new, validate, export, and open commands"
+git commit -m "feat(cli): add new, validate, and export commands"
 ```
 
 ---
@@ -2172,10 +2331,12 @@ git commit -m "feat(cli): add new, validate, export, and open commands"
 - Create: `packages/editor/src/App.tsx`
 - Modify: `packages/editor/src/main.tsx`
 - Create: `packages/editor/src/index.css`
+- Modify: `packages/cli/src/index.ts` (add `open`)
+- Modify: `docs/features.json` (activate `skeleton`)
 
 **Interfaces:**
-- Consumes: host API `GET /api/deck`, `PUT /api/deck`.
-- Produces: a built editor at `packages/editor/dist` served by `htmlppt open`; text edits commit on blur/Escape and persist; export uses the runtime.
+- Consumes: host API `GET /api/deck`, `PUT /api/deck`; `startHost` from `@htmlppt/host`.
+- Produces: a built editor at `packages/editor/dist`; the CLI `open` command; text edits committed on blur/Escape; export using the runtime.
 
 - [ ] **Step 1: Write the failing walking-skeleton E2E test**
 
@@ -2703,7 +2864,93 @@ body {
 }
 ```
 
-- [ ] **Step 6: Build and run the walking skeleton**
+- [ ] **Step 6: Add the open command to the CLI**
+
+Modify `packages/cli/src/index.ts`.
+
+Change the imports to:
+
+```ts
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { join, parse, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  createDeckHtml,
+  serializeExport,
+  validateDeck,
+  type ValidationResult
+} from '@htmlppt/core';
+import { parseDeckHtml } from '@htmlppt/core/node';
+import { startHost } from '@htmlppt/host';
+import { Command, CommanderError } from 'commander';
+```
+
+Add this helper after `DEFAULT_IO`:
+
+```ts
+function editorDir(): string {
+  return (
+    process.env.HTMLPPT_EDITOR_DIR ??
+    fileURLToPath(new URL('../../editor/dist', import.meta.url))
+  );
+}
+```
+
+Add this command after the `export` command and before the `try` block:
+
+```ts
+  program
+    .command('open <file>')
+    .description('Open the visual editor for a deck')
+    .option('--port <port>', 'port to listen on', '0')
+    .option('--no-browser', 'do not open a browser')
+    .action(async (file: string, options: { port: string; browser: boolean }) => {
+      const filePath = resolve(io.cwd, file);
+      const directory = editorDir();
+      await access(join(directory, 'index.html'));
+      const host = await startHost({
+        filePath,
+        token: randomUUID(),
+        editorDir: directory,
+        port: Number(options.port)
+      });
+
+      io.stdout(`HTMLPPT_URL=${host.url}`);
+
+      if (options.browser) {
+        const { default: openUrl } = await import('open');
+        await openUrl(host.url);
+      }
+
+      await new Promise<void>((resolvePromise) => {
+        const stop = () => {
+          void host.close().finally(() => resolvePromise());
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+    });
+```
+
+Run:
+
+```bash
+npm run build
+node packages/cli/dist/bin.js --help
+```
+
+Expected: help text lists `open`. The CLI build resolves `@htmlppt/host` from the workspace, so build all packages.
+
+- [ ] **Step 7: Activate the skeleton feature in the manifest**
+
+Edit `docs/features.json`: change the `skeleton` entry from `"status": "planned"` to `"status": "active"`.
+
+Run: `npm run test:matrix`
+
+Expected: `Feature matrix OK: 1 active, 1 tagged test feature(s).`
+
+- [ ] **Step 8: Build and run the walking skeleton**
 
 Run:
 
@@ -2714,7 +2961,7 @@ npx playwright test e2e/skeleton.spec.ts
 
 Expected: PASS. If it fails, inspect the Playwright trace and fix the real cause (do not add retries or skips).
 
-- [ ] **Step 7: Run all checks available at this point**
+- [ ] **Step 9: Run all checks available at this point**
 
 Run:
 
@@ -2722,12 +2969,12 @@ Run:
 npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:e2e
 ```
 
-Expected: all pass. The feature matrix gate is added in Task 8; `npm run verify` runs after that.
+Expected: all pass. The expanded CI jobs are added in Task 8.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add packages/editor e2e
+git add packages/editor packages/cli e2e docs/features.json
 git commit -m "feat(editor): add walking skeleton with text editing and save"
 ```
 
@@ -2736,84 +2983,25 @@ git commit -m "feat(editor): add walking skeleton with text editing and save"
 ### Task 8: CI, feature matrix, contributor docs
 
 **Files:**
-- Create: `scripts/check-feature-coverage.mjs`
-- Create: `.github/workflows/ci.yml`
+- Modify: `.github/workflows/ci.yml`
 - Create: `.github/pull_request_template.md`
 - Create: `docs/testing.md`
 
 **Interfaces:**
-- Consumes: `docs/features.json`; `@feature:` tags in `e2e/**/*.spec.ts`.
-- Produces: `npm run test:matrix` gate; CI jobs for static, unit, integration, E2E, matrix; PR checklist.
+- Consumes: `docs/features.json`, `scripts/check-feature-coverage.mjs`, and `@feature:` tags in `e2e/**/*.spec.ts`.
+- Produces: the full CI gate, PR checklist, and contributor guide.
 
-Configuration and documentation files are exempt from TDD. Verify by running the scripts.
+Configuration and documentation files are exempt from TDD. This lane can be developed in parallel after Task 1, but its PR merges after Lane E so CI jobs have tests to run.
 
-- [ ] **Step 1: Implement the feature matrix gate**
+- [ ] **Step 1: Verify the feature matrix gate**
 
-`scripts/check-feature-coverage.mjs`:
-
-```js
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const root = new URL('..', import.meta.url);
-const e2eDir = fileURLToPath(new URL('e2e/', root));
-const manifestPath = fileURLToPath(new URL('docs/features.json', root));
-const tagPattern = /@feature:([a-z0-9-]+)/g;
-
-async function collectFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await collectFiles(path)));
-    else if (entry.isFile() && entry.name.endsWith('.spec.ts')) files.push(path);
-  }
-  return files;
-}
-
-const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-const files = await collectFiles(e2eDir);
-const tags = new Set();
-
-for (const file of files) {
-  const source = await readFile(file, 'utf8');
-  for (const match of source.matchAll(tagPattern)) tags.add(match[1]);
-}
-
-const errors = [];
-const known = new Map(manifest.features.map((feature) => [feature.id, feature]));
-
-for (const feature of manifest.features) {
-  if (feature.status === 'active' && !tags.has(feature.id)) {
-    errors.push(`Active feature "${feature.id}" has no @feature:${feature.id} test.`);
-  }
-}
-
-for (const tag of tags) {
-  if (!known.has(tag)) {
-    errors.push(`Test tag @feature:${tag} has no entry in docs/features.json.`);
-  }
-}
-
-if (errors.length > 0) {
-  console.error('Feature matrix check failed:');
-  for (const error of errors) console.error(`- ${error}`);
-  process.exit(1);
-}
-
-console.log(
-  `Feature matrix OK: ${manifest.features.filter((f) => f.status === 'active').length} active, ${tags.size} tagged test feature(s).`
-);
-```
-
-- [ ] **Step 2: Run the matrix gate**
+`scripts/check-feature-coverage.mjs` was created in Task 1.
 
 Run: `npm run test:matrix`
 
 Expected: `Feature matrix OK: 1 active, 1 tagged test feature(s).`
 
-- [ ] **Step 3: Add CI**
+- [ ] **Step 2: Replace the minimal CI with the full gate**
 
 `.github/workflows/ci.yml`:
 
@@ -2916,7 +3104,7 @@ jobs:
       - run: npm run test:matrix
 ```
 
-- [ ] **Step 4: Add the PR template and contributor guide**
+- [ ] **Step 3: Add the PR template and contributor guide**
 
 `.github/pull_request_template.md`:
 
@@ -2925,8 +3113,9 @@ jobs:
 
 ## TDD evidence
 - [ ] Wrote the failing test first and confirmed it failed for the right reason
-- [ ] Added or updated a `@feature:<id>` tag and `docs/features.json`
-- [ ] `npm run verify` passes locally or in CI
+- [ ] Lane gate commands from the plan passed locally
+- [ ] Added or updated a `@feature:<id>` tag and its `docs/features.json` entry (if this lane owns the manifest)
+- [ ] Full `npm run verify` is deferred to Lane F (M0 exit)
 
 ## Tests
 - [ ] Unit
@@ -2971,7 +3160,7 @@ This project follows strict TDD: write a failing test, confirm it fails for the 
 See `docs/superpowers/specs/2026-10-21-test-framework-design.md` for the full strategy.
 ```
 
-- [ ] **Step 5: Verify the gates**
+- [ ] **Step 4: Verify the gates**
 
 Run:
 
@@ -2983,16 +3172,18 @@ npm run typecheck
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add scripts .github docs/testing.md
-git commit -m "chore: add CI, feature matrix gate, and contributor docs"
+git add .github docs/testing.md
+git commit -m "chore: add full CI gate and contributor docs"
 ```
 
 ---
 
 ### Task 9: M0 exit verification
+
+Run this lane only after the Lane B, C, D, and E PRs are merged to `main` by the user.
 
 **Files:** none created; verification only.
 
@@ -3030,6 +3221,7 @@ Only commit if Step 1 or 2 required changes. Otherwise skip this commit.
 
 ## M0 exit criteria
 
+- All lane PRs are merged by the user and `main` is green in CI.
 - `npm run verify` is green, including the walking-skeleton E2E.
 - `htmlppt new`, `validate`, `open`, and `export html` work from the built CLI.
 - The editor renders a real slide in a sandboxed iframe; text edits persist to the file with no editor artifacts.
