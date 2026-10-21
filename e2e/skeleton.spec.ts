@@ -9,6 +9,39 @@ import { serveHtml, startCliHost } from './helpers';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = join(repoRoot, 'packages/cli/dist/bin.js');
 
+async function waitForStablePutCount(
+  statuses: number[],
+  expectedLength: number,
+  timeoutMs = 5_000
+): Promise<void> {
+  const pollIntervalMs = 100;
+  const requiredStablePolls = 5;
+  const deadline = Date.now() + timeoutMs;
+  let observedLength = statuses.length;
+  let stablePolls = 0;
+
+  while (stablePolls < requiredStablePolls && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    if (statuses.length === observedLength) {
+      stablePolls += 1;
+    } else {
+      observedLength = statuses.length;
+      stablePolls = 0;
+    }
+  }
+
+  if (statuses.length !== expectedLength) {
+    throw new Error(
+      `PUT statuses stabilized at ${statuses.length}, expected ${expectedLength}: ${JSON.stringify(statuses)}.`
+    );
+  }
+  if (stablePolls < requiredStablePolls) {
+    throw new Error(
+      `PUT statuses did not stabilize within ${timeoutMs} ms: ${JSON.stringify(statuses)}.`
+    );
+  }
+}
+
 async function editHeadingAndExpectSaved(
   page: Page,
   directory: string,
@@ -527,8 +560,9 @@ test(
 
       await expect.poll(() => putStatuses.length).toBe(2);
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
-      // Wait for network quiescence before pinning the burst count.
-      await page.waitForLoadState('networkidle');
+      // The second status may arrive after the first saved label; require the
+      // captured PUT count to stay unchanged for 500 ms before pinning it.
+      await waitForStablePutCount(putStatuses, 2);
       expect(putStatuses).toEqual([200, 200]);
 
       const saved = await readFile(join(directory, 'burst.html'), 'utf8');
