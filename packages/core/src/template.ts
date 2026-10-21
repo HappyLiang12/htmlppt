@@ -19,11 +19,23 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
 }
 
+function slideCount(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : 2;
+}
+
+function finitePositive(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : fallback;
+}
+
 export function createDeckHtml(options: CreateDeckOptions = {}): string {
-  const title = options.title ?? 'Untitled deck';
-  const count = Math.max(1, Math.floor(options.slides ?? 2));
-  const width = options.width ?? 1600;
-  const height = options.height ?? 900;
+  const title = options.title?.trim() || 'Untitled deck';
+  const count = slideCount(options.slides);
+  const width = finitePositive(options.width, 1600);
+  const height = finitePositive(options.height, 900);
   const safeTitle = escapeHtml(title);
 
   const slides = Array.from({ length: count }, (_, index) => {

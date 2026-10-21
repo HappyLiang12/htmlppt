@@ -21,11 +21,93 @@ describe('createDeckHtml', () => {
     expect(html).not.toContain('<script>alert(1)</script>');
   });
 
-  it('embeds the runtime without a nested closing script tag', () => {
+  it('embeds the runtime source exactly once', () => {
     const html = createDeckHtml();
 
-    expect(RUNTIME_SOURCE).not.toContain('</script>');
-    expect(html).toContain('data-ppt-runtime="1"');
-    expect(html).toContain('ArrowRight');
+    expect(RUNTIME_SOURCE).not.toMatch(/<\/script|<!--/i);
+
+    const doc = parseDeckHtml(html);
+    const scripts = doc.querySelectorAll('script[data-ppt-runtime="1"]');
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0].textContent).toBe(RUNTIME_SOURCE);
+  });
+
+  it('renders the default title, slide count, and canvas size', () => {
+    const doc = parseDeckHtml(createDeckHtml());
+
+    expect(doc.title).toBe('Untitled deck');
+    expect(doc.querySelector('[data-ppt-deck]')).not.toBeNull();
+    expect(detectSlides(doc)).toHaveLength(2);
+
+    const slides = Array.from(doc.querySelectorAll('[data-slide-id]'));
+    expect(slides.map((slide) => slide.getAttribute('data-slide-id'))).toEqual(['s1', 's2']);
+    for (const slide of slides) {
+      expect(slide.getAttribute('data-width')).toBe('1600');
+      expect(slide.getAttribute('data-height')).toBe('900');
+    }
+  });
+
+  it('marks every heading and numbers the slides after the first', () => {
+    const doc = parseDeckHtml(createDeckHtml({ title: 'Demo' }));
+    const headings = Array.from(doc.querySelectorAll('[data-ppt-el]'));
+
+    expect(headings.map((heading) => heading.getAttribute('data-ppt-el'))).toEqual(['e1', 'e2']);
+    expect(headings[0]?.textContent).toBe('Demo');
+    expect(headings[1]?.textContent).toBe('Demo — 2');
+  });
+
+  it('escapes the headings of the slides after the first', () => {
+    const html = createDeckHtml({ title: '<b>x</b>' });
+    const doc = parseDeckHtml(html);
+    const heading = doc.querySelector('[data-ppt-el="e2"]');
+
+    expect(heading?.textContent).toBe('<b>x</b> — 2');
+    expect(heading?.outerHTML ?? '').not.toContain('<b>');
+    expect(html).not.toContain('<b>');
+  });
+
+  it.each(['', '   '])('defaults an empty title %j to Untitled deck', (title) => {
+    const doc = parseDeckHtml(createDeckHtml({ title }));
+
+    expect(doc.title).toBe('Untitled deck');
+    expect(doc.querySelector('[data-ppt-el="e1"]')?.textContent).toBe('Untitled deck');
+  });
+
+  it.each([
+    { slides: 0, expected: 1 },
+    { slides: -3, expected: 1 },
+    { slides: Number.NaN, expected: 2 },
+    { slides: Number.POSITIVE_INFINITY, expected: 2 },
+    { slides: 2.9, expected: 2 }
+  ])('normalizes slides: $slides to $expected slide(s)', ({ slides, expected }) => {
+    const doc = parseDeckHtml(createDeckHtml({ slides }));
+
+    expect(detectSlides(doc)).toHaveLength(expected);
+  });
+
+  it.each([
+    { width: 0, height: 0 },
+    { width: -1, height: Number.NaN },
+    { width: Number.NaN, height: Number.POSITIVE_INFINITY }
+  ])('falls back to 1600x900 for width: $width and height: $height', ({ width, height }) => {
+    const html = createDeckHtml({ width, height });
+    const doc = parseDeckHtml(html);
+
+    for (const slide of Array.from(doc.querySelectorAll('[data-slide-id]'))) {
+      expect(slide.getAttribute('data-width')).toBe('1600');
+      expect(slide.getAttribute('data-height')).toBe('900');
+    }
+    expect(html).toContain('width: 1600px; height: 900px;');
+  });
+
+  it('truncates fractional canvas dimensions', () => {
+    const html = createDeckHtml({ width: 1280.9, height: 720.9 });
+    const doc = parseDeckHtml(html);
+
+    for (const slide of Array.from(doc.querySelectorAll('[data-slide-id]'))) {
+      expect(slide.getAttribute('data-width')).toBe('1280');
+      expect(slide.getAttribute('data-height')).toBe('720');
+    }
+    expect(html).toContain('width: 1280px; height: 720px;');
   });
 });
