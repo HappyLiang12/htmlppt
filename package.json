@@ -12,6 +12,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json --noEmit",
     "test:unit": "npm run test -w @htmlppt/core",
     "test:integration": "npm run build && npm run test -w @htmlppt/host && npm run test -w @htmlppt/cli",
+    "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
     "test:matrix": "node scripts/check-feature-coverage.mjs",
     "verify:fast": "npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:matrix",

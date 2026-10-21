@@ -14,7 +14,7 @@ npx playwright install chromium
 
 - `npm run test:unit` — core unit tests
 - `npm run test:integration` — host, CLI, filesystem, HTTP
-- `npm run test:e2e` — Playwright Chromium
+- `npm run test:e2e` — builds the workspace first, then runs Playwright Chromium
 - `npm run test:matrix` — feature tag coverage
 - `npm run verify:fast` — lint, boundaries, types, unit, integration, matrix
 - `npm run verify` — everything, including E2E
