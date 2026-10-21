@@ -15,10 +15,9 @@ export interface CliIO {
   stderr: (line: string) => void;
 }
 
-const DEFAULT_IO: CliIO = {
-  cwd: process.cwd(),
-  stdout: (line) => console.log(line),
-  stderr: (line) => console.error(line)
+const DEFAULT_STREAMS = {
+  stdout: (line: string) => console.log(line),
+  stderr: (line: string) => console.error(line)
 };
 
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
@@ -37,7 +36,7 @@ export async function runCli(
   argv: string[],
   overrides: Partial<CliIO> = {}
 ): Promise<number> {
-  const io: CliIO = { ...DEFAULT_IO, ...overrides };
+  const io: CliIO = { cwd: process.cwd(), ...DEFAULT_STREAMS, ...overrides };
   let exitCode = 0;
 
   const program = new Command();
@@ -46,6 +45,10 @@ export async function runCli(
     .description('Visual editor and tooling for static HTML presentations')
     .version('0.0.0')
     .exitOverride();
+  program.configureOutput({
+    writeOut: (text) => io.stdout(text.replace(/\n$/, '')),
+    writeErr: (text) => io.stderr(text.replace(/\n$/, ''))
+  });
 
   program
     .command('new <file>')
@@ -56,13 +59,21 @@ export async function runCli(
     .action(async (file: string, options: { title: string; slides: string; size: string }) => {
       const match = /^(\d+)x(\d+)$/.exec(options.size);
       if (!match) {
-        throw new Error('Invalid --size. Use WIDTHxHEIGHT, for example 1600x900.');
+        throw new Error(
+          'Invalid --size. Use positive WIDTHxHEIGHT, for example 1600x900.'
+        );
       }
       const width = Number(match[1]);
       const height = Number(match[2]);
-      const slides = Number(options.slides);
-      if (!Number.isInteger(slides) || slides < 1) {
-        throw new Error('Invalid --slides. Use a positive integer.');
+      if (width < 1 || height < 1) {
+        throw new Error(
+          'Invalid --size. Use positive WIDTHxHEIGHT, for example 1600x900.'
+        );
+      }
+      const slideMatch = /^(\d+)$/.exec(options.slides);
+      const slides = slideMatch ? Number(slideMatch[1]) : Number.NaN;
+      if (!Number.isSafeInteger(slides) || slides < 1 || slides > 1000) {
+        throw new Error('Invalid --slides. Use a positive integer up to 1000.');
       }
       const html = createDeckHtml({ title: options.title, slides, width, height });
       await writeFile(resolve(io.cwd, file), html, 'utf8');

@@ -99,4 +99,80 @@ describe('htmlppt cli', () => {
     expect(code).toBe(1);
     expect(output.stderr.join('\n')).toContain('Only html export is available');
   });
+
+  it('routes help output through the injected io', async () => {
+    const output = capture();
+
+    const code = await runCli(['--help'], output.io);
+
+    expect(code).toBe(0);
+    const stdout = output.stdout.join('\n');
+    expect(stdout).toContain('Usage');
+    expect(stdout).toContain('new');
+  });
+
+  it('routes version output through the injected io', async () => {
+    const output = capture();
+
+    const code = await runCli(['--version'], output.io);
+
+    expect(code).toBe(0);
+    expect(output.stdout.join('\n')).toContain('0.0.0');
+  });
+
+  it('rejects a zero size with the size error', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(['new', 'zero.html', '--size', '0x0'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Invalid --size. Use positive WIDTHxHEIGHT, for example 1600x900.'
+    );
+  });
+
+  it.each(['0', '1001', '1e3'])('rejects --slides %s', async (slides) => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(['new', 'deck.html', '--slides', slides], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Invalid --slides. Use a positive integer up to 1000.'
+    );
+  });
+
+  it('reports a valid deck in plain mode', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const output = capture();
+
+    const code = await runCli(['validate', 'deck.html'], { cwd, ...output.io });
+
+    expect(code).toBe(0);
+    expect(output.stdout.join('\n')).toContain('Deck is valid.');
+  });
+
+  it('exports beside the source by default', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const output = capture();
+
+    const code = await runCli(['export', 'deck.html', '--format', 'html'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(0);
+    const exported = await readFile(join(cwd, 'deck.export.html'), 'utf8');
+    expect(exported).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
+  });
 });
