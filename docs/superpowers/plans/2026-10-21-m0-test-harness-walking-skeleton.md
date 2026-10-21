@@ -26,14 +26,13 @@
 
 ## Execution model: parallel lanes, worktrees, and PRs
 
-### Prerequisites
+### Selected mode: local branches (this run)
 
-- A GitHub repository with a `main` branch, Actions enabled, and branch protection requiring a PR and green CI.
-- Explicit user approval for the initial push. Never push, open a PR against someone else's repository, or merge without confirmation.
-- The user presses Merge. Subagents never merge and never push to `main`.
-- Until Lane D merges, PR CI runs only the static job. Early lanes are gated by their local lane commands and orchestrator review. After Lane D merges, enable branch protection for all jobs.
-- If the remote is not available yet, run the same lane protocol locally: one branch and worktree per lane, integrate with `git merge --no-ff` only after review and explicit user confirmation. PR-based CI requires the GitHub remote.
-- Install `gh` and authenticate it. Use `gh pr create --body-file` for PR bodies.
+- No GitHub remote, no push, no PRs. Each lane works in its own worktree and branch; integration happens locally.
+- The user authorized automatic merges after lane gates and orchestrator review. The orchestrator merges with `git merge --no-ff`, reports at each wave boundary, and never pushes.
+- The CI workflow files are still created for the future open-source remote, but local lane gates are authoritative in this run.
+- A future remote run can enable PRs with the same lanes, ownership, and gates; the PR recipe below is retained for that mode.
+- The user presses Merge in a future PR mode; in this local mode the authorized auto-merge rule applies.
 
 ### Lanes and ownership
 
@@ -65,50 +64,52 @@ Maximum two implementation lanes run at once. More concurrency would create merg
 - `packages/cli/src/index.ts` is owned by Lane C until its PR merges; Lane E then adds the `open` command on a branch rebased on `main`.
 - A lane that needs a shared-file change must stop and request an orchestrator decision instead of editing it.
 
-### Worktree and PR recipe
+### Worktree and integration recipe
 
 Run from the main repository. Replace the branch/worktree names per lane.
 
 ```bash
-git fetch origin
-git worktree add .worktrees/m0-core -b m0/core origin/main
+git worktree add .worktrees/m0-core -b m0/core main
 cd .worktrees/m0-core
 npm ci
 ```
 
-Implement the task with TDD. Before opening the PR:
+Implement the task with TDD. Before integration:
 
 ```bash
-git fetch origin
-git rebase origin/main
 npm run lint
 npm run typecheck
 npm run test -w @htmlppt/core
-git push -u origin m0/core
+git add -A
+git commit -m "feat(core): ..."
 ```
 
-Write the PR body to a file, then create the PR:
-
-```markdown
-## Summary
-M0 lane: core detect/validate/serialize/template.
-
-## TDD evidence
-- [x] Wrote failing tests first
-- [x] `npm run test -w @htmlppt/core` passes
-- [x] `npm run lint` and `npm run typecheck` pass
-
-## Risks
-```
+Orchestrator review and merge (local mode, authorized):
 
 ```bash
-gh pr create --base main --head m0/core --title "feat(core): add contract engine foundation" --body-file /tmp/m0-core-pr.md
+cd /d/project/tmp/html-ppt-editor
+git status
+git merge --no-ff m0/core -m "merge: m0/core"
+git worktree remove .worktrees/m0-core
+git branch -d m0/core
 ```
 
-- Wait for CI. Fix review findings, including minor ones. Rebase and re-push if `main` moved; use `git push --force-with-lease`.
-- The orchestrator performs a spec-compliance review and a code-quality review of every PR.
-- The user merges after CI is green. The orchestrator then removes the worktree: `git worktree remove .worktrees/m0-core`.
-- Run the final M0 verification on `main` after all merges; attach the output as evidence.
+- The main worktree must be clean before merging. Never use `git reset --hard` or discard uncommitted work.
+- Run the lane's test gate in the lane worktree before merging.
+- The orchestrator performs a spec-compliance review and a code-quality review of every lane diff. Fix review findings, including minor ones, before merging.
+- Report the merge and test evidence at each wave boundary.
+- After all merges, run the M0 exit verification on `main`.
+
+#### Future remote mode (not used in this run)
+
+When a GitHub remote is configured, the same lane protocol can use PRs:
+
+```bash
+git push -u origin m0/core
+gh pr create --base main --head m0/core --title "feat(core): ..." --body-file /tmp/m0-core-pr.md
+```
+
+The user merges the PR after green CI. Subagents never push to `main` or merge a PR.
 
 ### Lane test gates
 
@@ -3183,7 +3184,7 @@ git commit -m "chore: add full CI gate and contributor docs"
 
 ### Task 9: M0 exit verification
 
-Run this lane only after the Lane B, C, D, and E PRs are merged to `main` by the user.
+Run this lane only after the Lane B, C, D, and E branches are merged into `main` by the orchestrator (authorized local auto-merge).
 
 **Files:** none created; verification only.
 
@@ -3221,7 +3222,7 @@ Only commit if Step 1 or 2 required changes. Otherwise skip this commit.
 
 ## M0 exit criteria
 
-- All lane PRs are merged by the user and `main` is green in CI.
+- All lanes are merged into local `main` after gates and review.
 - `npm run verify` is green, including the walking-skeleton E2E.
 - `htmlppt new`, `validate`, `open`, and `export html` work from the built CLI.
 - The editor renders a real slide in a sandboxed iframe; text edits persist to the file with no editor artifacts.
