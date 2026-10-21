@@ -177,12 +177,28 @@ export async function runCli(
       } catch {
         throw new Error('Editor build not found. Run "npm run build" first.');
       }
-      const host = await startHost({
-        filePath,
-        token: randomUUID(),
-        editorDir: directory,
-        port: Number(options.port)
-      });
+      let host: Awaited<ReturnType<typeof startHost>>;
+      try {
+        host = await startHost({
+          filePath,
+          token: randomUUID(),
+          editorDir: directory,
+          port: Number(options.port)
+        });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          throw new Error(
+            `Deck file not found: ${file}. Create one with "htmlppt new ${file}".`
+          );
+        }
+        if (code === 'EADDRINUSE') {
+          throw new Error(
+            `Port ${options.port} is already in use. Omit --port or choose another.`
+          );
+        }
+        throw error;
+      }
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 

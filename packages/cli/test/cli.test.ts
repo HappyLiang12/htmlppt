@@ -1,4 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { describe, expect, it } from 'vitest';
@@ -242,6 +243,51 @@ describe('htmlppt cli', () => {
       );
     }
   );
+
+  it('reports a missing deck file with actionable guidance', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(['open', 'missing.html', '--no-browser'], {
+      cwd,
+      ...output.io
+    });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain('Deck file not found');
+    expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+  });
+
+  it('reports an occupied port with actionable guidance', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', resolve);
+    });
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Probe server did not expose a TCP port.');
+    }
+    const output = capture();
+    try {
+      const code = await runCli(
+        ['open', 'deck.html', `--port=${address.port}`, '--no-browser'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain(
+        `Port ${address.port} is already in use. Omit --port or choose another.`
+      );
+      expect(output.stdout.join('\n')).not.toContain('HTMLPPT_URL=');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        probe.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 
   it('reports a missing editor build with an actionable error', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
