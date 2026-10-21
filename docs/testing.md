@@ -2,6 +2,14 @@
 
 This project follows strict TDD: write a failing test, confirm it fails for the right reason, then implement minimal code.
 
+## Setup
+
+After `npm ci`, install the Playwright Chromium browser once for local E2E runs:
+
+```bash
+npx playwright install chromium
+```
+
 ## Commands
 
 - `npm run test:unit` — core unit tests
@@ -14,7 +22,7 @@ This project follows strict TDD: write a failing test, confirm it fails for the 
 ## Adding a feature
 
 1. Add the feature id to `docs/features.json` with `status: "planned"`.
-2. Write an E2E or integration test tagged `@feature:<id>` and confirm it fails.
+2. Write an E2E test tagged `@feature:<id>` and confirm it fails.
 3. Flip the manifest entry to `status: "active"`.
 4. Implement the minimum to pass.
 5. Run `npm run verify` and commit.
