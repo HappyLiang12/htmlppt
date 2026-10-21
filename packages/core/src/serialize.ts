@@ -10,7 +10,8 @@ export function serializeDeck(doc: Document): string {
 function needsRuntime(doc: Document): boolean {
   return (
     doc.querySelectorAll('[data-slide-id]').length > 1 &&
-    doc.querySelector('[data-ppt-runtime="1"]') === null
+    doc.querySelector('[data-ppt-runtime="1"]') === null &&
+    doc.querySelector('script') === null
   );
 }
 

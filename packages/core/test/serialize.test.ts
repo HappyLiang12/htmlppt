@@ -48,6 +48,16 @@ describe('serialization', () => {
     expect(doc.querySelector('[data-ppt-runtime="1"]')).toBeNull();
   });
 
+  it('does not inject the runtime into a multi-slide deck with its own script', () => {
+    const customScript = '<script>window.customNavigation = true;</script>';
+    const deck = twoSlide.replace('</body>', `${customScript}</body>`);
+    const html = serializeExport(parseDeckHtml(deck));
+
+    expect(html.match(/data-ppt-runtime="1"/g)).toBeNull();
+    expect(html).toContain(customScript);
+    expect(html).not.toContain(RUNTIME_SOURCE);
+  });
+
   it('does not duplicate an existing runtime', () => {
     const deck = twoSlide.replace(
       '</main>',
