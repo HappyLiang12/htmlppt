@@ -11,6 +11,6 @@ export const fixturesDir = fileURLToPath(new URL('../fixtures', import.meta.url)
 
 export async function copyFixture(name: string, destinationDir: string): Promise<string> {
   const destination = join(destinationDir, name);
-  await cp(join(fixturesDir, name), destination);
+  await cp(join(fixturesDir, name), destination, { recursive: true });
   return destination;
 }

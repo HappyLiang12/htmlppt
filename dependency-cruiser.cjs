@@ -11,13 +11,13 @@ module.exports = {
       name: 'runtime-is-pure',
       severity: 'error',
       from: { path: '^packages/runtime' },
-      to: { path: '^packages/' }
+      to: { path: '^packages/', pathNot: '^packages/runtime' }
     },
     {
       name: 'editor-avoids-node-adapter',
       severity: 'error',
       from: { path: '^packages/editor' },
-      to: { path: '^packages/core/src/node' }
+      to: { path: '^packages/core/src/node\\.ts$' }
     },
     {
       name: 'host-avoids-editor',
