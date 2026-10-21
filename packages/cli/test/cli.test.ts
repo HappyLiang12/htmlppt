@@ -175,4 +175,19 @@ describe('htmlppt cli', () => {
     const exported = await readFile(join(cwd, 'deck.export.html'), 'utf8');
     expect(exported).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
   });
+
+  it('rejects an invalid port before starting the host', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    const code = await runCli(
+      ['open', 'deck.html', '--port', '70000', '--no-browser'],
+      { cwd, ...output.io }
+    );
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Invalid --port. Use an integer between 0 and 65535.'
+    );
+  });
 });
