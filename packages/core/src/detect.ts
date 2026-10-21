@@ -1,3 +1,10 @@
+export interface CanvasSize {
+  width: number;
+  height: number;
+  widthValid: boolean;
+  heightValid: boolean;
+}
+
 export interface SlideInfo {
   id: string;
   hasId: boolean;
@@ -5,6 +12,8 @@ export interface SlideInfo {
   index: number;
   width: number;
   height: number;
+  widthValid: boolean;
+  heightValid: boolean;
 }
 
 const SLIDE_SELECTORS = ['[data-slide-id]', '.slide', '.page', '.slide-page'];
@@ -27,9 +36,11 @@ function readStyleSize(style: string, property: 'width' | 'height'): number {
   return value === undefined ? Number.NaN : Number.parseFloat(value);
 }
 
-function readSize(element: Element): { width: number; height: number } {
-  const attributeWidth = readAttributeSize(element.getAttribute('data-width'));
-  const attributeHeight = readAttributeSize(element.getAttribute('data-height'));
+export function readCanvasSize(element: Element): CanvasSize {
+  const rawWidth = element.getAttribute('data-width');
+  const rawHeight = element.getAttribute('data-height');
+  const attributeWidth = readAttributeSize(rawWidth);
+  const attributeHeight = readAttributeSize(rawHeight);
   const inlineStyle = element.getAttribute('style') ?? '';
   const styleWidth = readStyleSize(inlineStyle, 'width');
   const styleHeight = readStyleSize(inlineStyle, 'height');
@@ -44,7 +55,9 @@ function readSize(element: Element): { width: number; height: number } {
       ? attributeHeight
       : positiveNumber(styleHeight)
         ? styleHeight
-        : DEFAULT_HEIGHT
+        : DEFAULT_HEIGHT,
+    widthValid: rawWidth === null || positiveNumber(attributeWidth),
+    heightValid: rawHeight === null || positiveNumber(attributeHeight)
   };
 }
 
@@ -56,7 +69,7 @@ function toSlideInfo(element: Element, index: number): SlideInfo {
     hasId,
     element,
     index,
-    ...readSize(element)
+    ...readCanvasSize(element)
   };
 }
 
