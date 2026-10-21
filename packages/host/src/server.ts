@@ -172,6 +172,9 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
           diskHtml = await readFile(options.filePath, 'utf8');
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            // The revision is the last cached one for a file that no longer
+            // exists; the future 409-retry flow (F11) must treat it as
+            // "reload required".
             return c.json({ error: 'conflict', revision }, 409);
           }
           if (isUnreadable(error)) {

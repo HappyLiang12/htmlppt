@@ -299,8 +299,9 @@ describe('host', () => {
     await Promise.all(responses.map((response) => response.text()));
     const putStatuses = responses
       .filter((_response, index) => index % 2 === 0)
-      .map((response) => response.status);
-    expect(putStatuses.filter((status) => status === 200)).toHaveLength(1);
+      .map((response) => response.status)
+      .sort((a, b) => a - b);
+    expect(putStatuses).toEqual([200, ...Array(11).fill(409)]);
 
     const onDisk = await readFile(ctx.deckPath, 'utf8');
     const deckResponse = await fetch(`${ctx.base}/api/deck`, {
