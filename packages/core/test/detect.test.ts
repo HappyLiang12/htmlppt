@@ -140,6 +140,15 @@ describe('detectSlides', () => {
     expect(detectSlides(doc).map((slide) => slide.width)).toEqual([1600, 1600]);
   });
 
+  it('rejects trailing-dot size forms', () => {
+    const doc = documentFor(`
+      <section class="slide" data-width="10."></section>
+      <section class="slide" style="width: 10.px"></section>
+    `);
+
+    expect(detectSlides(doc).map((slide) => slide.width)).toEqual([1600, 1600]);
+  });
+
   it('accepts decimal sizes with and without a px suffix', () => {
     const doc = documentFor(`
       <section class="slide" data-width="1600.5px"></section>

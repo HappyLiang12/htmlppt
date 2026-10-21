@@ -19,7 +19,7 @@ export interface SlideInfo {
 const SLIDE_SELECTORS = ['[data-slide-id]', '.slide', '.page', '.slide-page'];
 const DEFAULT_WIDTH = 1600;
 const DEFAULT_HEIGHT = 900;
-const NUMBER = String.raw`(?:\d+(?:\.\d*)?|\.\d+)`;
+const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const ATTRIBUTE_SIZE = new RegExp(`^${NUMBER}(?:px)?$`, 'i');
 
 function positiveNumber(value: number): boolean {

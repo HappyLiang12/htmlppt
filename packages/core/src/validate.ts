@@ -5,6 +5,15 @@ import type { Diagnostic, ValidationResult } from './types.js';
 const TRANSITIONS = new Set(['none', 'fade', 'slide']);
 const RUNTIME_ATTRIBUTE = 'data-ppt-runtime';
 const EDITOR_ATTRIBUTES = ['data-ppt-editing', 'data-ppt-frame-slide'];
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const URL_PATTERN = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+const LAYOUT_PATTERN = /position\s*:\s*fixed|100(?:d|s|l)?vh/i;
+
+function isRelativeUrl(value: string): boolean {
+  const url = value.trim();
+  if (!url || url.startsWith('#') || url.startsWith('//')) return false;
+  return !URL_SCHEME.test(url);
+}
 
 function diagnostic(
   severity: Diagnostic['severity'],
@@ -115,9 +124,13 @@ export function validateDeck(doc: Document): ValidationResult {
       );
     }
 
-    const elements = Array.from(
+    const candidates = Array.from(
       slide.element.querySelectorAll('[data-ppt-el]')
-    ).filter(
+    );
+    if (slide.element.hasAttribute('data-ppt-el')) {
+      candidates.unshift(slide.element);
+    }
+    const elements = candidates.filter(
       (element) => owningSlideElement(element, slideElements) === slide.element
     );
     const elementIds = new Map<string, number>();
@@ -147,15 +160,6 @@ export function validateDeck(doc: Document): ValidationResult {
   for (const slide of slides) {
     if (slide.hasId) {
       seen.set(slide.id, (seen.get(slide.id) ?? 0) + 1);
-    } else {
-      warnings.push(
-        diagnostic(
-          'warning',
-          'missing-slide-id',
-          `Slide ${slide.index + 1} has no data-slide-id.`,
-          slide.id
-        )
-      );
     }
 
     for (const chart of Array.from(slide.element.querySelectorAll('[data-ppt-chart]'))) {
@@ -249,6 +253,175 @@ export function validateDeck(doc: Document): ValidationResult {
           elementLocation(owner, element)
         )
       );
+    }
+  }
+
+  const explicitSlides = slides.filter((slide) => slide.element !== doc.body);
+
+  if (explicitSlides.length === 0 && !bodyIsEmpty) {
+    warnings.push(
+      diagnostic(
+        'warning',
+        'single-body-fallback',
+        'No slide elements were found; the body is treated as a single slide.'
+      )
+    );
+  }
+
+  for (const slide of explicitSlides) {
+    if (!slide.hasId) {
+      warnings.push(
+        diagnostic(
+          'warning',
+          'missing-slide-id',
+          `Slide ${slide.index + 1} has no data-slide-id.`,
+          slide.id
+        )
+      );
+    }
+  }
+
+  if (explicitSlides.length > 1 && markers.length === 0) {
+    warnings.push(
+      diagnostic(
+        'warning',
+        'missing-runtime',
+        'The deck has multiple slides but no presentation runtime.'
+      )
+    );
+  }
+
+  for (const script of Array.from(doc.querySelectorAll('script'))) {
+    const type = (script.getAttribute('type') ?? '').trim().toLowerCase();
+    if (script.getAttribute(RUNTIME_ATTRIBUTE)?.trim() === '1') continue;
+    if (type === 'application/json' || type === 'application/ld+json') continue;
+    const owner = slideFor(script, slides);
+    warnings.push(
+      diagnostic(
+        'warning',
+        'script-present',
+        'A non-runtime script is present; scripts do not run in the editor.',
+        owner?.id,
+        owner ? elementLocation(owner, script) : 'document > script'
+      )
+    );
+  }
+
+  const relativeUrls = new Set<string>();
+  const warnRelative = (
+    value: string,
+    owner: SlideInfo | undefined,
+    location: string
+  ) => {
+    if (!isRelativeUrl(value)) return;
+    const key = `${location}:${value}`;
+    if (relativeUrls.has(key)) return;
+    relativeUrls.add(key);
+    warnings.push(
+      diagnostic(
+        'warning',
+        'relative-asset',
+        `Relative asset "${value.trim()}" is not supported; use a data: or absolute URL.`,
+        owner?.id,
+        location
+      )
+    );
+  };
+
+  for (const element of Array.from(doc.querySelectorAll('[src], [href]'))) {
+    const owner = slideFor(element, slides);
+    for (const attribute of ['src', 'href']) {
+      const value = element.getAttribute(attribute);
+      if (value !== null) {
+        warnRelative(value, owner, elementLocation(owner, element));
+      }
+    }
+  }
+
+  for (const element of Array.from(doc.querySelectorAll('[style]'))) {
+    const style = element.getAttribute('style') ?? '';
+    const owner = slideFor(element, slides);
+    for (const match of style.matchAll(URL_PATTERN)) {
+      warnRelative(match[2], owner, elementLocation(owner, element));
+    }
+  }
+  for (const style of Array.from(doc.querySelectorAll('style'))) {
+    for (const match of (style.textContent ?? '').matchAll(URL_PATTERN)) {
+      warnRelative(match[2], undefined, 'style');
+    }
+  }
+
+  for (const element of Array.from(doc.querySelectorAll('[style]'))) {
+    if (LAYOUT_PATTERN.test(element.getAttribute('style') ?? '')) {
+      const owner = slideFor(element, slides);
+      warnings.push(
+        diagnostic(
+          'warning',
+          'fixed-layout',
+          'Fixed or viewport-sized layout may not export reliably.',
+          owner?.id,
+          elementLocation(owner, element)
+        )
+      );
+    }
+  }
+  for (const style of Array.from(doc.querySelectorAll('style'))) {
+    if (LAYOUT_PATTERN.test(style.textContent ?? '')) {
+      warnings.push(
+        diagnostic(
+          'warning',
+          'fixed-layout',
+          'Fixed or viewport-sized layout may not export reliably.',
+          undefined,
+          'style'
+        )
+      );
+    }
+  }
+
+  const canvasSizes = new Set(
+    explicitSlides.map((slide) => `${slide.width}x${slide.height}`)
+  );
+  if (canvasSizes.size > 1) {
+    warnings.push(
+      diagnostic(
+        'warning',
+        'mixed-canvas-sizes',
+        'Slides use different canvas sizes.'
+      )
+    );
+  }
+
+  for (const canvas of Array.from(doc.querySelectorAll('canvas'))) {
+    const owner = slideFor(canvas, slides);
+    warnings.push(
+      diagnostic(
+        'warning',
+        'canvas-content',
+        'A <canvas> element cannot be edited visually.',
+        owner?.id,
+        elementLocation(owner, canvas)
+      )
+    );
+  }
+
+  for (const group of Array.from(doc.querySelectorAll('[data-ppt-group]'))) {
+    let parent = group.parentElement;
+    while (parent) {
+      if (parent.hasAttribute('data-ppt-group')) {
+        const owner = slideFor(group, slides);
+        warnings.push(
+          diagnostic(
+            'warning',
+            'unsupported-group-nesting',
+            'Nested data-ppt-group wrappers are not supported.',
+            owner?.id,
+            elementLocation(owner, group)
+          )
+        );
+        break;
+      }
+      parent = parent.parentElement;
     }
   }
 
