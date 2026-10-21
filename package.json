@@ -1,0 +1,31 @@
+{
+  "name": "htmlppt-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "test-utils"],
+  "engines": { "node": ">=20" },
+  "overrides": { "vite": "^6.0.0" },
+  "scripts": {
+    "build": "npm run build -w @htmlppt/runtime && npm run build -w @htmlppt/core && npm run build -w @htmlppt/host && npm run build -w @htmlppt/cli && npm run build -w @htmlppt/editor",
+    "lint": "eslint .",
+    "lint:deps": "depcruise packages --config dependency-cruiser.cjs",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json --noEmit",
+    "test:unit": "npm run test -w @htmlppt/core",
+    "test:integration": "npm run build && npm run test -w @htmlppt/host && npm run test -w @htmlppt/cli",
+    "test:e2e": "playwright test",
+    "test:matrix": "node scripts/check-feature-coverage.mjs",
+    "verify:fast": "npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:matrix",
+    "verify": "npm run verify:fast && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^22.13.0",
+    "dependency-cruiser": "^16.10.0",
+    "eslint": "^9.20.0",
+    "execa": "^9.5.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.0"
+  }
+}

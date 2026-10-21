@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@htmlppt/core": ["packages/core/src/index.ts"],
+      "@htmlppt/core/node": ["packages/core/src/node.ts"],
+      "@htmlppt/host": ["packages/host/src/index.ts"],
+      "@htmlppt/runtime": ["packages/runtime/src/index.ts"],
+      "@htmlppt/test-utils": ["test-utils/src/index.ts"]
+    }
+  }
+}
