@@ -4,7 +4,13 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
-import type { SlideInfo, Transition } from '@htmlppt/core';
+import type {
+  ImageCrop,
+  ShapeAppearance,
+  ShapeAppearanceValues,
+  SlideInfo,
+  Transition
+} from '@htmlppt/core';
 import type { ObjectCommand } from '../commands/objects';
 import type { SelectionTarget } from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
@@ -39,6 +45,20 @@ export interface ObjectActionState {
   group: boolean;
 }
 
+export interface InspectorStyleState {
+  kind: 'shape' | 'image';
+  svg: boolean;
+  appearance: ShapeAppearanceValues;
+  text: string;
+  alt: string;
+  crop: ImageCrop;
+}
+
+export interface InspectorChartState {
+  type: string;
+  title: string;
+}
+
 export interface InspectorProps {
   pendingActions: PendingActions;
   slide: SlideInfo | undefined;
@@ -46,11 +66,21 @@ export interface InspectorProps {
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
   geometry: GeometryValues | null;
+  style?: InspectorStyleState | null;
+  chart?: InspectorChartState | null;
+  styleDisabled?: boolean;
   objectActions: ObjectActionState;
   onSelectObject: (path: number[]) => void;
   onObjectCommand: (command: ObjectCommand) => void;
   onObjectRecovery: (path: number[], action: 'unlock' | 'unhide') => void;
   onCommitGeometry: (field: GeometryField, value: number) => boolean;
+  onSetAppearance: (appearance: ShapeAppearance) => boolean;
+  onSetShapeText: (text: string) => boolean;
+  onSetImageAlt: (alt: string) => boolean;
+  onSetImageCrop: (crop: ImageCrop | null) => boolean;
+  onReplaceImageFile: (file: File) => void;
+  onReplaceImageUrl: () => void;
+  onEditChart: () => void;
   onSetTransition: (transition: Transition) => void;
   onSetBackground: (background: SlideBackground) => boolean;
   onClearBackground: () => boolean;
@@ -183,23 +213,133 @@ function NumberField({
   );
 }
 
+interface StyleFieldProps {
+  pendingActions: PendingActions;
+  owner: string;
+  testId: string;
+  label: string;
+  value: string;
+  disabled?: boolean;
+  placeholder?: string;
+  onCommit: (value: string) => boolean;
+}
+
+function StyleField({
+  pendingActions,
+  owner,
+  testId,
+  label,
+  value,
+  disabled,
+  placeholder,
+  onCommit
+}: StyleFieldProps) {
+  const [draft, setDraft] = useState(value);
+  const [invalid, setInvalid] = useState(false);
+  const pendingRef = useRef(false);
+  const pendingOwner = `style-${owner}`;
+
+  useEffect(() => {
+    if (!pendingRef.current) setDraft(value);
+  }, [value]);
+
+  const reset = () => {
+    pendingRef.current = false;
+    setInvalid(false);
+    setDraft(value);
+  };
+
+  const change = (next: string) => {
+    setDraft(next);
+    setInvalid(false);
+    pendingRef.current = next !== value;
+    pendingActions.changePendingEdit(
+      pendingOwner,
+      pendingRef.current
+        ? {
+            apply: () => {
+              if (!onCommit(next)) {
+                setInvalid(true);
+                return false;
+              }
+              pendingRef.current = false;
+              setInvalid(false);
+              return true;
+            },
+            discard: reset
+          }
+        : null
+    );
+  };
+
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] text-zinc-400">{label}</span>
+      <input
+        type="text"
+        data-testid={testId}
+        aria-label={label}
+        value={draft}
+        disabled={disabled}
+        placeholder={placeholder}
+        aria-invalid={invalid}
+        onBlur={() => pendingActions.settlePendingEdits(pendingOwner)}
+        onChange={(event) => change(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            event.currentTarget.blur();
+          } else if (event.key === 'Escape') {
+            pendingActions.cancelPendingEdit(pendingOwner);
+            event.currentTarget.blur();
+          }
+        }}
+        className={FIELD_CLASS}
+      />
+      {invalid && (
+        <span role="alert" className="text-[11px] text-red-300">
+          值無效，請修正或按 Escape 取消。
+        </span>
+      )}
+    </label>
+  );
+}
+
+function numeric(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function Inspector({
   pendingActions,
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
   geometry,
+  style = null,
+  chart = null,
+  styleDisabled = false,
   objectActions,
   onSelectObject,
   onObjectCommand,
   onObjectRecovery,
   onCommitGeometry,
+  onSetAppearance,
+  onSetShapeText,
+  onSetImageAlt,
+  onSetImageCrop,
+  onReplaceImageFile,
+  onReplaceImageUrl,
+  onEditChart,
   onSetTransition,
   onSetBackground,
   onClearBackground,
   onSetNotes
 }: InspectorProps) {
   const [tab, setTab] = useState<InspectorTab>('design');
+  const replaceInput = useRef<HTMLInputElement | null>(null);
   const tabRefs = useRef<Record<InspectorTab, HTMLButtonElement | null>>({
     design: null,
     text: null,
@@ -532,6 +672,225 @@ export function Inspector({
                 }
               />
             </div>
+          </section>
+        )}
+
+        {selection && chart && (
+          <section
+            data-testid="chart-object"
+            aria-label="圖表"
+            className={SECTION_CLASS}
+          >
+            <h3 className={HEADING_CLASS}>圖表</h3>
+            <p data-testid="chart-summary" className="text-xs text-zinc-400">
+              {chart.type} · {chart.title || '未命名'}
+            </p>
+            <button
+              type="button"
+              data-testid="chart-edit"
+              disabled={styleDisabled}
+              onClick={onEditChart}
+              className={ACTION_CLASS}
+            >
+              編輯圖表資料…
+            </button>
+          </section>
+        )}
+
+        {selection && style && (
+          <section
+            data-testid="object-style"
+            aria-label="物件外觀"
+            className={SECTION_CLASS}
+          >
+            <h3 className={HEADING_CLASS}>
+              {style.kind === 'image' ? '圖片' : '外觀'}
+            </h3>
+            {style.kind === 'image' ? (
+              <>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    data-testid="image-replace-upload"
+                    disabled={styleDisabled}
+                    onClick={() => replaceInput.current?.click()}
+                    className={ACTION_CLASS}
+                  >
+                    更換圖片…
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="image-replace-url"
+                    disabled={styleDisabled}
+                    onClick={onReplaceImageUrl}
+                    className={ACTION_CLASS}
+                  >
+                    圖片網址…
+                  </button>
+                </div>
+                <input
+                  ref={replaceInput}
+                  type="file"
+                  data-testid="image-replace-input"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = '';
+                    if (file) onReplaceImageFile(file);
+                  }}
+                />
+                <StyleField
+                  pendingActions={pendingActions}
+                  owner="image-alt"
+                  testId="image-alt"
+                  label="替代文字"
+                  value={style.alt}
+                  disabled={styleDisabled}
+                  onCommit={onSetImageAlt}
+                />
+                <span className="text-[11px] text-zinc-400">裁切（%）</span>
+                <div className="grid grid-cols-4 gap-1">
+                  {(
+                    [
+                      ['top', '上'],
+                      ['right', '右'],
+                      ['bottom', '下'],
+                      ['left', '左']
+                    ] as const
+                  ).map(([side, label]) => (
+                    <StyleField
+                      key={side}
+                      pendingActions={pendingActions}
+                      owner={`crop-${side}`}
+                      testId={`image-crop-${side}`}
+                      label={label}
+                      value={String(style.crop[side])}
+                      disabled={styleDisabled}
+                      onCommit={(value) => {
+                        const parsed = numeric(value);
+                        if (parsed === null) return false;
+                        const next = { ...style.crop, [side]: parsed };
+                        const empty = Object.values(next).every(
+                          (inset) => inset === 0
+                        );
+                        return empty ? onSetImageCrop(null) : onSetImageCrop(next);
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="image-radius"
+                    testId="image-radius"
+                    label="圓角"
+                    value={style.appearance.radius}
+                    disabled={styleDisabled}
+                    onCommit={(value) => {
+                      const parsed = numeric(value);
+                      if (value.trim() && parsed === null) return false;
+                      return onSetAppearance({ radius: parsed });
+                    }}
+                  />
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="image-opacity"
+                    testId="image-opacity"
+                    label="不透明度"
+                    value={style.appearance.opacity}
+                    disabled={styleDisabled}
+                    onCommit={(value) => {
+                      const parsed = numeric(value);
+                      if (value.trim() && parsed === null) return false;
+                      return onSetAppearance({ opacity: parsed });
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="fill"
+                    testId="style-fill"
+                    label="填色"
+                    value={style.appearance.fill}
+                    disabled={styleDisabled}
+                    placeholder="#4f7cff"
+                    onCommit={(value) =>
+                      onSetAppearance({ fill: value.trim() || null })
+                    }
+                  />
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="stroke"
+                    testId="style-stroke"
+                    label="邊框顏色"
+                    value={style.appearance.stroke}
+                    disabled={styleDisabled}
+                    placeholder="#000000"
+                    onCommit={(value) =>
+                      onSetAppearance({ stroke: value.trim() || null })
+                    }
+                  />
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="stroke-width"
+                    testId="style-stroke-width"
+                    label="邊框寬度"
+                    value={style.appearance.strokeWidth}
+                    disabled={styleDisabled}
+                    placeholder="0"
+                    onCommit={(value) => {
+                      const parsed = numeric(value);
+                      if (value.trim() && parsed === null) return false;
+                      return onSetAppearance({ strokeWidth: parsed ?? 0 });
+                    }}
+                  />
+                  {!style.svg && (
+                    <StyleField
+                      pendingActions={pendingActions}
+                      owner="radius"
+                      testId="style-radius"
+                      label="圓角"
+                      value={style.appearance.radius}
+                      disabled={styleDisabled}
+                      onCommit={(value) => {
+                        const parsed = numeric(value);
+                        if (value.trim() && parsed === null) return false;
+                        return onSetAppearance({ radius: parsed });
+                      }}
+                    />
+                  )}
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="opacity"
+                    testId="style-opacity"
+                    label="不透明度"
+                    value={style.appearance.opacity}
+                    disabled={styleDisabled}
+                    onCommit={(value) => {
+                      const parsed = numeric(value);
+                      if (value.trim() && parsed === null) return false;
+                      return onSetAppearance({ opacity: parsed });
+                    }}
+                  />
+                </div>
+                {style.svg && (
+                  <StyleField
+                    pendingActions={pendingActions}
+                    owner="shape-text"
+                    testId="style-shape-text"
+                    label="圖形文字"
+                    value={style.text}
+                    disabled={styleDisabled}
+                    onCommit={onSetShapeText}
+                  />
+                )}
+              </>
+            )}
           </section>
         )}
 

@@ -5,7 +5,57 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { detectSlides, type SlideInfo, type Transition } from '@htmlppt/core';
+import {
+  chartDataOf,
+  deleteTableColumn,
+  deleteTableRow,
+  detectSlides,
+  findSlide,
+  imageCropOf,
+  imageMimeFromFileName,
+  imageSourceFromFile,
+  insertTableColumn,
+  insertTableRow,
+  readShapeAppearance,
+  replaceImageSource,
+  sanitizePastedText,
+  setImageAlt,
+  setImageCrop,
+  setShapeAppearance,
+  setShapeText,
+  setStyle,
+  toggleTableHeaderRow,
+  type ImageCrop,
+  type ShapeAppearance,
+  type ShapeKind,
+  type SlideInfo,
+  type Transition
+} from '@htmlppt/core';
+import {
+  prepareInsertion,
+  type InsertRequest
+} from './commands/insert';
+import {
+  applyTextCommand,
+  currentTextRange,
+  readTextToolbarState,
+  type TextCommand,
+  type TextToolbarState
+} from './commands/rich-text';
+import {
+  chartFigure,
+  chartJson,
+  refreshChart,
+  refreshCharts,
+  withChartData
+} from './commands/charts';
+import {
+  tableContext,
+  type TableAction
+} from './commands/tables';
+import { TextToolbar } from './components/TextToolbar';
+import { TableToolbar } from './components/TableToolbar';
+import { ChartDialog } from './components/ChartDialog';
 import { openDeckEvents, tokenFromLocation } from './api';
 import {
   planConflictResolution,
@@ -79,6 +129,8 @@ import {
 } from './components/CanvasOverlay';
 import {
   Inspector,
+  type InspectorChartState,
+  type InspectorStyleState,
   type ObjectActionState
 } from './components/Inspector';
 import { PlayView } from './components/PlayView';
@@ -96,7 +148,15 @@ import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
 import { useDeckController } from './use-deck-controller';
 
 const TEXT_EDITABLE_SELECTOR =
-  'h1, h2, h3, p, li, span, td, th, blockquote, figcaption';
+  'h1, h2, h3, p, li, span, td, th, blockquote, figcaption, div';
+
+// Div shapes and text boxes are leaf objects; a layout div with element
+// children keeps its original semantic text target rather than becoming the
+// edit surface itself.
+function isLeafTextElement(element: HTMLElement): boolean {
+  if (element.tagName !== 'DIV') return true;
+  return Array.from(element.children).every((child) => child.tagName === 'BR');
+}
 
 const SNAP_THRESHOLD_SCREEN_PX = 6;
 const MIN_RESIZE_DESIGN_PX = 4;
@@ -333,6 +393,20 @@ export function App() {
   const sessionRef = useRef<TransformSession | null>(null);
   const finishSessionRef = useRef<() => void>(() => undefined);
   const textBaselineRef = useRef(new WeakMap<HTMLElement, string>());
+  const [textToolbar, setTextToolbar] = useState<{
+    state: TextToolbarState;
+    error: string;
+  } | null>(null);
+  const [chartEditor, setChartEditor] = useState<{
+    json: string;
+    error: string;
+  } | null>(null);
+  const editingElementRef = useRef<HTMLElement | null>(null);
+  const lastTextRangeRef = useRef<Range | null>(null);
+  const toolbarInteractionRef = useRef(false);
+  const textPendingRef = useRef<(editable: HTMLElement) => void>(
+    () => undefined
+  );
   const detachSessionRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -492,7 +566,29 @@ export function App() {
       const snapshot = snapshotGeometry(element, slide);
       return applyInspectorEdit(
         current.master,
-        (master) => applyGeometryEdit(master, selected, snapshot, field, value),
+        (master) => {
+          const applied = applyGeometryEdit(
+            master,
+            selected,
+            snapshot,
+            field,
+            value
+          );
+          if (applied && (field === 'width' || field === 'height')) {
+            const updated = detectSlides(master)[selected.slideIndex]?.element;
+            const element = updated
+              ? elementAtPath(updated, selected.path)
+              : null;
+            if (element) {
+              try {
+                refreshChart(element);
+              } catch {
+                // Invalid authored chart JSON does not block geometry edits.
+              }
+            }
+          }
+          return applied;
+        },
         () => void commitMasterDocument()
       );
     },
@@ -576,10 +672,239 @@ export function App() {
     [clearOverlay, commitMasterDocument]
   );
 
+  const applyPathEdit = useCallback(
+    (
+      slideId: string,
+      path: readonly number[],
+      mutate: (element: Element) => void
+    ): boolean => {
+      if (!actionsRef.current.settlePendingEdits()) return false;
+      const master = stateRef.current.master;
+      if (!master) return false;
+      try {
+        return applyInspectorEdit(
+          master,
+          (draft) => {
+            const target = findSlide(draft, slideId);
+            const element = elementAtPath(target.element, [...path]);
+            if (!element) return false;
+            mutate(element);
+            return true;
+          },
+          () => void commitMasterDocument()
+        );
+      } catch {
+        return false;
+      }
+    },
+    [commitMasterDocument]
+  );
+
+  const applySelectionEdit = useCallback(
+    (mutate: (element: Element) => void): boolean => {
+      const current = stateRef.current;
+      const selection = current.selection;
+      const slideInfo = current.slides[current.activeIndex];
+      if (
+        !selection ||
+        current.selections.length !== 1 ||
+        !slideInfo
+      ) {
+        return false;
+      }
+      const top = elementAtPath(slideInfo.element, [selection.path[0] ?? -1]);
+      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+        return false;
+      }
+      return applyPathEdit(slideInfo.id, selection.path, mutate);
+    },
+    [applyPathEdit]
+  );
+
+  const handleSetAppearance = useCallback(
+    (appearance: ShapeAppearance): boolean =>
+      applySelectionEdit((element) => setShapeAppearance(element, appearance)),
+    [applySelectionEdit]
+  );
+
+  const handleSetShapeText = useCallback(
+    (text: string): boolean =>
+      applySelectionEdit((element) => setShapeText(element, text)),
+    [applySelectionEdit]
+  );
+
+  const handleSetImageAlt = useCallback(
+    (alt: string): boolean =>
+      applySelectionEdit((element) => setImageAlt(element, alt)),
+    [applySelectionEdit]
+  );
+
+  const handleSetImageCrop = useCallback(
+    (crop: ImageCrop | null): boolean =>
+      applySelectionEdit((element) => setImageCrop(element, crop)),
+    [applySelectionEdit]
+  );
+
+  const handleReplaceImageFile = useCallback((file: File) => {
+    const current = stateRef.current;
+    const selection = current.selection;
+    const slideInfo = current.slides[current.activeIndex];
+    if (!selection || current.selections.length !== 1 || !slideInfo) return;
+    const slideId = slideInfo.id;
+    const path = [...selection.path];
+    void (async () => {
+      try {
+        const source = await imageSourceFromFile(file);
+        if (!applyPathEdit(slideId, path, (element) => replaceImageSource(element, source))) {
+          setSlideOpError('無法更換圖片；請重新選取物件後再試。');
+        }
+      } catch (error) {
+        setSlideOpError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }, [applyPathEdit]);
+
+  const handleReplaceImageUrl = useCallback(() => {
+    const value = window.prompt('圖片網址（https:// 或 data:image/...）', 'https://');
+    if (value === null) return;
+    applySelectionEdit((element) => replaceImageSource(element, value));
+  }, [applySelectionEdit]);
+
+  const handleTableAction = useCallback(
+    (action: TableAction) => {
+      if (!actionsRef.current.settlePendingEdits()) return;
+      const current = stateRef.current;
+      const slideInfo = current.slides[current.activeIndex];
+      const selection = current.selection;
+      if (!selection || !slideInfo || !current.master) return;
+      const context = tableContext(slideInfo.element, selection.path);
+      if (!context) return;
+      const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
+      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+        return;
+      }
+      try {
+        const applied = applyInspectorEdit(
+          current.master,
+          (draft) => {
+            const target = findSlide(draft, slideInfo.id);
+            const table = elementAtPath(target.element, context.tablePath);
+            if (!table) return false;
+            if (action.type === 'row') {
+              insertTableRow(table, context.row, action.position);
+            } else if (action.type === 'delete-row') {
+              deleteTableRow(table, context.row);
+            } else if (action.type === 'column') {
+              insertTableColumn(table, context.column, action.position);
+            } else if (action.type === 'delete-column') {
+              deleteTableColumn(table, context.column);
+            } else {
+              toggleTableHeaderRow(table);
+            }
+            return true;
+          },
+          () => void commitMasterDocument()
+        );
+        if (applied) {
+          actionsRef.current.clearSelection();
+          clearOverlay();
+        }
+      } catch (error) {
+        setSlideOpError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [clearOverlay, commitMasterDocument]
+  );
+
+  const handleTableCellStyle = useCallback(
+    (styles: Record<string, string>): boolean => {
+      const current = stateRef.current;
+      const slideInfo = current.slides[current.activeIndex];
+      const selection = current.selection;
+      if (!selection || !slideInfo || !current.master) return false;
+      const context = tableContext(slideInfo.element, selection.path);
+      if (!context) return false;
+      const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
+      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+        return false;
+      }
+      try {
+        return applyInspectorEdit(
+          current.master,
+          (draft) => {
+            const target = findSlide(draft, slideInfo.id);
+            const cell = elementAtPath(target.element, context.cellPath);
+            if (!cell) return false;
+            setStyle(cell, styles);
+            return true;
+          },
+          () => void commitMasterDocument()
+        );
+      } catch {
+        return false;
+      }
+    },
+    [commitMasterDocument]
+  );
+
+  const handleOpenChartEditor = useCallback(() => {
+    const current = stateRef.current;
+    const slideInfo = current.slides[current.activeIndex];
+    const selection = current.selection;
+    if (!selection || !slideInfo) return;
+    const element = elementAtPath(slideInfo.element, selection.path);
+    if (!chartFigure(element)) return;
+    try {
+      setChartEditor({ json: chartJson(element as Element), error: '' });
+    } catch (error) {
+      setSlideOpError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const handleApplyChart = useCallback(() => {
+    const editor = chartEditor;
+    if (!editor) return;
+    if (!actionsRef.current.settlePendingEdits()) return;
+    const current = stateRef.current;
+    const slideInfo = current.slides[current.activeIndex];
+    const selection = current.selection;
+    if (!selection || !slideInfo || !current.master) {
+      setChartEditor(null);
+      return;
+    }
+    const top = elementAtPath(slideInfo.element, [selection.path[0] ?? -1]);
+    if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+      return;
+    }
+    let failure = '';
+    const applied = applyInspectorEdit(
+      current.master,
+      (draft) => {
+        const target = findSlide(draft, slideInfo.id);
+        const element = elementAtPath(target.element, selection.path);
+        if (!element || !chartFigure(element)) {
+          failure = '選取的物件不是圖表。';
+          return false;
+        }
+        const result = withChartData(element, editor.json);
+        if (!result.ok) {
+          failure = result.error;
+          return false;
+        }
+        return true;
+      },
+      () => void commitMasterDocument()
+    );
+    if (!applied) {
+      setChartEditor({ ...editor, error: failure || '無法套用圖表資料。' });
+      return;
+    }
+    setChartEditor(null);
+  }, [chartEditor, commitMasterDocument]);
+
   useEffect(() => {
     void actions.load();
   }, [actions]);
-
   /**
    * Connects once the initial deck exists, so the hello revision is compared
    * against a loaded master instead of an empty one. EventSource reconnects on
@@ -938,6 +1263,7 @@ export function App() {
       refreshOverlay();
       return;
     }
+    if (session.kind === 'resize') refreshCharts(session.slide);
     void commitFrame();
   }, [commitFrame, refreshOverlay]);
   finishSessionRef.current = applySession;
@@ -1186,6 +1512,24 @@ export function App() {
     [commitFrame, frameSlideNow]
   );
 
+  const beginTextEditing = useCallback((editable: HTMLElement) => {
+    const document = editable.ownerDocument;
+    const range = currentTextRange(document);
+    editingElementRef.current = editable;
+    lastTextRangeRef.current =
+      range && editable.contains(range.commonAncestorContainer) ? range : null;
+    setTextToolbar({
+      state: readTextToolbarState(document, editable, lastTextRangeRef.current),
+      error: ''
+    });
+  }, []);
+
+  const endTextEditing = useCallback(() => {
+    editingElementRef.current = null;
+    lastTextRangeRef.current = null;
+    setTextToolbar(null);
+  }, []);
+
   const startTextEditing = useCallback((): boolean => {
     const current = stateRef.current;
     if (current.selections.length !== 1 || !current.selection) return false;
@@ -1211,14 +1555,25 @@ export function App() {
       ? selected
       : selected.querySelector(TEXT_EDITABLE_SELECTOR);
     const editable = textElement as HTMLElement | null;
-    if (!editable || !editable.textContent?.trim()) return false;
+    if (!editable || !isLeafTextElement(editable)) return false;
+    // Empty div shapes and table cells accept a first text entry; other
+    // semantic elements require existing content so Enter cannot inject text.
+    if (
+      !editable.textContent?.trim() &&
+      editable.tagName !== 'DIV' &&
+      editable.tagName !== 'TD' &&
+      editable.tagName !== 'TH'
+    ) {
+      return false;
+    }
 
     textBaselineRef.current.set(editable, editable.innerHTML);
     editable.setAttribute('contenteditable', 'true');
     editable.setAttribute(EDITING_ATTRIBUTE, 'true');
     editable.focus();
+    beginTextEditing(editable);
     return true;
-  }, []);
+  }, [beginTextEditing]);
 
   const zoomBy = useCallback((factor: number) => {
     const next = Math.min(
@@ -1623,13 +1978,14 @@ export function App() {
           editable.removeAttribute('contenteditable');
           return commitSlide(master, slide.index, frameDocument);
         });
+        endTextEditing();
       } catch {
         // The controller already surfaced the status and message.
         editable.setAttribute('contenteditable', 'true');
         editable.setAttribute(EDITING_ATTRIBUTE, 'true');
       }
     },
-    [actions]
+    [actions, endTextEditing]
   );
 
   const onFrameLoad = useCallback(() => {
@@ -1642,7 +1998,15 @@ export function App() {
       const target = event.target as HTMLElement | null;
       if (!target || !frameDocument.body.contains(target)) return;
       const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
-      if (!editable || !editable.textContent?.trim()) return;
+      if (!editable || !isLeafTextElement(editable)) return;
+      if (
+        !editable.textContent?.trim() &&
+        editable.tagName !== 'DIV' &&
+        editable.tagName !== 'TD' &&
+        editable.tagName !== 'TH'
+      ) {
+        return;
+      }
       const slideRoot =
         frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}]`) ??
         frameDocument.body;
@@ -1664,6 +2028,7 @@ export function App() {
       editable.setAttribute('contenteditable', 'true');
       editable.setAttribute(EDITING_ATTRIBUTE, 'true');
       editable.focus();
+      beginTextEditing(editable);
     });
 
     frameDocument.addEventListener('keydown', (event) => {
@@ -1690,9 +2055,11 @@ export function App() {
           discard: () => {
             editable.removeAttribute(EDITING_ATTRIBUTE);
             editable.removeAttribute('contenteditable');
+            endTextEditing();
           }
         });
     };
+    textPendingRef.current = recordTextInput;
 
     frameDocument.addEventListener('input', (event) => {
       const target = event.target as HTMLElement | null;
@@ -1700,13 +2067,70 @@ export function App() {
       if (editable) recordTextInput(editable);
     });
 
+    frameDocument.addEventListener('paste', (event) => {
+      const editable = editingElementRef.current;
+      const target = event.target as Node | null;
+      if (!editable || !target || !editable.contains(target)) return;
+      const text = sanitizePastedText(
+        event.clipboardData?.getData('text/plain') ?? ''
+      );
+      event.preventDefault();
+      if (!text) return;
+      const selection = frameDocument.getSelection();
+      const range =
+        selection && selection.rangeCount > 0
+          ? selection.getRangeAt(0)
+          : lastTextRangeRef.current;
+      if (!range || !editable.contains(range.commonAncestorContainer)) return;
+      range.deleteContents();
+      const node = frameDocument.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      lastTextRangeRef.current = range;
+      recordTextInput(editable);
+      setTextToolbar((current) =>
+        current
+          ? {
+              state: readTextToolbarState(frameDocument, editable, range),
+              error: current.error
+            }
+          : current
+      );
+    });
+
+    frameDocument.addEventListener('selectionchange', () => {
+      const editable = editingElementRef.current;
+      if (!editable || !editable.isConnected) return;
+      const range = currentTextRange(frameDocument);
+      if (range && editable.contains(range.commonAncestorContainer)) {
+        lastTextRangeRef.current = range;
+      }
+      setTextToolbar((current) =>
+        current
+          ? {
+              state: readTextToolbarState(
+                frameDocument,
+                editable,
+                lastTextRangeRef.current
+              ),
+              error: current.error
+            }
+          : current
+      );
+    });
+
     frameDocument.addEventListener('focusout', (event) => {
+      if (toolbarInteractionRef.current) return;
       const target = event.target as HTMLElement | null;
       if (target?.hasAttribute(EDITING_ATTRIBUTE)) {
         if (target.innerHTML !== textBaselineRef.current.get(target)) recordTextInput(target);
         actionsRef.current.settlePendingEdits('text');
         target.removeAttribute(EDITING_ATTRIBUTE);
         target.removeAttribute('contenteditable');
+        endTextEditing();
       }
     });
 
@@ -1718,17 +2142,269 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
-  }, [commit]);
+  }, [beginTextEditing, commit, endTextEditing]);
+
+  const applyTextToolbarCommand = useCallback(
+    (command: TextCommand) => {
+      const frameDocument = frame.current?.contentDocument;
+      const editable = editingElementRef.current;
+      if (!frameDocument || !editable || !editable.isConnected) {
+        endTextEditing();
+        return;
+      }
+      try {
+        applyTextCommand(
+          frameDocument,
+          editable,
+          command,
+          lastTextRangeRef.current
+        );
+        lastTextRangeRef.current =
+          currentTextRange(frameDocument) ?? lastTextRangeRef.current;
+        textPendingRef.current(editable);
+        setTextToolbar({
+          state: readTextToolbarState(
+            frameDocument,
+            editable,
+            lastTextRangeRef.current
+          ),
+          error: ''
+        });
+        editable.focus();
+      } catch (error) {
+        setTextToolbar({
+          state: readTextToolbarState(
+            frameDocument,
+            editable,
+            lastTextRangeRef.current
+          ),
+          error: error instanceof Error ? error.message : String(error)
+        });
+        editable.focus();
+      }
+    },
+    [endTextEditing]
+  );
+
+  const applyTextLink = useCallback(() => {
+    const frameDocument = frame.current?.contentDocument;
+    const editable = editingElementRef.current;
+    if (!frameDocument || !editable || !editable.isConnected) {
+      endTextEditing();
+      return;
+    }
+    const current =
+      readTextToolbarState(
+        frameDocument,
+        editable,
+        lastTextRangeRef.current
+      ).link ?? '';
+    toolbarInteractionRef.current = true;
+    let value: string | null = null;
+    try {
+      value = window.prompt(
+        '連結網址（http:、https:、mailto: 或 #片段；留空移除連結）',
+        current || 'https://'
+      );
+    } finally {
+      toolbarInteractionRef.current = false;
+    }
+    if (value === null) return;
+    try {
+      applyTextCommand(
+        frameDocument,
+        editable,
+        { type: 'link', value },
+        lastTextRangeRef.current
+      );
+      lastTextRangeRef.current =
+        currentTextRange(frameDocument) ?? lastTextRangeRef.current;
+      textPendingRef.current(editable);
+      setTextToolbar({
+        state: readTextToolbarState(
+          frameDocument,
+          editable,
+          lastTextRangeRef.current
+        ),
+        error: ''
+      });
+      editable.focus();
+    } catch (error) {
+      setTextToolbar({
+        state: readTextToolbarState(
+          frameDocument,
+          editable,
+          lastTextRangeRef.current
+        ),
+        error: error instanceof Error ? error.message : String(error)
+      });
+      editable.focus();
+    }
+  }, [endTextEditing]);
+
+  const runInsertion = useCallback(async (request: InsertRequest) => {
+    if (!actionsRef.current.settlePendingEdits()) return;
+    const current = stateRef.current;
+    const slideInfo = current.slides[current.activeIndex];
+    if (!slideInfo || !current.master) return;
+    const slideIndex = current.activeIndex;
+    setSlideOpError('');
+    try {
+      const prepared = await prepareInsertion(request, {
+        width: slideInfo.width,
+        height: slideInfo.height
+      });
+      await actionsRef.current.commitMaster((master) => {
+        const target = findSlide(master, slideInfo.id);
+        const element = prepared.apply(target.element);
+        const path = [Array.from(target.element.children).indexOf(element)];
+        actionsRef.current.selectTargets([
+          {
+            slideIndex,
+            path,
+            elementId: element.getAttribute('data-ppt-el')
+          }
+        ]);
+        return true;
+      });
+    } catch (error) {
+      setSlideOpError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }, []);
+
+  const handleInsertShape = useCallback(
+    (shape: ShapeKind) => {
+      void runInsertion({ kind: 'shape', shape });
+    },
+    [runInsertion]
+  );
+
+  const handleInsertImageUrl = useCallback(() => {
+    const value = window.prompt(
+      '圖片網址（https:// 或 data:image/...）',
+      'https://'
+    );
+    if (value === null) return;
+    void runInsertion({ kind: 'image', url: value });
+  }, [runInsertion]);
+
+  useEffect(() => {
+    if (!frameEpoch) return;
+    const frameDocument = frame.current?.contentDocument;
+    if (!frameDocument) return;
+
+    const insertImageFiles = (files: FileList | null) => {
+      const file = Array.from(files ?? []).find(
+        (candidate) =>
+          candidate.type.startsWith('image/') ||
+          imageMimeFromFileName(candidate.name) !== null
+      );
+      if (file) void runInsertion({ kind: 'image', file });
+    };
+
+    const onDragOver = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes('Files')) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!event.dataTransfer?.files.length) return;
+      event.preventDefault();
+      insertImageFiles(event.dataTransfer.files);
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (editingElementRef.current) return;
+      const item = Array.from(event.clipboardData?.items ?? []).find(
+        (candidate) =>
+          candidate.kind === 'file' && candidate.type.startsWith('image/')
+      );
+      const file = item?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      void runInsertion({ kind: 'image', file });
+    };
+
+    const targets: (Document | Window)[] = [frameDocument, window];
+    for (const target of targets) {
+      target.addEventListener('dragover', onDragOver as EventListener);
+      target.addEventListener('drop', onDrop as EventListener);
+      target.addEventListener('paste', onPaste as EventListener);
+    }
+    return () => {
+      for (const target of targets) {
+        target.removeEventListener('dragover', onDragOver as EventListener);
+        target.removeEventListener('drop', onDrop as EventListener);
+        target.removeEventListener('paste', onPaste as EventListener);
+      }
+    };
+  }, [frameEpoch, runInsertion]);
 
   const goTo = (index: number) => {
     actions.showSlide(index);
   };
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
+  const styleState: InspectorStyleState | null = (() => {
+    if (
+      !activeSlide ||
+      !selection ||
+      selections.length !== 1 ||
+      selection.path.length > 1
+    ) {
+      return null;
+    }
+    const element = elementAtPath(activeSlide.element, selection.path);
+    if (!element) return null;
+    const tag = element.tagName.toLowerCase();
+    const kind = tag === 'img' ? 'image' : tag === 'svg' || tag === 'div' ? 'shape' : null;
+    if (!kind) return null;
+    return {
+      kind,
+      svg: tag === 'svg',
+      appearance: readShapeAppearance(element),
+      text:
+        kind === 'shape' && tag === 'svg'
+          ? element.querySelector('text')?.textContent ?? ''
+          : '',
+      alt: element.getAttribute('alt') ?? '',
+      crop: imageCropOf(element) ?? { top: 0, right: 0, bottom: 0, left: 0 }
+    };
+  })();
+  const tableSelection =
+    activeSlide && selection
+      ? tableContext(activeSlide.element, selection.path)
+      : null;
+  const tableState = tableSelection
+    ? {
+        row: tableSelection.row,
+        column: tableSelection.column,
+        rows: tableSelection.rows,
+        columns: tableSelection.columns,
+        header: tableSelection.header,
+        fill:
+          tableSelection.cell.style.background ||
+          tableSelection.cell.style.backgroundColor,
+        border:
+          tableSelection.cell.style.borderTopColor ||
+          tableSelection.cell.style.borderColor
+      }
+    : null;
   const primaryObject =
     activeSlide && selection
       ? elementAtPath(activeSlide.element, selection.path)
       : null;
+  const chartState: InspectorChartState | null = (() => {
+    if (!chartFigure(primaryObject)) return null;
+    try {
+      const data = chartDataOf(primaryObject as Element);
+      return { type: data.type, title: data.title ?? '' };
+    } catch {
+      return { type: 'invalid', title: '資料無效' };
+    }
+  })();
   const overlayHandles =
     primaryObject && isLockedElement(primaryObject)
       ? 'none'
@@ -1764,6 +2440,16 @@ export function App() {
         onAddSlide={handleAddSlide}
         onDuplicateSlide={() => handleDuplicateSlide()}
         onDeleteSlide={() => handleDeleteSlide()}
+        onInsertText={() => void runInsertion({ kind: 'text' })}
+        onInsertShape={handleInsertShape}
+        onInsertTable={(rows, columns) =>
+          void runInsertion({ kind: 'table', rows, columns })
+        }
+        onInsertChart={() => void runInsertion({ kind: 'chart' })}
+        onInsertImageFile={(file) =>
+          void runInsertion({ kind: 'image', file })
+        }
+        onInsertImageUrl={handleInsertImageUrl}
         onUndo={actions.undo}
         onRedo={actions.redo}
         onPlay={() => startPlay(false)}
@@ -1771,6 +2457,38 @@ export function App() {
         onPreviousSlide={() => goTo(activeIndex - 1)}
         onNextSlide={() => goTo(activeIndex + 1)}
       />
+
+      {textToolbar && (
+        <TextToolbar
+          state={textToolbar.state}
+          error={textToolbar.error || undefined}
+          onCommand={applyTextToolbarCommand}
+          onLink={applyTextLink}
+        />
+      )}
+
+      {tableState && (
+        <TableToolbar
+          state={tableState}
+          disabled={objectActions.locked || objectActions.hidden}
+          onAction={handleTableAction}
+          onCellStyle={handleTableCellStyle}
+        />
+      )}
+
+      {chartEditor && (
+        <ChartDialog
+          json={chartEditor.json}
+          error={chartEditor.error}
+          onChange={(json) =>
+            setChartEditor((current) =>
+              current ? { json, error: '' } : current
+            )
+          }
+          onApply={handleApplyChart}
+          onCancel={() => setChartEditor(null)}
+        />
+      )}
 
       {(error || slideOpError) && (
         <div
@@ -1894,11 +2612,21 @@ export function App() {
             selection={selection}
             selectionCount={selections.length}
             geometry={selectionGeometry}
+            style={styleState}
+            chart={chartState}
+            styleDisabled={objectActions.locked || objectActions.hidden}
             objectActions={objectActions}
             onSelectObject={handleSelectObject}
             onObjectCommand={handleObjectCommand}
             onObjectRecovery={handleObjectRecovery}
             onCommitGeometry={handleGeometryCommit}
+            onSetAppearance={handleSetAppearance}
+            onSetShapeText={handleSetShapeText}
+            onSetImageAlt={handleSetImageAlt}
+            onSetImageCrop={handleSetImageCrop}
+            onReplaceImageFile={handleReplaceImageFile}
+            onReplaceImageUrl={handleReplaceImageUrl}
+            onEditChart={handleOpenChartEditor}
             onSetTransition={handleTransitionChange}
             onSetBackground={handleBackgroundChange}
             onClearBackground={handleClearBackground}
