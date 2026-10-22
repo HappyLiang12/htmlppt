@@ -61,9 +61,10 @@ modified by the failed call.
 2. Reconcile the external change; do not discard a person's edits.
 3. Retry the mutation.
 
-If the caller is a host-attached editor session, the host may also emit a
+If the caller is a host-attached editor session, the host also emits a
 `revision` event with `source: "mcp"` when an MCP write succeeds. The editor
-reloads when it has no unsaved changes and otherwise shows a conflict.
+does not consume those events for live sync until M3; reload the editor to see
+the write. Saving from the stale editor revision returns 409/conflict.
 
 ### `slide-not-found`, `target-not-found`, `target-ambiguous`
 
@@ -148,8 +149,10 @@ automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
   `examples/basic.html`. Note that validation only checks the
   `<script data-ppt-runtime="1">` marker, so an empty body still validates;
   the `missing-runtime` warning fires only when the marker is absent.
-- The editor receives host revision events over SSE. If another writer changed
-  the file, save can return 409/conflict; reload and merge.
+- The host watches the file and emits revision events over SSE, including for
+  external writes. The editor does not consume them for live sync until M3;
+  after an external or MCP write, reload the editor. A save based on the old
+  revision can return 409/conflict; reload and merge.
 - A relative image or font may load on the author's machine but disappear in
   export. Validation warns with `relative-asset`; use `data:` or an absolute
   URL.

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -54,6 +54,32 @@ import contract from './resources/contract.md?raw';
 import example from './resources/example.html?raw';
 
 const EXAMPLE_RUNTIME_MARKER = '<script data-ppt-runtime="1"></script>';
+const CHILD_TERMINATION_TIMEOUT_MS = 2_000;
+
+/**
+ * Terminates a spawned editor process that never produced a healthy session.
+ * The wait is bounded so a wedged child cannot hang the tool call; the host
+ * itself runs in this child, so SIGTERM also closes its listening socket.
+ */
+function terminateChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, CHILD_TERMINATION_TIMEOUT_MS);
+    timer.unref();
+    child.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+}
 
 function withRuntimeSource(html: string): string {
   if (!html.includes(EXAMPLE_RUNTIME_MARKER)) {
@@ -119,7 +145,7 @@ export function registerTools(
       title: 'Get deck contract',
       description:
         'Return the deck contract and authoring guidance for htmlppt documents.',
-      inputSchema: {}
+      inputSchema: z.object({}).strict()
     },
     async () => jsonResult({ contract, authoring })
   );
@@ -649,7 +675,19 @@ export function registerTools(
         child.on('error', () => undefined);
         child.unref();
 
-        const session = await waitForSession(filePath);
+        let session: Awaited<ReturnType<typeof waitForSession>>;
+        try {
+          session = await waitForSession(filePath);
+        } catch (error) {
+          await terminateChild(child);
+          if (error instanceof ToolError && error.code === 'editor-timeout') {
+            throw new ToolError(
+              'editor-timeout',
+              `${error.message} The started host process was terminated.`
+            );
+          }
+          throw error;
+        }
         return {
           path: filePath,
           url: hostUrl(session.port, session.token)

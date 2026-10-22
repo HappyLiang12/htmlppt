@@ -47,10 +47,13 @@ interface ResponseHandle {
   once(event: 'finish' | 'close', listener: () => void): unknown;
 }
 
+export const HOST_VERSION = '0.0.0';
+
 const HISTORY_LIMIT = 20;
 const WATCH_INTERVAL_MS = 50;
 const WATCH_DEBOUNCE_MS = 100;
 const HEARTBEAT_MS = 15_000;
+const TOKEN_COOKIE = 'htmlppt_token';
 const encoder = new TextEncoder();
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
@@ -65,6 +68,27 @@ function isUnreadable(error: unknown): boolean {
   return UNREADABLE_CODES.has(
     (error as NodeJS.ErrnoException | undefined)?.code ?? ''
   );
+}
+
+function readCookie(header: string | undefined, name: string): string | null {
+  if (!header) {
+    return null;
+  }
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator === -1) {
+      continue;
+    }
+    if (part.slice(0, separator).trim() !== name) {
+      continue;
+    }
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 let saveChain: Promise<unknown> = Promise.resolve();
@@ -196,6 +220,15 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
   const app = new Hono();
 
+  // The editor iframe injects the deck head, so a tokenized parent URL must
+  // never leak through the Referer header. No response should be sniffed as a
+  // different content type than it declares.
+  app.use('*', async (c, next) => {
+    await next();
+    c.res.headers.set('Referrer-Policy', 'no-referrer');
+    c.res.headers.set('X-Content-Type-Options', 'nosniff');
+  });
+
   app.use('/api/*', async (c, next) => {
     const authorization = c.req.header('authorization') ?? '';
     const bearerPrefix = 'bearer ';
@@ -225,17 +258,22 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     await next();
   });
 
-  app.get('/api/health', async (c) => {
-    return withSaveLock(async () => {
-      try {
-        await syncFromDisk();
-      } catch (error) {
-        if (isUnreadable(error)) {
-          return c.json({ error: 'deck-unreadable' }, 500);
-        }
-        throw error;
-      }
-      return c.json({ ok: true, revision });
+  function deckUnreadable(): { error: string; message: string } {
+    return {
+      error: 'deck-unreadable',
+      message: `Could not read ${options.filePath}. Restore the deck file or stop the host with "htmlppt stop".`
+    };
+  }
+
+  // Health is a cached liveness probe: it must stay available even when the
+  // deck was deleted, otherwise a live host becomes an orphan that stop cannot
+  // verify. /api/deck remains the endpoint that surfaces read errors.
+  app.get('/api/health', (c) => {
+    return c.json({
+      ok: true,
+      revision,
+      version: HOST_VERSION,
+      filePath: options.filePath
     });
   });
 
@@ -245,7 +283,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         await syncFromDisk();
       } catch (error) {
         if (isUnreadable(error)) {
-          return c.json({ error: 'deck-unreadable' }, 500);
+          return c.json(deckUnreadable(), 500);
         }
         throw error;
       }
@@ -283,7 +321,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         await syncFromDisk();
       } catch (error) {
         if (isUnreadable(error)) {
-          return c.json({ error: 'deck-unreadable' }, 500);
+          return c.json(deckUnreadable(), 500);
         }
         throw error;
       }
@@ -322,7 +360,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
           return c.json({ error: 'conflict', revision }, 409);
         }
         if (isUnreadable(error)) {
-          return c.json({ error: 'deck-unreadable' }, 500);
+          return c.json(deckUnreadable(), 500);
         }
         throw error;
       }
@@ -375,6 +413,32 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       }
     });
     return new Response(stream, { headers: SSE_HEADERS });
+  });
+
+  // The page, its assets, and any other static file require the session token,
+  // supplied once through the printed URL and then carried by an HttpOnly
+  // cookie so module and stylesheet subrequests stay authorized.
+  app.use('*', async (c, next) => {
+    const url = new URL(c.req.url);
+    if (url.pathname.startsWith('/api/')) {
+      await next();
+      return;
+    }
+    const queryToken = url.searchParams.get('token');
+    const cookieToken = readCookie(c.req.header('cookie'), TOKEN_COOKIE);
+    if (queryToken !== options.token && cookieToken !== options.token) {
+      return c.text(
+        'Unauthorized. Open the tokenized URL printed by "htmlppt open".',
+        401
+      );
+    }
+    if (url.pathname === '/') {
+      c.header(
+        'Set-Cookie',
+        `${TOKEN_COOKIE}=${encodeURIComponent(options.token)}; HttpOnly; SameSite=Strict; Path=/`
+      );
+    }
+    await next();
   });
 
   app.get('/', async (c) => {

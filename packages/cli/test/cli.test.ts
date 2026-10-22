@@ -3,7 +3,14 @@ import {
   type ChildProcess,
   type ChildProcessWithoutNullStreams
 } from 'node:child_process';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -95,6 +102,36 @@ describe('htmlppt cli', () => {
     expect(html).toContain('data-slide-id="s1"');
   });
 
+  it('creates and force-overwrites decks without temporary files', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    expect(await runCli(['new', 'deck.html'], { cwd, ...output.io })).toBe(0);
+    expect(
+      await runCli(['new', 'deck.html', '--force'], { cwd, ...output.io })
+    ).toBe(0);
+
+    expect(await readdir(cwd)).toEqual(['deck.html']);
+    expect((await readFile(join(cwd, 'deck.html'), 'utf8'))).toContain(
+      'data-slide-id="s1"'
+    );
+  });
+
+  it('leaves no partial destination when new fails', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await mkdir(join(cwd, 'taken.html'));
+    const output = capture();
+
+    const code = await runCli(['new', 'taken.html'], { cwd, ...output.io });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Refusing to overwrite taken.html.'
+    );
+    expect((await stat(join(cwd, 'taken.html'))).isDirectory()).toBe(true);
+    expect(await readdir(cwd)).toEqual(['taken.html']);
+  });
+
   it('validates a generated deck as JSON', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
     await runCli(['new', 'deck.html'], { cwd, ...capture().io });
@@ -146,6 +183,39 @@ describe('htmlppt cli', () => {
     const exported = await readFile(join(cwd, 'out.html'), 'utf8');
     expect(exported).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
     expect(exported).not.toContain('contenteditable');
+  });
+
+  it('exports without leaving temporary files', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const output = capture();
+
+    const code = await runCli(
+      ['export', 'deck.html', '--format', 'html'],
+      { cwd, ...output.io }
+    );
+
+    expect(code).toBe(0);
+    expect((await readdir(cwd)).sort()).toEqual([
+      'deck.export.html',
+      'deck.html'
+    ]);
+  });
+
+  it('leaves no partial export when the destination cannot be replaced', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    await mkdir(join(cwd, 'out.html'));
+    const output = capture();
+
+    const code = await runCli(
+      ['export', 'deck.html', '--format', 'html', '--out', 'out.html'],
+      { cwd, ...output.io }
+    );
+
+    expect(code).toBe(1);
+    expect((await stat(join(cwd, 'out.html'))).isDirectory()).toBe(true);
+    expect((await readdir(cwd)).sort()).toEqual(['deck.html', 'out.html']);
   });
 
   it('rejects unsupported export formats with a clear error', async () => {
@@ -866,6 +936,35 @@ describe('htmlppt cli as a real process', () => {
     } finally {
       open.kill();
       stopProcess?.kill();
+    }
+  });
+
+  it('stops a host after its deck file is deleted', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      await rm(deckPath);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      await open.waitForExit(10_000);
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      open.kill();
     }
   });
 

@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startHost } from '../src/server.js';
+import { HOST_VERSION, startHost } from '../src/server.js';
 
 interface Context {
   dir: string;
@@ -279,7 +279,15 @@ describe('host', () => {
     const ctx = await setup();
 
     const page = await fetch(ctx.host.url);
+    expect(page.status).toBe(200);
     expect(await page.text()).toContain('editor-shell');
+    const setCookie = page.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain(
+      `htmlppt_token=${encodeURIComponent(ctx.token)}`
+    );
+    expect(setCookie.toLowerCase()).toContain('httponly');
+    expect(setCookie).toContain('SameSite=Strict');
+    expect(setCookie).toContain('Path=/');
 
     const response = await fetch(`${ctx.base}/api/deck`, {
       headers: { authorization: `Bearer ${ctx.token}` }
@@ -290,6 +298,59 @@ describe('host', () => {
       filePath: ctx.deckPath,
       revision: ctx.revision
     });
+  });
+
+  it('requires a token to serve the editor page and assets', async () => {
+    const ctx = await setup();
+
+    const page = await fetch(`${ctx.base}/`);
+    expect(page.status).toBe(401);
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+
+    const asset = await fetch(`${ctx.base}/app.js`);
+    expect(asset.status).toBe(401);
+
+    const wrongCookie = await fetch(`${ctx.base}/app.js`, {
+      headers: { cookie: 'htmlppt_token=wrong' }
+    });
+    expect(wrongCookie.status).toBe(401);
+  });
+
+  it('serves the page and assets with the session cookie', async () => {
+    const ctx = await setup();
+    const page = await fetch(ctx.host.url);
+    const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
+    expect(cookie).toBe(`htmlppt_token=${encodeURIComponent(ctx.token)}`);
+
+    const withCookie = await fetch(`${ctx.base}/`, {
+      headers: { cookie }
+    });
+    expect(withCookie.status).toBe(200);
+    expect(await withCookie.text()).toContain('editor-shell');
+
+    const asset = await fetch(`${ctx.base}/app.js`, {
+      headers: { cookie }
+    });
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe('console.log("editor shell");');
+
+    const queryAsset = await fetch(
+      `${ctx.base}/app.js?token=${encodeURIComponent(ctx.token)}`
+    );
+    expect(queryAsset.status).toBe(200);
+  });
+
+  it('sets security headers on API responses', async () => {
+    const ctx = await setup();
+
+    const response = await fetch(`${ctx.base}/api/health`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('requires a token for the API', async () => {
@@ -328,7 +389,12 @@ describe('host', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, revision: ctx.revision });
+    expect(await response.json()).toEqual({
+      ok: true,
+      revision: ctx.revision,
+      version: HOST_VERSION,
+      filePath: ctx.deckPath
+    });
   });
 
   it('rejects a foreign origin', async () => {
@@ -374,10 +440,13 @@ describe('host', () => {
     expect(response.status).toBe(200);
   });
 
-  it('serves static editor assets', async () => {
+  it('serves static editor assets only with the session cookie', async () => {
     const ctx = await setup();
+    const cookie = `htmlppt_token=${encodeURIComponent(ctx.token)}`;
 
-    const response = await fetch(`${ctx.base}/app.js`);
+    const response = await fetch(`${ctx.base}/app.js`, {
+      headers: { cookie }
+    });
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('console.log("editor shell");');
@@ -441,20 +510,26 @@ describe('host', () => {
     );
     await writeFile(ctx.deckPath, externalHtml, 'utf8');
 
-    const health = await fetch(`${ctx.base}/api/health`, {
-      headers: { authorization: `Bearer ${ctx.token}` }
-    });
-    expect(health.status).toBe(200);
-    const healthBody = (await health.json()) as { revision: string };
-    expect(healthBody.revision).not.toBe(ctx.revision);
-
     const deckResponse = await fetch(`${ctx.base}/api/deck`, {
       headers: { authorization: `Bearer ${ctx.token}` }
     });
     expect(deckResponse.status).toBe(200);
-    expect(await deckResponse.json()).toMatchObject({
-      html: externalHtml,
-      revision: healthBody.revision
+    const deckBody = (await deckResponse.json()) as {
+      html: string;
+      revision: string;
+    };
+    expect(deckBody).toMatchObject({ html: externalHtml });
+    expect(deckBody.revision).not.toBe(ctx.revision);
+
+    // Health is a cached read: once the deck endpoint observes the external
+    // write, health reports the same revision without touching the file.
+    const health = await fetch(`${ctx.base}/api/health`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({
+      ok: true,
+      revision: deckBody.revision
     });
 
     const saveResponse = await fetch(`${ctx.base}/api/deck`, {
@@ -476,7 +551,7 @@ describe('host', () => {
     });
     expect(await followUp.json()).toMatchObject({
       html: externalHtml,
-      revision: healthBody.revision
+      revision: deckBody.revision
     });
   });
 
@@ -527,7 +602,9 @@ describe('host', () => {
     expect(healthResponse.status).toBe(200);
     expect(await healthResponse.json()).toEqual({
       ok: true,
-      revision: deck.revision
+      revision: deck.revision,
+      version: HOST_VERSION,
+      filePath: ctx.deckPath
     });
   });
 
@@ -543,13 +620,23 @@ describe('host', () => {
     expect(deckResponse.headers.get('content-type')).toContain(
       'application/json'
     );
-    expect(await deckResponse.json()).toEqual({ error: 'deck-unreadable' });
+    expect(await deckResponse.json()).toEqual({
+      error: 'deck-unreadable',
+      message: expect.stringContaining(ctx.deckPath)
+    });
 
+    // Health never reads the deck, so a missing file cannot turn a running
+    // host into an un-stoppable orphan.
     const healthResponse = await fetch(`${ctx.base}/api/health`, {
       headers: authorization
     });
-    expect(healthResponse.status).toBe(500);
-    expect(await healthResponse.json()).toEqual({ error: 'deck-unreadable' });
+    expect(healthResponse.status).toBe(200);
+    expect(await healthResponse.json()).toEqual({
+      ok: true,
+      revision: ctx.revision,
+      version: HOST_VERSION,
+      filePath: ctx.deckPath
+    });
 
     const putResponse = await fetch(`${ctx.base}/api/deck`, {
       method: 'PUT',
@@ -563,7 +650,10 @@ describe('host', () => {
       })
     });
     expect(putResponse.status).toBe(500);
-    expect(await putResponse.json()).toEqual({ error: 'deck-unreadable' });
+    expect(await putResponse.json()).toEqual({
+      error: 'deck-unreadable',
+      message: expect.stringContaining(ctx.deckPath)
+    });
     await expect(readFile(ctx.deckPath, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT'
     });

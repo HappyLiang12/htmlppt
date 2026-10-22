@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, parse, resolve } from 'node:path';
+import { access, readFile, readdir } from 'node:fs/promises';
+import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -11,7 +11,13 @@ import {
   type DeckOutline,
   type ValidationResult
 } from '@htmlppt/core';
-import { parseDeckHtml, readDeckFile } from '@htmlppt/core/node';
+import {
+  createDeckFileAtomic,
+  DeckFileExistsError,
+  parseDeckHtml,
+  readDeckFile,
+  writeDeckFileAtomic
+} from '@htmlppt/core/node';
 import {
   listSessions,
   removeSessionIfUnchanged,
@@ -346,9 +352,9 @@ export async function runCli(
 
       if (!options.force) {
         try {
-          await writeFile(destination, html, { encoding: 'utf8', flag: 'wx' });
+          await createDeckFileAtomic(destination, html);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          if (error instanceof DeckFileExistsError) {
             throw new Error(
               `Refusing to overwrite ${file}. Pass --force to replace it.`
             );
@@ -356,16 +362,7 @@ export async function runCli(
           throw error;
         }
       } else {
-        const temporary = join(
-          dirname(destination),
-          `.${basename(destination)}.${randomUUID()}.tmp`
-        );
-        try {
-          await writeFile(temporary, html, 'utf8');
-          await rename(temporary, destination);
-        } finally {
-          await rm(temporary, { force: true });
-        }
+        await writeDeckFileAtomic(destination, html);
       }
 
       io.stdout(`Created ${file}`);
@@ -410,7 +407,7 @@ export async function runCli(
       const destination = options.out
         ? resolve(io.cwd, options.out)
         : join(parsedPath.dir, `${parsedPath.name}.export.html`);
-      await writeFile(destination, serializeExport(doc), 'utf8');
+      await writeDeckFileAtomic(destination, serializeExport(doc));
       io.stdout(`Exported ${destination}`);
     });
 

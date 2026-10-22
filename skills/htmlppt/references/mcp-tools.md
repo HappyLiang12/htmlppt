@@ -21,8 +21,19 @@ supported surface; there are no other deck tools in this milestone.
   one element in the slide, and `path` is child indices starting at the slide
   element.
 - Every tool returns one text content item containing JSON. Read tools return
-  the data directly. A failed tool sets `isError: true` and returns
-  `{ code, message, ...context }`.
+  the data directly. A handler or domain failure sets `isError: true` and
+  returns `{ code, message, ...context }`.
+- Schema-validation failures are different: the MCP SDK rejects them with the
+  `InvalidParams` code (JSON-RPC `-32602`) before the handler runs, and
+  delivers that rejection as an `isError: true` text result such as
+  `MCP error -32602: Input validation error: Invalid arguments for tool
+  set_text: Required at text`. There is no structured `{ code, message }`
+  payload to parse. Missing required arguments and wrong argument types take
+  this path; check the call against the tool schema and retry. Domain failures
+  such as `file-not-found`, `conflict`, or `slide-not-found` use the structured
+  payload described above.
+- Sending a non-object `arguments` value is a malformed JSON-RPC request; the
+  transport reports it as an internal error rather than a tool result.
 - Reads return `revision`. Mutations return the new `revision`. The server
   remembers the last revision it read or wrote per file and compares it before
   writing; an external edit produces `code: "conflict"`.
@@ -215,8 +226,11 @@ Starts a detached local editor host for an existing deck and returns
 (default false) controls whether a browser is launched. The host binds to
 127.0.0.1 and permits only the opened deck, its export, and editor assets.
 
-Fails with `editor-unavailable` when the CLI build is missing and
-`editor-timeout` when no session is written within 5 seconds.
+Reuses an existing session only when its authenticated health endpoint answers;
+a live PID with a dead port is treated as stale. Fails with
+`editor-unavailable` when the CLI build is missing and `editor-timeout` when no
+healthy session appears within 5 seconds. On timeout the spawned host process
+is terminated instead of being left running.
 
 ### `export_deck`
 
@@ -267,5 +281,5 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `invalid-background` | Background must set exactly one non-empty color/gradient/image. |
 | `invalid-transition` | Transition must be none, fade, or slide. |
 | `editor-unavailable` | The built CLI was not found. Run `npm run build`. |
-| `editor-timeout` | No editor session appeared within 5 seconds. Check the editor build and try `htmlppt open`. |
+| `editor-timeout` | No healthy editor session appeared within 5 seconds; the spawned host was terminated. Check the editor build and try `htmlppt open`. |
 | `internal` | Unexpected failure; the message carries the detail. |

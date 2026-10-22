@@ -12,6 +12,7 @@ import { ToolError } from './errors.js';
 
 const SESSION_POLL_INTERVAL_MS = 100;
 const SESSION_TIMEOUT_MS = 5_000;
+const SESSION_HEALTH_TIMEOUT_MS = 1_000;
 
 /**
  * Resolves paths against the server cwd and keeps the last read or written
@@ -77,6 +78,34 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/**
+ * A registry entry alone is not proof of a usable editor: a host that died
+ * without cleaning up leaves a live PID and a closed port behind. Only a
+ * healthy authenticated response makes the session eligible.
+ */
+async function sessionIsHealthy(session: {
+  port: number;
+  token: string;
+}): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${session.port}/api/health`,
+      {
+        headers: { authorization: `Bearer ${session.token}` },
+        signal: AbortSignal.timeout(SESSION_HEALTH_TIMEOUT_MS)
+      }
+    );
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return false;
+    }
+    const payload = (await response.json()) as { ok?: unknown } | null;
+    return payload?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function waitForSession(
   filePath: string
 ): Promise<{ port: number; token: string }> {
@@ -87,13 +116,17 @@ export async function waitForSession(
   const deadline = Date.now() + SESSION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const session = await readSession(sessionFile);
-    if (session && session.path === filePath) {
+    if (
+      session &&
+      session.path === filePath &&
+      (await sessionIsHealthy(session))
+    ) {
       return { port: session.port, token: session.token };
     }
     await delay(SESSION_POLL_INTERVAL_MS);
   }
   throw new ToolError(
     'editor-timeout',
-    'The editor did not write a session within 5 seconds. Run "htmlppt open <path> --no-browser" manually and check that the editor build exists.'
+    'No healthy editor session appeared within 5 seconds. Run "htmlppt open <path> --no-browser" manually and check that the editor build exists.'
   );
 }

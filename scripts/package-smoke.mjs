@@ -18,6 +18,7 @@ const packageDir = join(repoRoot, 'packages', 'htmlppt');
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const HOST_START_TIMEOUT_MS = 30_000;
+const EDITOR_FETCH_TIMEOUT_MS = 10_000;
 const PROCESS_EXIT_TIMEOUT_MS = 10_000;
 const MCP_TIMEOUT_MS = 20_000;
 
@@ -224,28 +225,30 @@ async function main() {
   }
 
   const npmCli = npmCliPath();
-  const tempRoot = await mkdtemp(join(tmpdir(), 'htmlppt-package-smoke-'));
-  const packDir = join(tempRoot, 'pack');
-  const projectDir = join(tempRoot, 'project');
-  const homeDir = join(tempRoot, 'home');
-  await mkdir(packDir);
-  await mkdir(projectDir);
-  await mkdir(homeDir);
-
-  const childEnv = {
-    ...process.env,
-    HTMLPPT_HOME: homeDir,
-    // Force the packaged editor lookup; the temp project has no workspace.
-    HTMLPPT_EDITOR_DIR: undefined,
-    HTMLPPT_MCP_MODE: undefined
-  };
-  delete childEnv.HTMLPPT_EDITOR_DIR;
-  delete childEnv.HTMLPPT_MCP_MODE;
-
+  let tempRoot;
   let hostSession;
   let mcpSession;
 
   try {
+    // Setup runs inside the try so a failed mkdir still reaches cleanup.
+    tempRoot = await mkdtemp(join(tmpdir(), 'htmlppt-package-smoke-'));
+    const packDir = join(tempRoot, 'pack');
+    const projectDir = join(tempRoot, 'project');
+    const homeDir = join(tempRoot, 'home');
+    await mkdir(packDir);
+    await mkdir(projectDir);
+    await mkdir(homeDir);
+
+    const childEnv = {
+      ...process.env,
+      HTMLPPT_HOME: homeDir,
+      // Force the packaged editor lookup; the temp project has no workspace.
+      HTMLPPT_EDITOR_DIR: undefined,
+      HTMLPPT_MCP_MODE: undefined
+    };
+    delete childEnv.HTMLPPT_EDITOR_DIR;
+    delete childEnv.HTMLPPT_MCP_MODE;
+
     console.log('1. packing packages/htmlppt');
     const packed = parsePackOutput(
       (
@@ -376,7 +379,18 @@ async function main() {
     );
     const editorUrl = urlLine.slice('HTMLPPT_URL='.length);
     assert(/^http:\/\/127\.0\.0\.1:\d+\/\?token=/.test(editorUrl), `unexpected URL ${editorUrl}`);
-    const response = await fetch(editorUrl);
+    const editorOrigin = new URL(editorUrl).origin;
+    const unauthenticated = await fetch(`${editorOrigin}/`, {
+      signal: AbortSignal.timeout(EDITOR_FETCH_TIMEOUT_MS)
+    });
+    assert(
+      unauthenticated.status === 401,
+      `unauthenticated editor page returned ${unauthenticated.status}, expected 401`
+    );
+    await unauthenticated.body?.cancel().catch(() => undefined);
+    const response = await fetch(editorUrl, {
+      signal: AbortSignal.timeout(EDITOR_FETCH_TIMEOUT_MS)
+    });
     assert(response.ok, `editor URL returned ${response.status}`);
     const servedHtml = await response.text();
     assert(servedHtml.includes('<div id="root">'), 'host did not serve the packaged editor');
@@ -479,7 +493,9 @@ async function main() {
     if (mcpSession) await mcpSession.stop();
     if (hostSession) await hostSession.stop();
     for (const child of [...liveChildren]) child.kill('SIGKILL');
-    await rm(tempRoot, { recursive: true, force: true });
+    if (tempRoot) {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   }
 }
 

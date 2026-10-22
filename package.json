@@ -17,7 +17,7 @@
     "test:package": "npm run build && node scripts/package-smoke.mjs",
     "test:matrix": "node scripts/check-feature-coverage.mjs",
     "verify:fast": "npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:matrix",
-    "verify": "npm run verify:fast && npm run test:e2e"
+    "verify": "npm run verify:fast && npm run test:e2e && npm run test:package"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",

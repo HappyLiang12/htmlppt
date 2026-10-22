@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateDeck } from '@htmlppt/core';
@@ -20,6 +21,7 @@ import {
   getDefaultEnvironment,
   StdioClientTransport
 } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openEventStream, type SseStream } from './sse.js';
 
@@ -60,6 +62,470 @@ const RESOURCE_URIS = [
   'htmlppt://contract',
   'htmlppt://authoring',
   'htmlppt://example'
+];
+
+const toolsSnapshotPath = fileURLToPath(
+  new URL('./tools.snapshot.json', import.meta.url)
+);
+const skillToolsDocPath = fileURLToPath(
+  new URL('../../../skills/htmlppt/references/mcp-tools.md', import.meta.url)
+);
+
+interface SurfaceState {
+  relativePath: string;
+  deckPath: string;
+  primarySlideId: string;
+  secondarySlideId: string;
+  newSlideId: string;
+  extraSlideId: string;
+  exportedPath: string;
+  editorPid?: number;
+}
+
+interface ToolCase {
+  name: string;
+  args: (state: SurfaceState) => Record<string, unknown>;
+  verify: (state: SurfaceState, payload: Record<string, unknown>) => Promise<void>;
+}
+
+interface InvalidArgumentCase {
+  name: string;
+  invalidArgs: unknown;
+}
+
+function surfaceState(relativePath: string): SurfaceState {
+  return {
+    relativePath,
+    deckPath: join(dir, relativePath),
+    primarySlideId: '',
+    secondarySlideId: '',
+    newSlideId: '',
+    extraSlideId: '',
+    exportedPath: ''
+  };
+}
+
+function requireSlideId(payload: Record<string, unknown>): string {
+  if (typeof payload.slideId !== 'string' || payload.slideId.length === 0) {
+    throw new Error(`Expected a slideId, received ${JSON.stringify(payload)}.`);
+  }
+  return payload.slideId;
+}
+
+async function readDeckDocument(state: SurfaceState): Promise<Document> {
+  return parseDeckHtml(await readFile(state.deckPath, 'utf8'));
+}
+
+function slideIds(document: Document): Array<string | null> {
+  return Array.from(document.querySelectorAll('[data-slide-id]')).map((slide) =>
+    slide.getAttribute('data-slide-id')
+  );
+}
+
+const READ_TOOL_CASES: ToolCase[] = [
+  {
+    name: 'get_deck_contract',
+    args: () => ({}),
+    verify: async (_state, payload) => {
+      expect(String(payload.contract)).toContain('htmldeck/v1');
+      expect(String(payload.authoring)).toContain('htmlppt');
+    }
+  },
+  {
+    name: 'validate_deck',
+    args: (state) => ({ path: state.relativePath }),
+    verify: async (_state, payload) => {
+      expect(payload).toMatchObject({ valid: true, errors: [] });
+      expect(Array.isArray(payload.warnings)).toBe(true);
+    }
+  },
+  {
+    name: 'get_outline',
+    args: (state) => ({ path: state.relativePath }),
+    verify: async (state, payload) => {
+      const outline = payload.outline as {
+        slideCount?: unknown;
+        slides?: Array<{ id?: unknown }>;
+      };
+      expect(outline.slideCount).toBe(2);
+      expect(outline.slides?.map((slide) => slide.id)).toEqual(['s1', 's2']);
+      expect(payload).toMatchObject({ path: state.deckPath });
+    }
+  },
+  {
+    name: 'read_slide',
+    args: (state) => ({ path: state.relativePath, slideId: 's1' }),
+    verify: async (_state, payload) => {
+      expect(payload.slide).toMatchObject({
+        id: 's1',
+        width: 1600,
+        height: 900
+      });
+      expect(String((payload.slide as { html?: unknown }).html)).toContain(
+        'Surface read'
+      );
+    }
+  },
+  {
+    name: 'get_element',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: 's1',
+      target: { elementId: 'e1' }
+    }),
+    verify: async (_state, payload) => {
+      expect(String(payload.html)).toContain('data-ppt-el="e1"');
+      expect(payload.style).toBeNull();
+    }
+  }
+];
+
+const MUTATION_TOOL_CASES: ToolCase[] = [
+  {
+    name: 'create_deck',
+    args: (state) => ({
+      path: state.relativePath,
+      title: 'Surface mutations',
+      slides: 2
+    }),
+    verify: async (state, payload) => {
+      expect(payload).toMatchObject({
+        path: state.deckPath,
+        created: true
+      });
+      expect(typeof payload.revision).toBe('string');
+      expect(await readFile(state.deckPath, 'utf8')).toContain(
+        'Surface mutations'
+      );
+      state.primarySlideId = 's1';
+      state.secondarySlideId = 's2';
+    }
+  },
+  {
+    name: 'add_slide',
+    args: (state) => ({
+      path: state.relativePath,
+      html: '<h2 data-ppt-el="added">Added slide</h2>',
+      notes: 'Added notes',
+      transition: 'fade'
+    }),
+    verify: async (state, payload) => {
+      state.newSlideId = requireSlideId(payload);
+      const document = await readDeckDocument(state);
+      const slide = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"]`
+      );
+      expect(slide?.getAttribute('data-ppt-transition')).toBe('fade');
+      expect(slide?.textContent).toContain('Added slide');
+      expect(slide?.textContent).toContain('Added notes');
+    }
+  },
+  {
+    name: 'update_slide_html',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      html: '<p data-ppt-el="updated">Updated body</p>'
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      const slide = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"]`
+      );
+      expect(slide?.textContent).toContain('Updated body');
+      expect(slide?.querySelector('[data-ppt-el="updated"]')).not.toBeNull();
+    }
+  },
+  {
+    name: 'duplicate_slide',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId
+    }),
+    verify: async (state, payload) => {
+      state.extraSlideId = requireSlideId(payload);
+      expect(state.extraSlideId).not.toBe(state.newSlideId);
+      const document = await readDeckDocument(state);
+      expect(slideIds(document)).toHaveLength(4);
+      expect(slideIds(document)).toContain(state.extraSlideId);
+    }
+  },
+  {
+    name: 'move_slide',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.extraSlideId,
+      toIndex: 0
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      expect(slideIds(document)[0]).toBe(state.extraSlideId);
+    }
+  },
+  {
+    name: 'delete_slide',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.extraSlideId
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      expect(slideIds(document)).not.toContain(state.extraSlideId);
+      expect(slideIds(document)).toHaveLength(3);
+    }
+  },
+  {
+    name: 'set_notes',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      notes: 'Deck talk track'
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      const notes = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"] [data-ppt-notes]`
+      );
+      expect(notes?.textContent).toBe('Deck talk track');
+    }
+  },
+  {
+    name: 'set_transition',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      transition: 'slide'
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      const slide = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"]`
+      );
+      expect(slide?.getAttribute('data-ppt-transition')).toBe('slide');
+    }
+  },
+  {
+    name: 'set_slide_background',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      background: { color: '#123456' }
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      const slide = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"]`
+      );
+      expect(slide?.getAttribute('style')).toContain('#123456');
+    }
+  },
+  {
+    name: 'add_element',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      html: '<p data-ppt-el="surface-el">Element</p>'
+    }),
+    verify: async (state, payload) => {
+      expect(payload.elementId).toBe('surface-el');
+      const document = await readDeckDocument(state);
+      expect(
+        document.querySelector(
+          `[data-slide-id="${state.newSlideId}"] [data-ppt-el="surface-el"]`
+        )
+      ).not.toBeNull();
+    }
+  },
+  {
+    name: 'set_element_html',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      target: { elementId: 'surface-el' },
+      html: '<strong>Strong content</strong>'
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      expect(
+        document.querySelector('[data-ppt-el="surface-el"]')?.textContent
+      ).toBe('Strong content');
+    }
+  },
+  {
+    name: 'set_text',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      target: { elementId: 'surface-el' },
+      text: 'Plain <text>'
+    }),
+    verify: async (state) => {
+      const html = await readFile(state.deckPath, 'utf8');
+      expect(html).toContain('Plain &lt;text&gt;');
+      expect(html).not.toContain('<text>');
+    }
+  },
+  {
+    name: 'set_style',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      target: { elementId: 'surface-el' },
+      styles: { color: 'red', 'font-size': '20px' }
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      const style = document
+        .querySelector('[data-ppt-el="surface-el"]')
+        ?.getAttribute('style');
+      expect(style).toContain('color:red');
+      expect(style).toContain('font-size:20px');
+    }
+  },
+  {
+    name: 'remove_element',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      target: { elementId: 'surface-el' }
+    }),
+    verify: async (state) => {
+      const html = await readFile(state.deckPath, 'utf8');
+      expect(html).not.toContain('surface-el');
+    }
+  },
+  {
+    name: 'set_slide_order',
+    args: (state) => ({
+      path: state.relativePath,
+      slideIds: [
+        state.newSlideId,
+        state.primarySlideId,
+        state.secondarySlideId
+      ]
+    }),
+    verify: async (state) => {
+      const document = await readDeckDocument(state);
+      expect(slideIds(document)).toEqual([
+        state.newSlideId,
+        state.primarySlideId,
+        state.secondarySlideId
+      ]);
+    }
+  },
+  {
+    name: 'export_deck',
+    args: (state) => ({ path: state.relativePath, format: 'html' }),
+    verify: async (state, payload) => {
+      state.exportedPath = join(
+        dir,
+        'surface-mutations.deck.export.html'
+      );
+      expect(payload).toMatchObject({
+        path: state.deckPath,
+        format: 'html',
+        outputPath: state.exportedPath
+      });
+      const exported = await readFile(state.exportedPath, 'utf8');
+      expect(exported).toContain('<!-- Edited with htmlppt.');
+      expect(validateDeck(parseDeckHtml(exported)).valid).toBe(true);
+    }
+  },
+  {
+    name: 'open_editor',
+    args: (state) => ({ path: state.relativePath, open: false }),
+    verify: async (state, payload) => {
+      const url = new URL(String(payload.url));
+      expect(url.hostname).toBe('127.0.0.1');
+      const token = url.searchParams.get('token');
+      if (!token) {
+        throw new Error('open_editor returned a URL without a token.');
+      }
+      const health = await fetch(`${url.origin}/api/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000)
+      });
+      expect(health.status).toBe(200);
+      expect(((await health.json()) as { ok?: unknown }).ok).toBe(true);
+      const session = await readSession(
+        join(sessionsDirectory(), `${sessionKey(state.deckPath)}.json`)
+      );
+      expect(session).toMatchObject({
+        path: state.deckPath,
+        port: Number(url.port),
+        token
+      });
+      state.editorPid = session?.pid;
+    }
+  }
+];
+
+const INVALID_ARGUMENT_CASES: InvalidArgumentCase[] = [
+  { name: 'get_deck_contract', invalidArgs: { unexpected: true } },
+  { name: 'validate_deck', invalidArgs: {} },
+  { name: 'get_outline', invalidArgs: { path: 7 } },
+  { name: 'read_slide', invalidArgs: { path: 'deck.html', slideId: 7 } },
+  { name: 'get_element', invalidArgs: { path: 'deck.html', slideId: 's1' } },
+  { name: 'create_deck', invalidArgs: { path: '' } },
+  { name: 'add_slide', invalidArgs: { path: 'deck.html', afterSlideId: 5 } },
+  {
+    name: 'update_slide_html',
+    invalidArgs: { path: 'deck.html', slideId: 's1' }
+  },
+  { name: 'duplicate_slide', invalidArgs: { path: 'deck.html', slideId: '' } },
+  { name: 'delete_slide', invalidArgs: { path: 'deck.html' } },
+  {
+    name: 'move_slide',
+    invalidArgs: { path: 'deck.html', slideId: 's1', toIndex: -1 }
+  },
+  {
+    name: 'set_notes',
+    invalidArgs: { path: 'deck.html', slideId: 's1', notes: 5 }
+  },
+  {
+    name: 'set_transition',
+    invalidArgs: { path: 'deck.html', slideId: 's1', transition: 'wipe' }
+  },
+  {
+    name: 'set_slide_background',
+    invalidArgs: { path: 'deck.html', slideId: 's1', background: { color: 5 } }
+  },
+  {
+    name: 'add_element',
+    invalidArgs: { path: 'deck.html', slideId: 's1', html: 5 }
+  },
+  {
+    name: 'set_element_html',
+    invalidArgs: {
+      path: 'deck.html',
+      slideId: 's1',
+      target: { elementId: 'e1' }
+    }
+  },
+  {
+    name: 'set_text',
+    invalidArgs: {
+      path: 'deck.html',
+      slideId: 's1',
+      target: { elementId: 'e1' }
+    }
+  },
+  {
+    name: 'set_style',
+    invalidArgs: {
+      path: 'deck.html',
+      slideId: 's1',
+      target: { elementId: 'e1' },
+      styles: 'red'
+    }
+  },
+  {
+    name: 'remove_element',
+    invalidArgs: { path: 'deck.html', slideId: 's1' }
+  },
+  { name: 'set_slide_order', invalidArgs: { path: 'deck.html', slideIds: [] } },
+  { name: 'open_editor', invalidArgs: { path: 'deck.html', port: 70_000 } },
+  { name: 'export_deck', invalidArgs: { path: 'deck.html', format: 'pdf' } }
 ];
 
 let dir: string;
@@ -165,6 +631,42 @@ async function callTool(
 ): Promise<{ result: ToolResult; payload: Record<string, unknown> }> {
   const result = (await client.callTool({ name, arguments: args })) as ToolResult;
   return { result, payload: resultPayload(result) };
+}
+
+async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The probe server did not expose a TCP port.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return address.port;
+}
+
+/**
+ * Locks the observed SDK contract: argument-schema failures are rejected with
+ * the InvalidParams code before the handler runs, but the SDK delivers that
+ * rejection as an isError text result, not as the structured domain payload.
+ */
+async function expectInvalidArguments(
+  name: string,
+  args: unknown
+): Promise<void> {
+  const result = (await client.callTool({
+    name,
+    arguments: args as Record<string, unknown>
+  })) as ToolResult;
+  expect(result.isError, `${name} accepted invalid arguments.`).toBe(true);
+  const text = result.content?.[0]?.text ?? '';
+  expect(text).toContain(`MCP error ${ErrorCode.InvalidParams}`);
+  expect(text).toContain(`Invalid arguments for tool ${name}`);
+  expect(() => resultPayload(result)).toThrow();
 }
 
 interface ProcessResult {
@@ -664,5 +1166,199 @@ describe('htmlppt MCP stdio server', () => {
         }
       }
     }
+  });
+
+  it('ignores a stale live-PID session and returns the newly started host', async () => {
+    const staleDir = join(dir, 'stale-open');
+    await mkdir(staleDir, { recursive: true });
+    const deckPath = await copyFixture('basic.deck.html', staleDir);
+    const relativePath = join('stale-open', 'basic.deck.html');
+    const sessionFilePath = join(
+      sessionsDirectory(),
+      `${sessionKey(deckPath)}.json`
+    );
+    const stalePort = await closedPort();
+    await writeSession({
+      path: deckPath,
+      port: stalePort,
+      token: randomUUID(),
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      revision: 'a'.repeat(64)
+    });
+    let pid: number | undefined;
+
+    try {
+      const opened = await callTool('open_editor', {
+        path: relativePath,
+        open: false
+      });
+
+      expect(opened.result.isError).toBeFalsy();
+      const url = new URL(String(opened.payload.url));
+      expect(Number(url.port)).not.toBe(stalePort);
+      const token = url.searchParams.get('token');
+      if (!token) {
+        throw new Error('open_editor returned a URL without a token.');
+      }
+      const health = await fetch(`${url.origin}/api/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000)
+      });
+      expect(health.status).toBe(200);
+
+      // The dead registry entry was replaced by the new host.
+      const session = await readSession(sessionFilePath);
+      if (!session) {
+        throw new Error('open_editor did not replace the stale session entry.');
+      }
+      expect(session).toMatchObject({
+        path: deckPath,
+        port: Number(url.port),
+        token
+      });
+      expect(session.pid).not.toBe(process.pid);
+      pid = session.pid;
+    } finally {
+      if (pid === undefined) {
+        pid = (await readSession(sessionFilePath))?.pid;
+      }
+      // A broken implementation can leave the stale entry behind; that entry
+      // points at this test process, which must never be signalled.
+      if (pid !== undefined && pid !== process.pid) {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          // The host already stopped.
+        }
+      }
+    }
+  });
+
+  it('covers every read-only tool with a happy path and invalid arguments', async () => {
+    const relativePath = 'surface-read.deck.html';
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Surface read',
+      slides: 2
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const state = surfaceState(relativePath);
+    for (const testCase of READ_TOOL_CASES) {
+      const { result, payload } = await callTool(
+        testCase.name,
+        testCase.args(state)
+      );
+      expect(
+        result.isError,
+        `${testCase.name} failed: ${JSON.stringify(payload)}`
+      ).toBeFalsy();
+      await testCase.verify(state, payload);
+    }
+
+    for (const testCase of INVALID_ARGUMENT_CASES) {
+      await expectInvalidArguments(testCase.name, testCase.invalidArgs);
+    }
+  });
+
+  it('covers every mutation tool with durable effects', async () => {
+    const relativePath = 'surface-mutations.deck.html';
+    const state = surfaceState(relativePath);
+
+    try {
+      for (const testCase of MUTATION_TOOL_CASES) {
+        const { result, payload } = await callTool(
+          testCase.name,
+          testCase.args(state)
+        );
+        expect(
+          result.isError,
+          `${testCase.name} failed: ${JSON.stringify(payload)}`
+        ).toBeFalsy();
+        await testCase.verify(state, payload);
+      }
+    } finally {
+      if (state.editorPid !== undefined) {
+        const stopped = await runProcess(
+          process.execPath,
+          [cliBinPath, 'stop', state.deckPath],
+          {
+            cwd: dir,
+            env: { ...getDefaultEnvironment(), HTMLPPT_HOME: home }
+          }
+        );
+        expect(stopped.code).toBe(0);
+      }
+    }
+  });
+
+  it('keeps the tool tables in sync with the registered surface', async () => {
+    const covered = [...READ_TOOL_CASES, ...MUTATION_TOOL_CASES]
+      .map((testCase) => testCase.name)
+      .sort();
+    expect(covered).toEqual(EXPECTED_TOOLS);
+    expect(INVALID_ARGUMENT_CASES.map((testCase) => testCase.name).sort()).toEqual(
+      EXPECTED_TOOLS
+    );
+  });
+
+  it('matches the reviewed tools/list schema snapshot', async () => {
+    const { tools } = await client.listTools();
+    const normalized = tools
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? '',
+        inputSchema: tool.inputSchema
+      }))
+      .sort((left, right) =>
+        left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+      );
+
+    const snapshot: unknown = JSON.parse(
+      await readFile(toolsSnapshotPath, 'utf8')
+    );
+    expect(normalized).toEqual(snapshot);
+  });
+
+  it('documents exactly the registered tool names', async () => {
+    const { tools } = await client.listTools();
+    const markdown = await readFile(skillToolsDocPath, 'utf8');
+    const documented = Array.from(
+      markdown.matchAll(/^### `([a-z][a-z0-9_]*)`$/gm),
+      (match) => match[1]
+    ).sort();
+
+    expect(documented).toEqual(tools.map((tool) => tool.name).sort());
+  });
+
+  it('distinguishes schema failures from domain failures', async () => {
+    const deckPath = await copyFixture('basic.deck.html', dir);
+
+    // Observed SDK behavior: the InvalidParams code is wrapped in an isError
+    // text result before the handler runs, so there is no structured payload.
+    const schema = (await client.callTool({
+      name: 'set_text',
+      arguments: {
+        path: deckPath,
+        slideId: 's1',
+        target: { elementId: 'e1' }
+      }
+    })) as ToolResult;
+    expect(schema.isError).toBe(true);
+    const schemaText = schema.content?.[0]?.text ?? '';
+    expect(schemaText).toContain(`MCP error ${ErrorCode.InvalidParams}`);
+    expect(schemaText).toContain('Invalid arguments for tool set_text');
+    expect(() => resultPayload(schema)).toThrow();
+
+    const domain = await callTool('read_slide', {
+      path: deckPath,
+      slideId: 'missing-slide'
+    });
+    expect(domain.result.isError).toBe(true);
+    expect(domain.payload).toMatchObject({
+      code: 'slide-not-found',
+      path: deckPath
+    });
   });
 });
