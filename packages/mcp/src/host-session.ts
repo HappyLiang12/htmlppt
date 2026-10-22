@@ -18,9 +18,9 @@ type HealthStatus = 'healthy' | 'unhealthy' | 'unknown';
  * the recorded process is alive and its authenticated health endpoint answers
  * within a bounded time. Definitive failures (dead process, refused connection,
  * rejected token, malformed payload, or a different deck path) remove the entry
- * so later calls do not retry a dead host. A health timeout means the host may
- * be busy rather than stale: the entry is kept, and the caller falls back to
- * direct mode for this call only.
+ * so later calls do not retry a dead host. A health timeout or 5xx response
+ * means the host may be busy rather than stale: the entry is kept, and the
+ * caller falls back to direct mode for this call only.
  */
 export async function findLiveSession(
   filePath: string
@@ -64,7 +64,12 @@ async function checkHost(entry: SessionEntry): Promise<HealthStatus> {
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
     });
     if (!response.ok) {
-      return 'unhealthy';
+      await response.body?.cancel().catch(() => undefined);
+      // A rejected token is definitive; other statuses, including 5xx, do not
+      // prove the host is gone and must not orphan a live session.
+      return response.status === 401 || response.status === 403
+        ? 'unhealthy'
+        : 'unknown';
     }
     let payload: { ok?: unknown } | null;
     try {

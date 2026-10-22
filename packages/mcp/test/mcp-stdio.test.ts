@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { validateDeck } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
 import {
+  readSession,
   sessionKey,
   sessionsDirectory,
   startHost,
@@ -25,6 +26,7 @@ import { openEventStream, type SseStream } from './sse.js';
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const packageRoot = join(repoRoot, 'packages', 'mcp');
 const binPath = join(packageRoot, 'dist', 'bin.js');
+const cliBinPath = join(repoRoot, 'packages', 'cli', 'dist', 'bin.js');
 const tsupCli = createRequire(import.meta.url).resolve(
   'tsup/dist/cli-default.js'
 );
@@ -62,6 +64,7 @@ const RESOURCE_URIS = [
 
 let dir: string;
 let home: string;
+let editorDir: string;
 let previousHome: string | undefined;
 let client: Client;
 let transport: StdioClientTransport;
@@ -87,7 +90,9 @@ const BUILD_STEPS: BuildStep[] = [
     args: ['src/index.ts', '--format', 'esm', '--dts', '--clean']
   },
   // The mcp package's tsup.config.ts supplies its entries and raw-resource plugin.
-  { workspace: 'mcp', args: [] }
+  { workspace: 'mcp', args: [] },
+  // open_editor starts a host through the built CLI.
+  { workspace: 'cli', args: [] }
 ];
 
 function runBuild(step: BuildStep): Promise<void> {
@@ -162,11 +167,64 @@ async function callTool(
   return { result, payload: resultPayload(result) };
 }
 
+interface ProcessResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runProcess(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number }
+): Promise<ProcessResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(
+        new Error(
+          `Process ${command} ${args.join(' ')} did not exit in time.\nstdout:\n${stdout}\nstderr:\n${stderr}`
+        )
+      );
+    }, options.timeoutMs ?? 20_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
 beforeAll(async () => {
   await buildWorkspace();
   dir = await makeTempDir('htmlppt-mcp-stdio-');
   home = join(dir, 'home');
   await mkdir(home, { recursive: true });
+  editorDir = join(dir, 'editor');
+  await mkdir(editorDir, { recursive: true });
+  await writeFile(
+    join(editorDir, 'index.html'),
+    '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+    'utf8'
+  );
   previousHome = process.env.HTMLPPT_HOME;
   process.env.HTMLPPT_HOME = home;
   transport = new StdioClientTransport({
@@ -175,7 +233,8 @@ beforeAll(async () => {
     cwd: dir,
     env: {
       ...getDefaultEnvironment(),
-      HTMLPPT_HOME: home
+      HTMLPPT_HOME: home,
+      HTMLPPT_EDITOR_DIR: editorDir
     },
     stderr: 'pipe'
   });
@@ -451,7 +510,8 @@ describe('htmlppt MCP stdio server', () => {
       });
 
       const eventsResponse = await fetch(
-        `${base}/api/events?token=${encodeURIComponent(token)}`
+        `${base}/api/events?token=${encodeURIComponent(token)}`,
+        { signal: AbortSignal.timeout(5_000) }
       );
       expect(eventsResponse.status).toBe(200);
       events = openEventStream(eventsResponse);
@@ -505,6 +565,87 @@ describe('htmlppt MCP stdio server', () => {
     } finally {
       await events?.close();
       await host.close();
+    }
+  });
+
+  it('opens an editor through the CLI and stop cleans up the session', async () => {
+    const openDir = join(dir, 'open-editor');
+    await mkdir(openDir, { recursive: true });
+    const deckPath = await copyFixture('basic.deck.html', openDir);
+    const relativePath = join('open-editor', 'basic.deck.html');
+    const sessionFilePath = join(
+      sessionsDirectory(),
+      `${sessionKey(deckPath)}.json`
+    );
+    let pid: number | undefined;
+
+    try {
+      const opened = await callTool('open_editor', {
+        path: relativePath,
+        open: false
+      });
+
+      expect(opened.result.isError).toBeFalsy();
+      expect(opened.payload.path).toBe(deckPath);
+      const url = new URL(String(opened.payload.url));
+      expect(url.protocol).toBe('http:');
+      expect(url.hostname).toBe('127.0.0.1');
+      expect(url.port).not.toBe('');
+      const token = url.searchParams.get('token');
+      if (!token) {
+        throw new Error('open_editor returned a URL without a token.');
+      }
+
+      const health = await fetch(`${url.origin}/api/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000)
+      });
+      expect(health.status).toBe(200);
+      const healthPayload = (await health.json()) as {
+        ok?: unknown;
+        revision?: unknown;
+      };
+      expect(healthPayload.ok).toBe(true);
+      expect(healthPayload.revision).toMatch(/^[a-f0-9]{64}$/);
+
+      const session = await readSession(sessionFilePath);
+      if (!session) {
+        throw new Error('open_editor did not write a session entry.');
+      }
+      expect(session).toMatchObject({
+        path: deckPath,
+        port: Number(url.port),
+        token,
+        revision: healthPayload.revision
+      });
+      expect(session.pid).not.toBe(process.pid);
+      pid = session.pid;
+
+      const stopped = await runProcess(
+        process.execPath,
+        [cliBinPath, 'stop', deckPath],
+        {
+          cwd: dir,
+          env: { ...getDefaultEnvironment(), HTMLPPT_HOME: home }
+        }
+      );
+      expect(stopped.code).toBe(0);
+      expect(stopped.stdout).toContain('Stopped editor');
+      await expect(readFile(sessionFilePath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+      expect(() => process.kill(session.pid, 0)).toThrow();
+    } finally {
+      if (pid === undefined) {
+        pid = (await readSession(sessionFilePath))?.pid;
+      }
+      if (pid !== undefined) {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          // The stop command already terminated the host.
+        }
+      }
     }
   });
 });

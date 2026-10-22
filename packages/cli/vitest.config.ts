@@ -8,12 +8,14 @@ export default defineConfig({
       '@htmlppt/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
       '@htmlppt/runtime': fileURLToPath(new URL('../runtime/src/index.ts', import.meta.url)),
       '@htmlppt/host': fileURLToPath(new URL('../host/src/index.ts', import.meta.url)),
+      '@htmlppt/mcp': fileURLToPath(new URL('../mcp/src/index.ts', import.meta.url)),
       '@htmlppt/test-utils': fileURLToPath(new URL('../../test-utils/src/index.ts', import.meta.url))
     }
   },
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
-    testTimeout: 30_000
+    testTimeout: 30_000,
+    hookTimeout: 120_000
   }
 });

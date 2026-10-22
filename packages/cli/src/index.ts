@@ -4,12 +4,23 @@ import { basename, dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
+  getOutline,
   serializeExport,
   validateDeck,
+  type DeckOutline,
   type ValidationResult
 } from '@htmlppt/core';
-import { parseDeckHtml } from '@htmlppt/core/node';
-import { startHost } from '@htmlppt/host';
+import { parseDeckHtml, readDeckFile } from '@htmlppt/core/node';
+import {
+  listSessions,
+  removeSessionIfUnchanged,
+  sessionKey,
+  sessionsDirectory,
+  startHost,
+  writeSession,
+  type SessionEntry
+} from '@htmlppt/host';
+import { findLiveSession, startStdio } from '@htmlppt/mcp';
 import { Command, CommanderError } from 'commander';
 
 export interface CliIO {
@@ -23,11 +34,128 @@ const DEFAULT_STREAMS = {
   stderr: (line: string) => console.error(line)
 };
 
+const STOP_TIMEOUT_MS = 5_000;
+const STOP_POLL_INTERVAL_MS = 100;
+
 function editorDir(): string {
   return (
     process.env.HTMLPPT_EDITOR_DIR ??
     fileURLToPath(new URL('../../editor/dist', import.meta.url))
   );
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function sessionUrl(session: Pick<SessionEntry, 'port' | 'token'>): string {
+  return `http://127.0.0.1:${session.port}/?token=${encodeURIComponent(session.token)}`;
+}
+
+async function openBrowser(url: string, io: CliIO): Promise<void> {
+  try {
+    const { default: openUrl } = await import('open');
+    await openUrl(url);
+  } catch (cause) {
+    io.stderr(
+      `Could not open a browser: ${cause instanceof Error ? cause.message : String(cause)}. Open the URL manually.`
+    );
+  }
+}
+
+function printOutline(outline: DeckOutline, io: CliIO): void {
+  const slideLabel = outline.slideCount === 1 ? 'slide' : 'slides';
+  io.stdout(
+    `${outline.title} (${outline.width}x${outline.height}, ${outline.slideCount} ${slideLabel})`
+  );
+  for (const slide of outline.slides) {
+    const elementLabel = slide.elements.length === 1 ? 'element' : 'elements';
+    io.stdout(`  ${slide.id}: ${slide.elements.length} ${elementLabel}`);
+    for (const element of slide.elements) {
+      const id = element.id ?? '(no id)';
+      const text = element.text.length > 0 ? ` ${element.text}` : '';
+      io.stdout(`    ${id} <${element.tag}>${text}`);
+    }
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs: number
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!processIsAlive(pid)) {
+      return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    await delay(Math.min(STOP_POLL_INTERVAL_MS, remaining));
+  }
+}
+
+async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
+  const sessionFile = join(
+    sessionsDirectory(),
+    `${sessionKey(session.path)}.json`
+  );
+  let snapshot: string;
+  try {
+    snapshot = await readFile(sessionFile, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      io.stderr(
+        `The editor session for ${session.path} disappeared before it could be stopped.`
+      );
+    } else {
+      io.stderr(
+        `Could not read the editor session for ${session.path}: ${error instanceof Error ? error.message : String(error)}.`
+      );
+    }
+    return false;
+  }
+  if (snapshot !== `${JSON.stringify(session, null, 2)}\n`) {
+    // The registry changed after the health check; never signal a pid that no
+    // longer matches the session that was verified.
+    io.stderr(
+      `The editor session for ${session.path} changed while stopping it. Retry "htmlppt stop ${session.path}".`
+    );
+    return false;
+  }
+
+  try {
+    process.kill(session.pid, 'SIGTERM');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      io.stderr(
+        `Could not stop the editor process ${session.pid} for ${session.path}: ${error instanceof Error ? error.message : String(error)}.`
+      );
+      return false;
+    }
+  }
+
+  if (!(await waitForProcessExit(session.pid, STOP_TIMEOUT_MS))) {
+    io.stderr(
+      `The editor process ${session.pid} for ${session.path} did not stop within 5 seconds. Stop it manually, then run "htmlppt stop ${session.path}" again.`
+    );
+    return false;
+  }
+
+  await removeSessionIfUnchanged(sessionFile, snapshot);
+  io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
+  return true;
 }
 
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
@@ -184,6 +312,31 @@ export async function runCli(
     });
 
   program
+    .command('outline <file>')
+    .description('Print the title, slides, and elements of a deck')
+    .option('--json', 'print the outline as JSON')
+    .action(async (file: string, options: { json?: boolean }) => {
+      const filePath = resolve(io.cwd, file);
+      let html: string;
+      try {
+        html = (await readDeckFile(filePath)).html;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          io.stderr(`Deck file not found: ${file}.`);
+          exitCode = 1;
+          return;
+        }
+        throw error;
+      }
+      const outline = getOutline(parseDeckHtml(html));
+      if (options.json) {
+        io.stdout(JSON.stringify(outline));
+        return;
+      }
+      printOutline(outline, io);
+    });
+
+  program
     .command('open <file>')
     .description('Open the visual editor for a deck')
     .option('--port <port>', 'port to listen on', '0')
@@ -195,17 +348,29 @@ export async function runCli(
         );
       }
       const filePath = resolve(io.cwd, file);
+
+      const existing = await findLiveSession(filePath);
+      if (existing) {
+        const url = sessionUrl(existing);
+        io.stdout(`HTMLPPT_URL=${url}`);
+        if (options.browser) {
+          await openBrowser(url, io);
+        }
+        return;
+      }
+
       const directory = editorDir();
       try {
         await access(join(directory, 'index.html'));
       } catch {
         throw new Error('Editor build not found. Run "npm run build" first.');
       }
+      const token = randomUUID();
       let host: Awaited<ReturnType<typeof startHost>>;
       try {
         host = await startHost({
           filePath,
-          token: randomUUID(),
+          token,
           editorDir: directory,
           port: Number(options.port)
         });
@@ -224,28 +389,117 @@ export async function runCli(
         return;
       }
 
+      const entry: SessionEntry = {
+        path: filePath,
+        port: host.port,
+        token,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: ''
+      };
+      const sessionFile = join(
+        sessionsDirectory(),
+        `${sessionKey(filePath)}.json`
+      );
+      try {
+        entry.revision = (await readDeckFile(filePath)).hash;
+        await writeSession(entry);
+      } catch (error) {
+        await host.close();
+        throw error;
+      }
+      const sessionSnapshot = `${JSON.stringify(entry, null, 2)}\n`;
+
       io.stdout(`HTMLPPT_URL=${host.url}`);
 
       await new Promise<void>((resolvePromise) => {
         const stop = () => {
-          void host.close().finally(() => resolvePromise());
+          void (async () => {
+            try {
+              await host.close();
+            } finally {
+              await removeSessionIfUnchanged(sessionFile, sessionSnapshot);
+            }
+          })()
+            .catch(() => undefined)
+            .finally(() => resolvePromise());
         };
         process.once('SIGINT', stop);
         process.once('SIGTERM', stop);
 
         if (options.browser) {
-          void (async () => {
-            try {
-              const { default: openUrl } = await import('open');
-              await openUrl(host.url);
-            } catch (cause) {
-              io.stderr(
-                `Could not open a browser: ${cause instanceof Error ? cause.message : String(cause)}. Open the URL manually.`
-              );
-            }
-          })();
+          void openBrowser(host.url, io);
         }
       });
+    });
+
+  program
+    .command('stop [file]')
+    .description('Stop a running editor session')
+    .option('--all', 'stop every live editor session')
+    .action(async (file: string | undefined, options: { all?: boolean }) => {
+      if (options.all) {
+        if (file !== undefined) {
+          io.stderr('Pass either a deck file or --all, not both.');
+          exitCode = 1;
+          return;
+        }
+        const sessions = await listSessions();
+        if (sessions.length === 0) {
+          io.stderr('No live editor sessions.');
+          exitCode = 1;
+          return;
+        }
+        let stopped = 0;
+        let failed = 0;
+        for (const session of sessions) {
+          const live = await findLiveSession(session.path);
+          if (!live) {
+            io.stderr(
+              `Could not verify a live editor for ${session.path}; leaving it running. Retry "htmlppt stop ${session.path}" when it responds.`
+            );
+            failed += 1;
+            continue;
+          }
+          if (await stopSession(live, io)) {
+            stopped += 1;
+          } else {
+            failed += 1;
+          }
+        }
+        if (stopped === 0) {
+          io.stderr('No live editor sessions were stopped.');
+          exitCode = 1;
+        } else if (failed > 0) {
+          exitCode = 1;
+        }
+        return;
+      }
+
+      if (file === undefined) {
+        io.stderr('Specify a deck file to stop or pass --all.');
+        exitCode = 1;
+        return;
+      }
+      const filePath = resolve(io.cwd, file);
+      const live = await findLiveSession(filePath);
+      if (!live) {
+        io.stderr(
+          `No live editor session for ${file}. Start one with "htmlppt open ${file}".`
+        );
+        exitCode = 1;
+        return;
+      }
+      if (!(await stopSession(live, io))) {
+        exitCode = 1;
+      }
+    });
+
+  program
+    .command('mcp')
+    .description('Run the MCP stdio server for AI agents')
+    .action(async () => {
+      await startStdio();
     });
 
   try {

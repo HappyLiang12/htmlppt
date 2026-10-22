@@ -530,6 +530,23 @@ describe('findLiveSession', () => {
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('keeps the entry when the health endpoint returns 5xx', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const failing = await stubHost((response) => {
+      response.writeHead(503, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'deck-unreadable' }));
+    });
+    try {
+      const entry = staleEntry({ port: failing.port });
+      await writeSession(entry);
+
+      expect(await findLiveSession(deckPath)).toBeNull();
+      expect(await readSession(sessionFilePath(deckPath))).toEqual(entry);
+    } finally {
+      await failing.close();
+    }
+  });
+
   it('removes a session whose health payload is malformed', async () => {
     deckPath = await copyFixture('basic.deck.html', dir);
     const malformed = await stubHost((response) => {
