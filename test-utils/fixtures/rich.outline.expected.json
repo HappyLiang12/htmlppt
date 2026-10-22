@@ -1,0 +1,91 @@
+{
+  "title": "Rich deck",
+  "width": 1600,
+  "height": 900,
+  "slideCount": 2,
+  "runtime": true,
+  "slides": [
+    {
+      "id": "s1",
+      "index": 0,
+      "width": 1600,
+      "height": 900,
+      "transition": "fade",
+      "notes": "Keep this short.",
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "h1",
+          "path": [
+            0
+          ],
+          "text": "Rich deck",
+          "classes": [
+            "title"
+          ],
+          "group": false
+        },
+        {
+          "id": "e2",
+          "tag": "img",
+          "path": [
+            1
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": "e3",
+          "tag": "div",
+          "path": [
+            2
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": "e4",
+          "tag": "div",
+          "path": [
+            3
+          ],
+          "text": "AB",
+          "classes": [],
+          "group": true
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "index": 1,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "table",
+          "path": [
+            0
+          ],
+          "text": "Q1",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": "e2",
+          "tag": "figure",
+          "path": [
+            1
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        }
+      ]
+    }
+  ]
+}

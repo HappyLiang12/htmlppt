@@ -1,0 +1,32 @@
+{
+  "errors": [],
+  "warnings": [
+    {
+      "severity": "warning",
+      "code": "missing-runtime",
+      "message": "The deck has multiple slides but no presentation runtime."
+    },
+    {
+      "severity": "warning",
+      "code": "script-present",
+      "message": "A non-runtime script is present; scripts do not run in the editor.",
+      "slideId": "s1",
+      "location": "s1 > script"
+    },
+    {
+      "severity": "warning",
+      "code": "relative-asset",
+      "message": "Relative asset \"x.png\" is not supported; use a data: or absolute URL.",
+      "slideId": "s1",
+      "location": "s1 > img"
+    }
+  ],
+  "info": [
+    {
+      "severity": "info",
+      "code": "slide-count",
+      "message": "2 slide(s) detected."
+    }
+  ],
+  "valid": true
+}

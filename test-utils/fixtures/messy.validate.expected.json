@@ -1,0 +1,83 @@
+{
+  "errors": [
+    {
+      "severity": "error",
+      "code": "notes-nested-incorrectly",
+      "message": "Speaker notes must be a direct child of a slide.",
+      "slideId": "s1",
+      "location": "s1 > aside"
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "warning",
+      "code": "missing-slide-id",
+      "message": "Slide 1 has no data-slide-id.",
+      "slideId": "s1"
+    },
+    {
+      "severity": "warning",
+      "code": "missing-slide-id",
+      "message": "Slide 2 has no data-slide-id.",
+      "slideId": "s2"
+    },
+    {
+      "severity": "warning",
+      "code": "missing-runtime",
+      "message": "The deck has multiple slides but no presentation runtime."
+    },
+    {
+      "severity": "warning",
+      "code": "script-present",
+      "message": "A non-runtime script is present; scripts do not run in the editor.",
+      "location": "document > script"
+    },
+    {
+      "severity": "warning",
+      "code": "relative-asset",
+      "message": "Relative asset \"assets/photo.png\" is not supported; use a data: or absolute URL.",
+      "slideId": "s1",
+      "location": "s1 > img"
+    },
+    {
+      "severity": "warning",
+      "code": "relative-asset",
+      "message": "Relative asset \"assets/bg.png\" is not supported; use a data: or absolute URL.",
+      "location": "style"
+    },
+    {
+      "severity": "warning",
+      "code": "fixed-layout",
+      "message": "Fixed or viewport-sized layout may not export reliably.",
+      "slideId": "s1",
+      "location": "s1 > p"
+    },
+    {
+      "severity": "warning",
+      "code": "mixed-canvas-sizes",
+      "message": "Slides use different canvas sizes."
+    },
+    {
+      "severity": "warning",
+      "code": "canvas-content",
+      "message": "A <canvas> element cannot be edited visually.",
+      "slideId": "s2",
+      "location": "s2 > canvas"
+    },
+    {
+      "severity": "warning",
+      "code": "unsupported-group-nesting",
+      "message": "Nested data-ppt-group wrappers are not supported.",
+      "slideId": "s2",
+      "location": "s2 > div"
+    }
+  ],
+  "info": [
+    {
+      "severity": "info",
+      "code": "slide-count",
+      "message": "2 slide(s) detected."
+    }
+  ],
+  "valid": false
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rich deck</title>
+  <style>
+    .slide { width: 1600px; height: 900px; position: relative; overflow: hidden; background: #fff; }
+    .title { font: 700 84px/1.05 Inter, sans-serif; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1" data-width="1600" data-height="900" data-ppt-transition="fade">
+      <h1 class="title" data-ppt-el="e1">Rich deck</h1>
+      <img data-ppt-el="e2" alt="Pixel" src="data:image/png;base64,iVBORw0KGgo=">
+      <div data-ppt-el="e3" style="position:absolute;left:100px;top:600px;width:240px;height:120px;background:#e8a33d"></div>
+      <div data-ppt-group data-ppt-el="e4"><span>A</span><span>B</span></div>
+      <aside data-ppt-notes hidden>Keep this short.</aside>
+    </section>
+    <section class="slide" data-slide-id="s2" data-width="1600" data-height="900">
+      <table data-ppt-el="e1"><thead><tr><th>Q</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>
+      <figure data-ppt-el="e2" data-ppt-chart='{"type":"bar","labels":["Q1"],"series":[{"name":"USD","values":[12]}]}'>
+        <svg viewBox="0 0 100 100"><rect width="10" height="10"></rect></svg>
+      </figure>
+    </section>
+  </main>
+  <script data-ppt-runtime="1">(() => {})();</script>
+</body>
+</html>
