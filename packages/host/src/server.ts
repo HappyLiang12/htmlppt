@@ -1,5 +1,5 @@
 import { watchFile, unwatchFile } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -9,7 +9,13 @@ import {
   readDeckFile,
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
-import { validateDeck } from '@htmlppt/core';
+import { detectSlides, validateDeck } from '@htmlppt/core';
+import {
+  renderPdf,
+  renderPngs,
+  RendererUnavailableError,
+  RenderError
+} from '@htmlppt/renderer';
 import { Hono } from 'hono';
 
 export interface HostOptions {
@@ -132,6 +138,56 @@ async function waitFor(
   } finally {
     if (timer) {
       clearTimeout(timer);
+    }
+  }
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === '' ||
+    (!path.isAbsolute(relative) &&
+      relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`))
+  );
+}
+
+/**
+ * Resolves the export directory inside the deck directory, including through
+ * symlinks that already exist. The caller creates the directory only after it
+ * passed this check.
+ */
+async function resolveExportDir(
+  deckDir: string,
+  requested: string | undefined
+): Promise<string | null> {
+  const root = path.resolve(deckDir);
+  const target = path.resolve(root, requested ?? '.');
+  if (!isInside(root, target)) {
+    return null;
+  }
+  let existing = target;
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const canonicalRoot = await realpath(root);
+      const canonicalCandidate = path.join(
+        await realpath(existing),
+        ...missing.reverse()
+      );
+      return isInside(canonicalRoot, canonicalCandidate)
+        ? canonicalCandidate
+        : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+      const parent = path.dirname(existing);
+      if (parent === existing) {
+        return null;
+      }
+      missing.push(path.basename(existing));
+      existing = parent;
     }
   }
 }
@@ -373,6 +429,107 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       }
       return c.json({ revision });
     });
+  });
+
+  app.post('/api/export', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid json' }, 400);
+    }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'invalid body' }, 400);
+    }
+
+    const { format, outDir } = body as {
+      format?: unknown;
+      outDir?: unknown;
+    };
+    if (format !== 'pdf' && format !== 'png') {
+      return c.json(
+        {
+          error: 'unsupported format',
+          message: 'Export format must be "pdf" or "png".'
+        },
+        400
+      );
+    }
+    if (outDir !== undefined && (typeof outDir !== 'string' || !outDir.trim())) {
+      return c.json({ error: 'invalid outDir' }, 400);
+    }
+
+    // Rendering works on a snapshot so a slow export never blocks edits. The
+    // snapshot is also what keeps the source deck untouched.
+    const snapshot = await withSaveLock(async () => {
+      try {
+        await syncFromDisk();
+      } catch (error) {
+        if (isUnreadable(error)) {
+          return null;
+        }
+        throw error;
+      }
+      return { html, filePath: options.filePath };
+    });
+    if (!snapshot) {
+      return c.json(deckUnreadable(), 500);
+    }
+
+    const deckDir = path.dirname(path.resolve(snapshot.filePath));
+    const resolvedOutDir = await resolveExportDir(deckDir, outDir as
+      | string
+      | undefined);
+    if (!resolvedOutDir) {
+      return c.json(
+        {
+          error: 'invalid outDir',
+          message: 'outDir must stay inside the deck directory.'
+        },
+        400
+      );
+    }
+    await mkdir(resolvedOutDir, { recursive: true });
+
+    const first = detectSlides(parseDeckHtml(snapshot.html))[0];
+    const basename =
+      path.basename(snapshot.filePath).replace(/\.html?$/i, '') || 'deck';
+
+    try {
+      if (format === 'pdf') {
+        const outPath = path.join(resolvedOutDir, `${basename}.pdf`);
+        await renderPdf({
+          html: snapshot.html,
+          width: first.width,
+          height: first.height,
+          outPath
+        });
+        return c.json({ files: [outPath] });
+      }
+      const files = await renderPngs({
+        html: snapshot.html,
+        width: first.width,
+        height: first.height,
+        outDir: resolvedOutDir,
+        basename
+      });
+      return c.json({ files });
+    } catch (error) {
+      if (error instanceof RendererUnavailableError) {
+        return c.json(
+          {
+            error: 'renderer-unavailable',
+            message: error.message,
+            hint: 'Install Google Chrome, Microsoft Edge or Chromium, or set HTMLPPT_CHROMIUM to its executable path.'
+          },
+          501
+        );
+      }
+      if (error instanceof RenderError) {
+        return c.json({ error: 'render-failed', message: error.message }, 500);
+      }
+      throw error;
+    }
   });
 
   app.get('/api/events', (c) => {

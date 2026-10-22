@@ -23,10 +23,12 @@ export default defineConfig({
       'const require = __htmlpptCreateRequire(import.meta.url);'
     ].join('\n')
   },
-  // A single self-contained tarball: bundle every dependency (the @htmlppt
-  // workspaces, the MCP SDK, zod, linkedom, hono, commander, open, ...) while
-  // esbuild keeps Node builtins external.
-  noExternal: [/.*/],
+  // Bundle the @htmlppt workspaces and their libraries (MCP SDK, zod,
+  // linkedom, hono, commander, open, ...) so the tarball is self-contained.
+  // playwright-core is the one declared runtime dependency: its prebundled
+  // internals use conditional requires that esbuild cannot resolve, so tsup
+  // keeps it external.
+  external: ['playwright-core'],
   esbuildPlugins: [
     {
       name: 'raw-resources',
