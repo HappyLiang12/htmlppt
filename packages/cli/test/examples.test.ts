@@ -132,7 +132,9 @@ describe('skill example decks', () => {
 
       const html = await readFile(examplePath, 'utf8');
       expect(html).toContain('data-ppt-runtime="1"');
-      expect(html).toContain(RUNTIME_SOURCE.trim());
+      // Checkouts on Windows may normalize the example to CRLF; the runtime
+      // source is always LF, so compare line-ending-agnostic content.
+      expect(html.replace(/\r\n/g, '\n')).toContain(RUNTIME_SOURCE.trim());
 
       const document = parseDeckHtml(html);
       const ids = Array.from(
