@@ -23,7 +23,6 @@ export {
   addSlide,
   deleteSlide,
   duplicateSlide,
-  findSlide,
   moveSlide,
   mutateDeck,
   removeElement,
@@ -37,6 +36,8 @@ export {
   setTransition,
   updateSlideHtml
 } from './mutations.js';
+// Consumed by the MCP package and shared with read models/mutations internally.
+export { findSlide } from './slides.js';
 export type {
   AddSlideOptions,
   ElementTarget,

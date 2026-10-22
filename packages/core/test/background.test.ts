@@ -86,7 +86,7 @@ describe('setSlideBackground', () => {
     expect(slideOf(doc).style.getPropertyValue('background-image')).toBe('');
   });
 
-  it('removes an empty style attribute after clearing inherited values', () => {
+  it('replaces an inherited background-image with the color value', () => {
     const doc = parseDeckHtml(
       `<!doctype html><html><head><title>T</title></head><body>
 <section data-slide-id="s1" style="background-image: url(old.png)"></section>

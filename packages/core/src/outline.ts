@@ -1,5 +1,5 @@
 import { detectSlides, type SlideInfo } from './detect.js';
-import { findSlide } from './mutations.js';
+import { findSlide } from './slides.js';
 import { resolveTarget, type ElementTarget } from './target.js';
 
 export interface ElementReadModel {

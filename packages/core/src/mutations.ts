@@ -1,6 +1,7 @@
 import { detectSlides, type SlideInfo } from './detect.js';
 import { defaultIdFactory, type IdFactory } from './ids.js';
 import { normalizeDeck } from './normalize.js';
+import { findSlide } from './slides.js';
 import { DeckMutationError, resolveTarget, type ElementTarget } from './target.js';
 import type { Diagnostic } from './types.js';
 import { validateDeck } from './validate.js';
@@ -140,17 +141,6 @@ export function mutateDeck<T>(
     );
   }
   return { document, result };
-}
-
-export function findSlide(doc: Document, slideId: string): SlideInfo {
-  const slides = detectSlides(doc);
-  const slide =
-    slides.find((candidate) => candidate.id === slideId && candidate.hasId) ??
-    (slideId === 'body'
-      ? slides.find((candidate) => candidate.element === doc.body)
-      : undefined);
-  if (!slide) fail('slide-not-found', `Slide "${slideId}" was not found.`);
-  return slide;
 }
 
 export interface AddSlideOptions {

@@ -1,9 +1,28 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  link,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
 import path from 'node:path';
 import { parseHTML } from 'linkedom';
 
 const fileQueues = new Map<string, Promise<unknown>>();
+
+// Hard links are rejected on some Windows volumes and network shares even
+// though the source and destination share a filesystem.
+const LINK_UNSUPPORTED_CODES = new Set([
+  'EACCES',
+  'ENOSYS',
+  'EOPNOTSUPP',
+  'EPERM',
+  'EXDEV'
+]);
 
 export function parseDeckHtml(html: string): Document {
   const { document } = parseHTML(html);
@@ -31,6 +50,17 @@ export class DeckFileConflictError extends Error {
   constructor(message = 'Deck file changed on disk.') {
     super(message);
     this.name = 'DeckFileConflictError';
+  }
+}
+
+export class DeckFileExistsError extends Error {
+  readonly code = 'file-exists' as const;
+
+  constructor(filePath: string) {
+    super(
+      `Deck already exists: ${filePath}. Choose another path instead of overwriting it.`
+    );
+    this.name = 'DeckFileExistsError';
   }
 }
 
@@ -91,6 +121,75 @@ async function writeDeckFileAtomicLocked(
 
   const stats = await stat(filePath);
   return { hash: hashHtml(html), mtimeMs: stats.mtimeMs };
+}
+
+/**
+ * Creates a new deck without replacing an existing file. The content is
+ * written to a unique temporary file in the destination directory, flushed,
+ * and then hard-linked into place. A link never replaces an existing path, so
+ * readers only ever observe the complete deck or no file at all.
+ */
+export async function createDeckFileAtomic(
+  filePath: string,
+  html: string
+): Promise<DeckWriteResult> {
+  return withFileLock(filePath, () =>
+    createDeckFileAtomicLocked(filePath, html)
+  );
+}
+
+async function createDeckFileAtomicLocked(
+  filePath: string,
+  html: string
+): Promise<DeckWriteResult> {
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${randomUUID()}.htmlppt.tmp`
+  );
+  try {
+    const handle = await open(temporaryPath, 'wx');
+    try {
+      await handle.writeFile(html, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    try {
+      await link(temporaryPath, filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST' || code === 'EISDIR') {
+        throw new DeckFileExistsError(filePath);
+      }
+      if (!code || !LINK_UNSUPPORTED_CODES.has(code)) {
+        throw error;
+      }
+      // Some Windows volumes and network shares reject hard links. Verify the
+      // destination is still absent and rename the finished temporary file
+      // instead. This leaves a small check-to-rename window that `link` does
+      // not have, so it is only used when the platform cannot link.
+      if (await destinationExists(filePath)) {
+        throw new DeckFileExistsError(filePath);
+      }
+      await rename(temporaryPath, filePath);
+    }
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+
+  const stats = await stat(filePath);
+  return { hash: hashHtml(html), mtimeMs: stats.mtimeMs };
+}
+
+async function destinationExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 async function assertCurrentHash(

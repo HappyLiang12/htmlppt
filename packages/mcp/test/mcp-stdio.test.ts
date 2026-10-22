@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateDeck } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
+import { RUNTIME_SOURCE } from '@htmlppt/runtime';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
@@ -15,6 +17,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const packageRoot = join(repoRoot, 'packages', 'mcp');
 const binPath = join(packageRoot, 'dist', 'bin.js');
+const tsupCli = createRequire(import.meta.url).resolve(
+  'tsup/dist/cli-default.js'
+);
 
 const EXPECTED_TOOLS = [
   'add_element',
@@ -52,12 +57,35 @@ let home: string;
 let client: Client;
 let transport: StdioClientTransport;
 
-function runNpm(args: string[]): Promise<void> {
+interface BuildStep {
+  workspace: string;
+  args: string[];
+}
+
+// Running the tsup CLI through process.execPath avoids spawning npm.cmd with
+// shell: true, which Node deprecates (DEP0190).
+const BUILD_STEPS: BuildStep[] = [
+  {
+    workspace: 'runtime',
+    args: ['src/index.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  {
+    workspace: 'core',
+    args: ['src/index.ts', 'src/node.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  {
+    workspace: 'host',
+    args: ['src/index.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  // The mcp package's tsup.config.ts supplies its entries and raw-resource plugin.
+  { workspace: 'mcp', args: [] }
+];
+
+function runBuild(step: BuildStep): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
-      cwd: repoRoot,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32'
+    const child = spawn(process.execPath, [tsupCli, ...step.args], {
+      cwd: join(repoRoot, 'packages', step.workspace),
+      stdio: ['ignore', 'pipe', 'pipe']
     });
     let output = '';
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -74,7 +102,7 @@ function runNpm(args: string[]): Promise<void> {
       }
       reject(
         new Error(
-          `npm ${args.join(' ')} failed with exit code ${code}:\n${output}`
+          `tsup ${step.workspace} build failed with exit code ${code}:\n${output}`
         )
       );
     });
@@ -82,13 +110,8 @@ function runNpm(args: string[]): Promise<void> {
 }
 
 async function buildWorkspace(): Promise<void> {
-  for (const workspace of [
-    '@htmlppt/runtime',
-    '@htmlppt/core',
-    '@htmlppt/host',
-    '@htmlppt/mcp'
-  ]) {
-    await runNpm(['run', 'build', '-w', workspace]);
+  for (const step of BUILD_STEPS) {
+    await runBuild(step);
   }
 }
 
@@ -171,6 +194,12 @@ describe('htmlppt MCP stdio server', () => {
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has('open_editor')).toBe(true);
     expect(names.has('export_deck')).toBe(true);
+
+    const exportTool = tools.find((tool) => tool.name === 'export_deck');
+    const properties = exportTool?.inputSchema.properties as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(properties?.format).toMatchObject({ const: 'html' });
   });
 
   it('lists and serves the contract, authoring, and example resources', async () => {
@@ -195,6 +224,9 @@ describe('htmlppt MCP stdio server', () => {
     const exampleText = resourceText(example.contents, 'htmlppt://example');
     expect(exampleText).toContain('data-ppt-runtime="1"');
     expect(exampleText).toContain('data-ppt-chart');
+    // The example ships the real presentation runtime, not an empty marker.
+    expect(exampleText).toContain(RUNTIME_SOURCE.trim());
+    expect(exampleText).not.toContain('<script data-ppt-runtime="1"></script>');
     const exampleValidation = validateDeck(parseDeckHtml(exampleText));
     expect(exampleValidation.valid).toBe(true);
   });
@@ -274,11 +306,11 @@ describe('htmlppt MCP stdio server', () => {
     expect(saved).not.toContain('data-ppt-frame-slide');
     const savedDocument = parseDeckHtml(saved);
     expect(validateDeck(savedDocument).valid).toBe(true);
-    const savedSlides = Array.from(savedDocument.querySelectorAll('[data-slide-id]'));
-    expect(savedSlides).toHaveLength(3);
-    for (const slide of savedSlides) {
-      expect(slide.getAttribute('data-slide-id')?.trim()).toBeTruthy();
-    }
+    const savedIds = Array.from(
+      savedDocument.querySelectorAll('[data-slide-id]')
+    ).map((slide) => slide.getAttribute('data-slide-id'));
+    expect(savedIds).toEqual(['s1', 's2', 's3']);
+    expect(new Set(savedIds).size).toBe(savedIds.length);
 
     const exported = await callTool('export_deck', {
       path: 'flow.deck.html',
@@ -294,6 +326,13 @@ describe('htmlppt MCP stdio server', () => {
     const exportedHtml = await readFile(exportPath, 'utf8');
     expect(exportedHtml).toContain('<!-- Edited with htmlppt.');
     expect(exportedHtml).toContain('Edited by MCP');
+    const exportedDocument = parseDeckHtml(exportedHtml);
+    const exportValidation = validateDeck(exportedDocument);
+    expect(exportValidation.errors).toEqual([]);
+    expect(exportValidation.valid).toBe(true);
+    expect(
+      exportedDocument.querySelectorAll('[data-slide-id]')
+    ).toHaveLength(3);
   });
 
   it('reports a conflict after an external write and leaves the file unchanged', async () => {
@@ -330,5 +369,32 @@ describe('htmlppt MCP stdio server', () => {
     });
     expect(String(edited.payload.message)).toContain('Re-read');
     expect(await readFile(deckPath)).toEqual(externalBytes);
+  });
+
+  it('refuses to overwrite an existing deck through create_deck', async () => {
+    const deckPath = join(dir, 'twice.deck.html');
+    const first = await callTool('create_deck', {
+      path: 'twice.deck.html',
+      title: 'First deck',
+      slides: 1
+    });
+    expect(first.result.isError).toBeFalsy();
+    const original = await readFile(deckPath, 'utf8');
+
+    const second = await callTool('create_deck', {
+      path: 'twice.deck.html',
+      title: 'Second deck',
+      slides: 1
+    });
+    expect(second.result.isError).toBe(true);
+    expect(second.payload).toMatchObject({
+      code: 'file-exists',
+      path: deckPath
+    });
+    expect(await readFile(deckPath, 'utf8')).toBe(original);
+    const leftovers = (await readdir(dir)).filter((name) =>
+      name.endsWith('.htmlppt.tmp')
+    );
+    expect(leftovers).toEqual([]);
   });
 });

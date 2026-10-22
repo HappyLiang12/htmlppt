@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DeckFileConflictError,
+  DeckFileExistsError,
+  createDeckFileAtomic,
   hashHtml,
   readDeckFile,
   writeDeckFileAtomic
@@ -162,5 +164,80 @@ describe('node deck I/O', () => {
 
     await expect(writeDeckFileAtomic(file, '<h1>Mine</h1>')).rejects.toThrow();
     expect(await readdir(dir)).toEqual(['deck.html']);
+  });
+});
+
+describe('createDeckFileAtomic', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'htmlppt-create-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('creates a new file atomically and leaves no temporary file behind', async () => {
+    const file = join(dir, 'new.html');
+
+    const result = await createDeckFileAtomic(file, '<h1>New</h1>');
+
+    expect(await readFile(file, 'utf8')).toBe('<h1>New</h1>');
+    expect(result.hash).toBe(hashHtml('<h1>New</h1>'));
+    expect(result.mtimeMs).toBe((await stat(file)).mtimeMs);
+    expect(await readdir(dir)).toEqual(['new.html']);
+  });
+
+  it('refuses to overwrite an existing file and keeps its bytes', async () => {
+    const file = join(dir, 'deck.html');
+    await writeFile(file, '<h1>Original</h1>', 'utf8');
+
+    const error = await createDeckFileAtomic(file, '<h1>Mine</h1>').catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(error).toBeInstanceOf(DeckFileExistsError);
+    expect(error).toMatchObject({ code: 'file-exists' });
+    expect(String((error as Error).message)).toContain(file);
+    expect(await readFile(file, 'utf8')).toBe('<h1>Original</h1>');
+    expect(await readdir(dir)).toEqual(['deck.html']);
+  });
+
+  it('lets exactly one concurrent create win without clobbering it', async () => {
+    const file = join(dir, 'race.html');
+    const htmlA = `<h1>A</h1>${'a'.repeat(128 * 1024)}`;
+    const htmlB = `<h1>B</h1>${'b'.repeat(128 * 1024)}`;
+
+    const results = await Promise.allSettled([
+      createDeckFileAtomic(file, htmlA),
+      createDeckFileAtomic(file, htmlB)
+    ]);
+
+    const fulfilled = results.flatMap((result, index) =>
+      result.status === 'fulfilled' ? [index] : []
+    );
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.reason).toBeInstanceOf(DeckFileExistsError);
+    expect(await readFile(file, 'utf8')).toBe(
+      fulfilled[0] === 0 ? htmlA : htmlB
+    );
+    expect(await readdir(dir)).toEqual(['race.html']);
+  });
+
+  it('cleans up the temporary file when the destination cannot be linked', async () => {
+    const file = join(dir, 'blocked.html');
+    await mkdir(file);
+
+    const error = await createDeckFileAtomic(file, '<h1>Mine</h1>').catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(error).toBeInstanceOf(DeckFileExistsError);
+    expect(await readdir(dir)).toEqual(['blocked.html']);
   });
 });

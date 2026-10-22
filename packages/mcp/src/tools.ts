@@ -1,10 +1,7 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
-  DeckMutationError,
   addElement,
   addSlide,
   createDeckHtml,
@@ -29,225 +26,48 @@ import {
   setTransition,
   updateSlideHtml,
   validateDeck,
-  type ElementTarget,
   type SlideBackground,
   type Transition
 } from '@htmlppt/core';
-import { hashHtml, parseDeckHtml, writeDeckFileAtomic } from '@htmlppt/core/node';
-import { readSession, sessionKey, sessionsDirectory } from '@htmlppt/host';
+import {
+  createDeckFileAtomic,
+  parseDeckHtml,
+  writeDeckFileAtomic
+} from '@htmlppt/core/node';
+import { RUNTIME_SOURCE } from '@htmlppt/runtime';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  DeckConflictError,
-  createDeckService,
-  type DeckSnapshot,
-  type SaveResult
-} from './deck-service.js';
+  DeckAccess,
+  cliBinPath,
+  hostUrl,
+  waitForSession
+} from './deck-access.js';
+import {
+  ToolError,
+  jsonResult,
+  runTool,
+  type ToolContext
+} from './errors.js';
 import authoring from './resources/authoring.md?raw';
 import contract from './resources/contract.md?raw';
 import example from './resources/example.html?raw';
 
-const SESSION_POLL_INTERVAL_MS = 100;
-const SESSION_TIMEOUT_MS = 5_000;
-const WORKFLOW_FORMATS = ['html', 'pdf', 'png'] as const;
+const EXAMPLE_RUNTIME_MARKER = '<script data-ppt-runtime="1"></script>';
 
-interface ToolContext {
-  path?: string;
-  slideId?: string;
-  target?: ElementTarget;
-}
-
-class ToolError extends Error {
-  readonly code: string;
-  readonly details: Record<string, unknown>;
-
-  constructor(
-    code: string,
-    message: string,
-    details: Record<string, unknown> = {}
-  ) {
-    super(message);
-    this.name = 'ToolError';
-    this.code = code;
-    this.details = details;
+function withRuntimeSource(html: string): string {
+  if (!html.includes(EXAMPLE_RUNTIME_MARKER)) {
+    throw new Error(
+      'The example resource is missing its data-ppt-runtime script marker.'
+    );
   }
-}
-
-function jsonResult(value: unknown): CallToolResult {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(value) }]
-  };
-}
-
-function errorResult(payload: Record<string, unknown>): CallToolResult {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(payload) }],
-    isError: true
-  };
-}
-
-function errorPayload(
-  error: unknown,
-  context: ToolContext
-): Record<string, unknown> {
-  const base: Record<string, unknown> = {};
-  if (context.path) base.path = context.path;
-  if (context.slideId) base.slideId = context.slideId;
-  if (context.target) base.target = context.target;
-
-  if (error instanceof ToolError) {
-    return {
-      code: error.code,
-      message: error.message,
-      ...base,
-      ...error.details
-    };
-  }
-  if (error instanceof DeckConflictError) {
-    return {
-      code: 'conflict',
-      message: `${error.message} Re-read the deck with get_outline or read_slide, then retry.`,
-      ...base,
-      ...(error.currentRevision
-        ? { currentRevision: error.currentRevision }
-        : {})
-    };
-  }
-  if (error instanceof DeckMutationError) {
-    return { code: error.code, message: error.message, ...base };
-  }
-
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'ENOENT') {
-    return {
-      code: 'file-not-found',
-      message: `Deck file not found: ${context.path ?? 'unknown path'}.`,
-      ...base
-    };
-  }
-  if (code === 'EACCES' || code === 'EISDIR' || code === 'EPERM') {
-    return {
-      code: 'file-unreadable',
-      message: `Deck file could not be read: ${context.path ?? 'unknown path'}.`,
-      ...base
-    };
-  }
-  return {
-    code: 'internal',
-    message: error instanceof Error ? error.message : String(error),
-    ...base
-  };
-}
-
-async function runTool(
-  context: ToolContext,
-  action: () => Promise<Record<string, unknown>>
-): Promise<CallToolResult> {
-  try {
-    return jsonResult(await action());
-  } catch (error) {
-    return errorResult(errorPayload(error, context));
-  }
-}
-
-/**
- * Resolves paths against the server cwd and keeps the last read or written
- * snapshot per file. Mutations compare against that revision so an external
- * edit produces a structured conflict instead of silently overwriting it.
- */
-class DeckAccess {
-  private readonly cwd: string;
-  private readonly snapshots = new Map<string, DeckSnapshot>();
-
-  constructor(cwd: string) {
-    this.cwd = path.resolve(cwd);
-  }
-
-  get workingDirectory(): string {
-    return this.cwd;
-  }
-
-  resolve(input: string): string {
-    return path.resolve(this.cwd, input);
-  }
-
-  async read(filePath: string): Promise<DeckSnapshot> {
-    const service = await createDeckService(filePath);
-    const snapshot = await service.load(filePath);
-    this.snapshots.set(filePath, snapshot);
-    return snapshot;
-  }
-
-  async mutate(
-    filePath: string,
-    mutation: (draft: Document) => void
-  ): Promise<SaveResult> {
-    const service = await createDeckService(filePath);
-    const snapshot =
-      this.snapshots.get(filePath) ?? (await service.load(filePath));
-    const result = await service.save(filePath, snapshot, mutation);
-    this.snapshots.set(filePath, {
-      document: result.document,
-      html: serializeDeck(result.document),
-      revision: result.revision,
-      filePath
-    });
-    return result;
-  }
-
-  remember(filePath: string, snapshot: DeckSnapshot): void {
-    this.snapshots.set(filePath, snapshot);
-  }
-}
-
-function cliBinPath(): string {
-  const bundled = fileURLToPath(new URL('./cli.js', import.meta.url));
-  if (existsSync(bundled)) return bundled;
-  return fileURLToPath(new URL('../../cli/dist/bin.js', import.meta.url));
-}
-
-function hostUrl(port: number, token: string): string {
-  return `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function waitForSession(
-  filePath: string
-): Promise<{ port: number; token: string }> {
-  const sessionFile = path.join(
-    sessionsDirectory(),
-    `${sessionKey(filePath)}.json`
-  );
-  const deadline = Date.now() + SESSION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const session = await readSession(sessionFile);
-    if (session && session.path === filePath) {
-      return { port: session.port, token: session.token };
-    }
-    await delay(SESSION_POLL_INTERVAL_MS);
-  }
-  throw new ToolError(
-    'editor-timeout',
-    'The editor did not write a session within 5 seconds. Run "htmlppt open <path> --no-browser" manually and check that the editor build exists.'
+  return html.replace(
+    EXAMPLE_RUNTIME_MARKER,
+    () => `<script data-ppt-runtime="1">${RUNTIME_SOURCE}</script>`
   );
 }
 
-async function assertDeckAbsent(filePath: string): Promise<void> {
-  try {
-    await access(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  throw new ToolError(
-    'file-exists',
-    `Deck already exists: ${filePath}. Choose another path instead of overwriting it.`
-  );
-}
+const exampleDeck = withRuntimeSource(example);
 
 const deckPath = z
   .string()
@@ -416,8 +236,7 @@ export function registerTools(
     },
     async (args) => {
       const filePath = accessor.resolve(args.path);
-      return runTool({ path: filePath }, async () => {
-        await assertDeckAbsent(filePath);
+      return runTool({ path: filePath, operation: 'write' }, async () => {
         const document = parseDeckHtml(
           args.html ??
             createDeckHtml({
@@ -446,32 +265,14 @@ export function registerTools(
           );
         }
         const html = serializeDeck(document);
-        try {
-          await writeFile(filePath, html, { encoding: 'utf8', flag: 'wx' });
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code === 'EEXIST') {
-            throw new ToolError(
-              'file-exists',
-              `Deck already exists: ${filePath}. Choose another path instead of overwriting it.`
-            );
-          }
-          if (code === 'ENOENT') {
-            throw new ToolError(
-              'directory-not-found',
-              `Parent directory does not exist: ${path.dirname(filePath)}.`
-            );
-          }
-          throw error;
-        }
-        const revision = hashHtml(html);
+        const written = await createDeckFileAtomic(filePath, html);
         accessor.remember(filePath, {
           document,
           html,
-          revision,
+          revision: written.hash,
           filePath
         });
-        return { path: filePath, revision, created: true };
+        return { path: filePath, revision: written.hash, created: true };
       });
     }
   );
@@ -862,10 +663,10 @@ export function registerTools(
     {
       title: 'Export deck',
       description:
-        'Export a deck to HTML. PDF and PNG export are not available in this milestone.',
+        'Export a deck to a self-contained HTML file. Additional formats arrive in a later milestone.',
       inputSchema: {
         path: deckPath,
-        format: z.enum(WORKFLOW_FORMATS).default('html'),
+        format: z.literal('html').default('html'),
         outDir: z
           .string()
           .min(1)
@@ -875,13 +676,8 @@ export function registerTools(
     },
     async (args) => {
       const filePath = accessor.resolve(args.path);
-      return runTool({ path: filePath }, async () => {
-        if (args.format !== 'html') {
-          throw new ToolError(
-            'unsupported-format',
-            `Only html export is available in this milestone. Received format "${args.format}".`
-          );
-        }
+      const context: ToolContext = { path: filePath };
+      return runTool(context, async () => {
         const snapshot = await accessor.read(filePath);
         const validation = validateDeck(snapshot.document);
         if (!validation.valid) {
@@ -897,11 +693,13 @@ export function registerTools(
         const outputDirectory = args.outDir
           ? accessor.resolve(args.outDir)
           : parsedPath.dir;
-        await mkdir(outputDirectory, { recursive: true });
         const outputPath = path.join(
           outputDirectory,
           `${parsedPath.name}.export.html`
         );
+        context.operation = 'write';
+        context.outputPath = outputPath;
+        await mkdir(outputDirectory, { recursive: true });
         await writeDeckFileAtomic(
           outputPath,
           serializeExport(snapshot.document)
@@ -956,7 +754,7 @@ export function registerResources(server: McpServer): void {
       mimeType: 'text/html'
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, mimeType: 'text/html', text: example }]
+      contents: [{ uri: uri.href, mimeType: 'text/html', text: exampleDeck }]
     })
   );
 }
