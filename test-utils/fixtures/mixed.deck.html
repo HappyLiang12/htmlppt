@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mixed size deck</title>
+  <style>
+    .slide { position: relative; overflow: hidden; background: #fff; }
+    h1 { margin: 0; padding: 80px; font-size: 88px; }
+    .band { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; background: #e8a33d; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1" data-width="1600" data-height="900">
+      <h1 data-ppt-el="e1">Wide slide</h1>
+      <div class="band" data-ppt-el="e2"></div>
+    </section>
+    <section class="slide" data-slide-id="s2" data-width="1280" data-height="720">
+      <h1 data-ppt-el="e1" style="font-size: 64px">Narrow slide</h1>
+      <div class="band" data-ppt-el="e2" style="background: #2f855a"></div>
+    </section>
+  </main>
+</body>
+</html>
