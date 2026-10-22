@@ -12,6 +12,7 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
+      "@htmlppt/cli": ["packages/cli/src/index.ts"],
       "@htmlppt/core": ["packages/core/src/index.ts"],
       "@htmlppt/core/node": ["packages/core/src/node.ts"],
       "@htmlppt/host": ["packages/host/src/index.ts"],

@@ -37,11 +37,41 @@ const DEFAULT_STREAMS = {
 const STOP_TIMEOUT_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 100;
 
-function editorDir(): string {
-  return (
-    process.env.HTMLPPT_EDITOR_DIR ??
+/**
+ * Resolves the editor build for both the workspace and the installed package.
+ * `HTMLPPT_EDITOR_DIR` is an explicit override, so an invalid directory is
+ * reported instead of silently falling back. Without an override, prefer the
+ * package layout (`<package root>/dist/editor`, which is also the bundled
+ * layout) and then the workspace (`packages/editor/dist`).
+ */
+async function editorDir(): Promise<string> {
+  const override = process.env.HTMLPPT_EDITOR_DIR;
+  if (override !== undefined && override.length > 0) {
+    await requireEditorBuild(override);
+    return override;
+  }
+
+  const candidates = [
+    fileURLToPath(new URL('../dist/editor', import.meta.url)),
     fileURLToPath(new URL('../../editor/dist', import.meta.url))
-  );
+  ];
+  for (const candidate of candidates) {
+    try {
+      await access(join(candidate, 'index.html'), constants.R_OK);
+      return candidate;
+    } catch {
+      // Try the next layout.
+    }
+  }
+  throw new Error('Editor build not found. Run "npm run build" first.');
+}
+
+async function requireEditorBuild(directory: string): Promise<void> {
+  try {
+    await access(join(directory, 'index.html'), constants.R_OK);
+  } catch {
+    throw new Error('Editor build not found. Run "npm run build" first.');
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -441,12 +471,7 @@ export async function runCli(
         return;
       }
 
-      const directory = editorDir();
-      try {
-        await access(join(directory, 'index.html'));
-      } catch {
-        throw new Error('Editor build not found. Run "npm run build" first.');
-      }
+      const directory = await editorDir();
       const token = randomUUID();
       let host: Awaited<ReturnType<typeof startHost>>;
       try {

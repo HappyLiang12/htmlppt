@@ -276,7 +276,7 @@ afterAll(async () => {
 });
 
 describe('htmlppt MCP stdio server', () => {
-  it('completes the initialize handshake and lists every tool', async () => {
+  it('completes the initialize handshake and lists every tool @feature:mcp', async () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual(EXPECTED_TOOLS);
