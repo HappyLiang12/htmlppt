@@ -2569,11 +2569,23 @@ Deferred beyond M1:
 
 ---
 
+## Task 10: Whole-branch review fixes (executed)
+
+The final whole-branch review found one Critical and three Important integration defects that per-task reviews could not see:
+
+- `mutateDeck` now normalizes the clone **before** the callback as well as after, so class-only decks cannot collapse to a single slide when a mutation writes the first `data-slide-id`.
+- Nested slides are a validation error (`nested-slide`) and are rejected by the mutation gate; inserted HTML cannot create a slide inside a slide.
+- `beforeprint` restores each slide's original inline display instead of removing the property, so authored `display:none` stays hidden and authored flex prints as flex.
+- `addSlide` inherits the anchor slide's tag, class attribute, and canvas size, so non-1600 decks do not gain a mixed-canvas slide and plain-section decks do not shift detection precedence.
+- Slide ids are trimmed in detection; outline goldens exist for all six fixtures; the tautological gate test was replaced.
+
+These supersede the corresponding code in Tasks 5–8 where they differ.
+
 ## Self-Review
 
 - **Spec coverage:** §4 contract attributes are validated and preserved; §11 normalization (ids, position injectable, artifact cleanup), validation errors/warnings, diagnostics with slide id and location; §6 read models `getOutline`/`readSlide`; MCP mutation list minus assets/tables/charts/groups (M4) and background (editor settings, M3/M4), all slide ops, notes, transitions, and element ops covered; runtime §Runtime initial state, print, navigation guards; test framework §5 fixtures and golden files.
 - **Fixture counts:** `basic` is 2 slides (matches the M0 fixture); host tests depend on it.
-- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). Normalization follows detection precedence: partially annotated decks normalize only the detected slides; ignored classed siblings are a detection-semantics gap deferred to M2/M3, not silently promoted. `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
+- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). Normalization follows detection precedence: partially annotated decks normalize only the detected slides; ignored classed siblings are a detection-semantics gap deferred to M2/M3, not silently promoted. Mutation functions are intended to run through `mutateDeck` (pre-normalization is what keeps class-only decks consistent); direct calls on raw class-only decks remain a documented limitation. `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
 - **Type consistency:** `SlideInfo` gains `widthValid`/`heightValid`; every consumer uses `readCanvasSize`; `DeckMutationError` is exported from both `target.ts` and `mutations.ts` (same class); `Transition` is used by template-independent mutations only.
 - **No placeholders:** every task names exact files, codes, messages, test code, and commands. The only generated artifacts are golden files, with an explicit inspection checklist.
 
