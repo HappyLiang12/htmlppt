@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseDeck } from '../slide-doc.js';
+import { useDeckController } from '../use-deck-controller.js';
 import { Inspector, type InspectorProps } from './Inspector.js';
 
 const DECK_HTML = `<!doctype html>
@@ -43,7 +44,9 @@ afterEach(async () => {
   container.remove();
 });
 
-function props(overrides: Partial<InspectorProps> = {}): InspectorProps {
+type InspectorInputs = Omit<InspectorProps, 'pendingActions'>;
+
+function props(overrides: Partial<InspectorInputs> = {}): InspectorInputs {
   const first = slides[0];
   if (!first) throw new Error('Missing fixture slide.');
   return {
@@ -60,9 +63,15 @@ function props(overrides: Partial<InspectorProps> = {}): InspectorProps {
   };
 }
 
-async function render(overrides: Partial<InspectorProps> = {}): Promise<void> {
+function InspectorHarness(inputs: InspectorInputs) {
+  const { actions } = useDeckController({ token: '' });
+  return createElement(Inspector, { ...inputs, pendingActions: actions });
+}
+
+async function render(overrides: Partial<InspectorInputs> = {}): Promise<void> {
   await act(async () => {
-    root.render(createElement(Inspector, props(overrides)));
+    const inputs = props(overrides);
+    root.render(createElement(InspectorHarness, { ...inputs, key: inputs.slide?.id }));
   });
 }
 
@@ -116,7 +125,7 @@ async function click(button: HTMLButtonElement): Promise<void> {
 }
 
 describe('inspector numeric fields', () => {
-  it('restores the formatted baseline when the edit is rejected', async () => {
+  it('restores the formatted baseline when a valid edit cannot be applied', async () => {
     const commits: Array<{ field: string; value: number }> = [];
     await render({
       selection: { slideIndex: 0, path: [0], elementId: 'e1' },
@@ -146,11 +155,12 @@ describe('inspector numeric fields', () => {
 
     expect(commits).toEqual([{ field: 'x', value: 999 }]);
     expect(inputByTestId('field-x').value).toBe('120');
+    expect(inputByTestId('field-x').getAttribute('aria-invalid')).toBe('false');
   });
 });
 
 describe('inspector notes draft', () => {
-  it('drops a draft when the slide changes programmatically', async () => {
+  it('drops a draft on an approved replacement without committing it to the next slide', async () => {
     const onSetNotes = vi.fn();
     await render({ onSetNotes });
 

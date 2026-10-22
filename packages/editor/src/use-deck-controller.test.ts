@@ -220,16 +220,14 @@ describe('useDeckController', () => {
     expect(controller.state.activeIndex).toBe(0);
 
     await act(async () => {
-      await expect(
-        controller.actions.commitMaster((master) => {
-          const deck = master.querySelector('[data-ppt-deck]');
-          const first = master.querySelector('section');
-          if (!deck || !first) throw new Error('Missing deck fixture nodes.');
-          const added = first.cloneNode(true) as Element;
-          added.setAttribute('data-slide-id', 's3');
-          deck.appendChild(added);
-        })
-      ).rejects.toThrow();
+      await controller.actions.commitMaster((master) => {
+        const deck = master.querySelector('[data-ppt-deck]');
+        const first = master.querySelector('section');
+        if (!deck || !first) throw new Error('Missing deck fixture nodes.');
+        const added = first.cloneNode(true) as Element;
+        added.setAttribute('data-slide-id', 's3');
+        deck.appendChild(added);
+      });
     });
     act(() => {
       controller.actions.showSlide(1);
@@ -265,7 +263,7 @@ describe('useDeckController', () => {
     });
 
     await act(async () => {
-      await expect(controller.actions.deleteSelection()).rejects.toThrow();
+      await controller.actions.deleteSelection();
     });
     const slide = () => controller.state.slides[0]?.element;
     expect(slide()?.querySelector('h1')).toBeNull();
@@ -296,7 +294,7 @@ describe('useDeckController', () => {
     });
 
     await act(async () => {
-      await expect(controller.actions.pasteObjects()).rejects.toThrow();
+      await controller.actions.pasteObjects();
     });
     const slide = () => controller.state.slides[0]?.element;
     const headings = slide() ? Array.from(slide()!.querySelectorAll('h1')) : [];
@@ -430,5 +428,100 @@ describe('useDeckController', () => {
       false
     );
     expect(controller.state.status).toBe('ready');
+  });
+
+  it('ignores the revision it just saved', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: DECK.revision,
+        source: 'editor'
+      });
+    });
+
+    expect(controller.state.conflict).toBeNull();
+    expect(controller.state.status).toBe('ready');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.activeIndex).toBe(0);
+  });
+
+  it('conflicts on a dirty external revision and reload remaps by slide and element id', async () => {
+    const external: DeckResponse = {
+      revision: 'revision-external',
+      filePath: 'fixture.html',
+      html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture deck</title></head>
+<body>
+<main data-ppt-deck>
+<section class="slide" data-slide-id="s0"><h1 data-ppt-el="e1">Inserted</h1></section>
+<section class="slide" data-slide-id="s1"><h1 data-ppt-el="e1">First external</h1></section>
+<section class="slide" data-slide-id="s2"><h1 data-ppt-el="e1">Second external</h1></section>
+</main>
+</body>
+</html>`
+    };
+
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.showSlide(1);
+      controller.actions.select({
+        slideIndex: 1,
+        path: [0],
+        elementId: 'e1'
+      });
+      controller.actions.applySlideMutation(0, (slide) => {
+        const heading = slide.querySelector('h1');
+        if (!heading) throw new Error('Missing heading.');
+        heading.textContent = 'Local edit';
+      });
+    });
+    expect(controller.state.dirty).toBe(true);
+
+    act(() => {
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: external.revision,
+        source: 'external'
+      });
+    });
+    expect(controller.state.conflict).toEqual({
+      revision: external.revision,
+      source: 'external'
+    });
+    expect(controller.state.status).toBe('conflict');
+
+    // Further edits stay in conflict; they must not look like a save attempt.
+    await act(async () => {
+      await controller.actions.commitMaster((master) => {
+        const heading = master.querySelector('h1');
+        if (!heading) throw new Error('Missing heading.');
+        heading.textContent = 'Local while conflicted';
+      });
+    });
+    expect(controller.state.status).toBe('conflict');
+    expect(controller.state.conflict).not.toBeNull();
+
+    await act(async () => {
+      await controller.actions.reload(external);
+    });
+
+    expect(controller.state.conflict).toBeNull();
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.status).toBe('ready');
+    expect(controller.state.activeIndex).toBe(2);
+    expect(controller.state.selection).toEqual({
+      slideIndex: 2,
+      path: [0],
+      elementId: 'e1'
+    });
+    expect(controller.state.srcDoc).toContain('Second external');
   });
 });

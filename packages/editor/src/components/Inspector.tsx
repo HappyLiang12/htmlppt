@@ -6,11 +6,13 @@ import {
 } from 'react';
 import type { SlideInfo, Transition } from '@htmlppt/core';
 import type { SelectionTarget } from '../selection';
+import type { DeckControllerActions } from '../use-deck-controller';
 import {
   backgroundOf,
   formatGeometryValue,
   geometryCommitValue,
   notesOf,
+  parseGeometryValue,
   summarizeObjects,
   transitionOf,
   type BackgroundKind,
@@ -21,7 +23,11 @@ import {
 
 export type InspectorTab = 'design' | 'text' | 'notes';
 
+type PendingActions = Pick<DeckControllerActions,
+  'changePendingEdit' | 'cancelPendingEdit' | 'settlePendingEdits'>;
+
 export interface InspectorProps {
+  pendingActions: PendingActions;
   slide: SlideInfo | undefined;
   selection: SelectionTarget | null;
   /** Number of selected objects; more than one disables geometry fields. */
@@ -49,6 +55,7 @@ const HEADING_CLASS =
   'text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500';
 
 interface NumberFieldProps {
+  pendingActions: PendingActions;
   field: GeometryField;
   label: string;
   value: number | null;
@@ -57,6 +64,7 @@ interface NumberFieldProps {
 }
 
 function NumberField({
+  pendingActions,
   field,
   label,
   value,
@@ -65,30 +73,42 @@ function NumberField({
 }: NumberFieldProps) {
   const formatted = value === null ? '' : formatGeometryValue(value);
   const [draft, setDraft] = useState(formatted);
-  const focusedRef = useRef(false);
-  const skipCommitRef = useRef(false);
+  const [invalid, setInvalid] = useState(false);
+  const pendingRef = useRef(false);
+  const owner = `geometry-${field}`;
 
   useEffect(() => {
-    if (!focusedRef.current) setDraft(formatted);
+    if (!pendingRef.current) setDraft(formatted);
   }, [formatted]);
 
-  const reset = () => setDraft(formatted);
-  const commit = () => {
-    if (skipCommitRef.current) {
-      skipCommitRef.current = false;
-      reset();
-      return;
-    }
-    if (value === null) {
-      reset();
-      return;
-    }
-    const parsed = geometryCommitValue(field, draft, value);
-    if (parsed === null) {
-      reset();
-      return;
-    }
-    if (!onCommit(field, parsed)) reset();
+  const reset = () => {
+    pendingRef.current = false;
+    setInvalid(false);
+    setDraft(formatted);
+  };
+
+  const change = (next: string) => {
+    setDraft(next);
+    setInvalid(false);
+    pendingRef.current = next !== formatted;
+    pendingActions.changePendingEdit(owner, pendingRef.current ? {
+      apply: () => {
+        if (value === null || parseGeometryValue(field, next) === null) {
+          setInvalid(true);
+          return false;
+        }
+        const parsed = geometryCommitValue(field, next, value);
+        if (parsed !== null && !onCommit(field, parsed)) {
+          reset();
+          return true;
+        }
+        pendingRef.current = false;
+        setDraft(parsed === null ? formatted : formatGeometryValue(parsed));
+        setInvalid(false);
+        return true;
+      },
+      discard: reset
+    } : null);
   };
 
   return (
@@ -101,30 +121,27 @@ function NumberField({
         aria-label={label}
         value={draft}
         disabled={disabled}
-        onFocus={() => {
-          focusedRef.current = true;
-        }}
-        onBlur={() => {
-          focusedRef.current = false;
-          commit();
-        }}
-        onChange={(event) => setDraft(event.target.value)}
+        aria-invalid={invalid}
+        onBlur={() => pendingActions.settlePendingEdits(owner)}
+        onChange={(event) => change(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault();
             event.currentTarget.blur();
           } else if (event.key === 'Escape') {
-            skipCommitRef.current = true;
+            pendingActions.cancelPendingEdit(owner);
             event.currentTarget.blur();
           }
         }}
         className={FIELD_CLASS}
       />
+      {invalid && <span role="alert" className="text-[11px] text-red-300">數值無效，請修正或按 Escape 取消。</span>}
     </label>
   );
 }
 
 export function Inspector({
+  pendingActions,
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
@@ -144,8 +161,7 @@ export function Inspector({
   });
   const notes = notesOf(slide?.element);
   const [notesDraft, setNotesDraft] = useState(notes);
-  const notesFocusedRef = useRef(false);
-  const notesSlideIdRef = useRef<string | undefined>(undefined);
+  const notesPendingRef = useRef(false);
 
   const background = backgroundOf(slide?.element);
   const [backgroundKind, setBackgroundKind] = useState<BackgroundKind>(
@@ -155,19 +171,14 @@ export function Inspector({
     background?.value ?? ''
   );
   const [backgroundError, setBackgroundError] = useState('');
+  const backgroundPendingRef = useRef(false);
 
   useEffect(() => {
-    // A programmatic slide change invalidates any in-flight notes draft.
-    notesFocusedRef.current = false;
-    notesSlideIdRef.current = undefined;
-    setNotesDraft(notes);
-  }, [slide?.id]);
-
-  useEffect(() => {
-    if (!notesFocusedRef.current) setNotesDraft(notes);
+    if (!notesPendingRef.current) setNotesDraft(notes);
   }, [notes]);
 
   useEffect(() => {
+    if (backgroundPendingRef.current) return;
     setBackgroundKind(background?.kind ?? 'color');
     setBackgroundValue(background?.value ?? '');
     setBackgroundError('');
@@ -206,21 +217,35 @@ export function Inspector({
     if (next) selectTab(next, true);
   };
 
-  const applyBackground = () => {
-    const value = backgroundValue.trim();
-    if (!value) {
-      setBackgroundError('背景值不可為空。');
-      return;
-    }
+  const changeBackground = (kind: BackgroundKind, value: string) => {
+    setBackgroundKind(kind);
     setBackgroundValue(value);
-    setBackgroundError(
-      onSetBackground({ kind: backgroundKind, value })
-        ? ''
-        : '背景值無效，未套用。'
-    );
+    setBackgroundError('');
+    backgroundPendingRef.current = kind !== (background?.kind ?? 'color') || value !== (background?.value ?? '');
+    pendingActions.changePendingEdit('background', backgroundPendingRef.current ? {
+      apply: () => {
+        if (!value.trim() || !onSetBackground({ kind, value: value.trim() })) {
+          setBackgroundError('背景值無效，請修正或按 Escape 取消。');
+          return false;
+        }
+        backgroundPendingRef.current = false;
+        setBackgroundValue(value.trim());
+        setBackgroundError('');
+        return true;
+      },
+      discard: () => {
+        backgroundPendingRef.current = false;
+        setBackgroundKind(background?.kind ?? 'color');
+        setBackgroundValue(background?.value ?? '');
+        setBackgroundError('');
+      }
+    } : null);
   };
 
+  const applyBackground = () => pendingActions.settlePendingEdits('background');
+
   const clearBackground = () => {
+    pendingActions.cancelPendingEdit('background');
     setBackgroundError(onClearBackground() ? '' : '無法清除背景。');
     setBackgroundValue('');
   };
@@ -338,6 +363,7 @@ export function Inspector({
                 label="X"
                 value={geometry?.x ?? null}
                 disabled={readOnly || geometry === null}
+                pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
               <NumberField
@@ -345,6 +371,7 @@ export function Inspector({
                 label="Y"
                 value={geometry?.y ?? null}
                 disabled={readOnly || geometry === null}
+                pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
               <NumberField
@@ -352,6 +379,7 @@ export function Inspector({
                 label="寬"
                 value={geometry?.width ?? null}
                 disabled={readOnly || geometry === null}
+                pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
               <NumberField
@@ -359,6 +387,7 @@ export function Inspector({
                 label="高"
                 value={geometry?.height ?? null}
                 disabled={readOnly || geometry === null}
+                pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
               <div className="col-span-2">
@@ -367,7 +396,8 @@ export function Inspector({
                   label="旋轉"
                   value={geometry?.rotation ?? null}
                   disabled={readOnly || geometry === null}
-                  onCommit={onCommitGeometry}
+                  pendingActions={pendingActions}
+                onCommit={onCommitGeometry}
                 />
               </div>
             </div>
@@ -403,10 +433,9 @@ export function Inspector({
                   data-testid="background-kind"
                   aria-label="背景類型"
                   value={backgroundKind}
-                  onChange={(event) => {
-                    setBackgroundKind(event.target.value as BackgroundKind);
-                    setBackgroundValue('');
-                    setBackgroundError('');
+                  onChange={(event) => changeBackground(event.target.value as BackgroundKind, '')}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') pendingActions.cancelPendingEdit('background');
                   }}
                   className={`${FIELD_CLASS} w-24 shrink-0`}
                 >
@@ -426,15 +455,13 @@ export function Inspector({
                         ? 'linear-gradient(…)'
                         : 'https://…'
                   }
-                  onChange={(event) => {
-                    setBackgroundValue(event.target.value);
-                    // A stale rejection alert must not outlive the correction.
-                    setBackgroundError('');
-                  }}
+                  onChange={(event) => changeBackground(backgroundKind, event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault();
                       applyBackground();
+                    } else if (event.key === 'Escape') {
+                      pendingActions.cancelPendingEdit('background');
                     }
                   }}
                   className={FIELD_CLASS}
@@ -505,20 +532,25 @@ export function Inspector({
             value={notesDraft}
             rows={8}
             placeholder="輸入備註…"
-            onFocus={() => {
-              notesFocusedRef.current = true;
-              notesSlideIdRef.current = slide?.id;
+            onChange={(event) => {
+              const next = event.target.value;
+              setNotesDraft(next);
+              notesPendingRef.current = next !== notes;
+              pendingActions.changePendingEdit('notes', notesPendingRef.current ? {
+                apply: () => {
+                  onSetNotes(next);
+                  notesPendingRef.current = false;
+                  return true;
+                },
+                discard: () => {
+                  notesPendingRef.current = false;
+                  setNotesDraft(notes);
+                }
+              } : null);
             }}
-            onChange={(event) => setNotesDraft(event.target.value)}
-            onBlur={() => {
-              notesFocusedRef.current = false;
-              const draftSlideId = notesSlideIdRef.current;
-              notesSlideIdRef.current = undefined;
-              if (draftSlideId !== slide?.id) {
-                setNotesDraft(notes);
-                return;
-              }
-              if (notesDraft !== notes) onSetNotes(notesDraft);
+            onBlur={() => pendingActions.settlePendingEdits('notes')}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') pendingActions.cancelPendingEdit('notes');
             }}
             className={`${FIELD_CLASS} resize-y font-sans`}
           />

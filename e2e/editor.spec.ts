@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   expect,
   test,
+  type APIResponse,
   type FrameLocator,
   type Locator,
   type Page,
@@ -175,7 +176,7 @@ async function openDeck(
     await page.goto(host.url);
     const frame = page.frameLocator(FRAME_SELECTOR);
     await ready(frame);
-    await expect(page.getByTestId('save-status')).toHaveText('已載入');
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
     return { directory, file, host, frame };
   } catch (error) {
     if (host) await host.stop();
@@ -294,6 +295,105 @@ async function holdNextDeckSave(page: Page): Promise<HeldDeckSave> {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function holdDeckResponses(page: Page, count = 1, method = 'PUT') {
+  const holds = Array.from({ length: count }, () => ({
+    gate: deferred<void>(),
+    forwarded: deferred<APIResponse>(),
+    delivered: deferred<void>()
+  }));
+  let index = 0;
+  await page.route('**/api/deck', async (route) => {
+    const hold = route.request().method() === method ? holds[index++] : undefined;
+    if (!hold) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch({ maxRetries: 0 });
+    hold.forwarded.resolve(response);
+    await hold.gate.promise;
+    await route.fulfill({ response });
+    hold.delivered.resolve();
+  });
+  return holds;
+}
+
+async function observeLiveSync(page: Page) {
+  const session = await page.context().newCDPSession(page);
+  const events: { revision: string; source?: string }[] = [];
+  const errors: string[] = [];
+  const saves: Request[] = [];
+  await session.send('Network.enable');
+  session.on('Network.eventSourceMessageReceived', (event) => {
+    if (event.eventName === 'hello' || event.eventName === 'revision') {
+      events.push(JSON.parse(event.data) as { revision: string; source?: string });
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.toString()));
+  page.on('request', (request) => {
+    if (isDeckSaveRequest(request)) saves.push(request);
+  });
+  await page.addInitScript(() => {
+    const rejections: string[] = [];
+    const browser = globalThis as unknown as {
+      addEventListener(type: string, listener: (event: { reason: unknown }) => void): void;
+    };
+    Object.assign(globalThis, { liveSyncRejections: rejections });
+    browser.addEventListener('unhandledrejection', (event) => {
+      rejections.push(String(event.reason));
+    });
+  });
+  return {
+    events,
+    saves,
+    async healthy() {
+      expect(errors, 'pageerror (including RangeError)').toEqual([]);
+      expect(await page.evaluate(() => Reflect.get(globalThis, 'liveSyncRejections')),
+        'unhandledrejection').toEqual([]);
+    }
+  };
+}
+
+async function hostDeck(page: Page, editor: EditorHarness) {
+  const url = new URL(editor.host.url);
+  const response = await page.request.get(new URL('/api/deck', url).href, {
+    headers: { authorization: `Bearer ${url.searchParams.get('token')}` }
+  });
+  expect(response.status()).toBe(200);
+  return await response.json() as { html: string; revision: string };
+}
+
+async function createRealSaveConflict(page: Page, editor: EditorHarness) {
+  const held = await holdNextDeckSave(page);
+  try {
+    await editor.frame.locator('[data-ppt-el="box1"]').click();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Control+s');
+    const request = await held.request;
+    await writeExternalHeading(editor, 'External conflict');
+    const external = await hostDeck(page, editor);
+    expect((request.postDataJSON() as { baseRevision: string }).baseRevision)
+      .not.toBe(external.revision);
+    held.release();
+    const response = await held.response;
+    expect(response.status()).toBe(409);
+    expect(await response.json()).toEqual({ error: 'conflict', revision: external.revision });
+    await expect(page.getByTestId('conflict-banner')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('衝突');
+    expect((await inlineGeometryOf(editor.frame.locator('[data-ppt-el="box1"]'))).left).toBe(121);
+    expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('120px');
+    expect(await savedDocument(editor)).toContain('External conflict');
+  } finally {
+    held.release();
+    await page.unroute('**/api/deck');
+  }
+}
+
 function playFrameFor(page: Page): FrameLocator {
   return page.frameLocator(PLAY_FRAME_SELECTOR);
 }
@@ -324,6 +424,26 @@ function savedSlideOrder(html: string): string[] {
 
 async function savedDocument(editor: EditorHarness): Promise<string> {
   return readFile(join(editor.directory, editor.file), 'utf8');
+}
+
+/**
+ * Replaces the first slide heading in the deck file behind the host's back.
+ * The host watcher turns that write into an external revision.
+ */
+async function writeExternalHeading(
+  editor: EditorHarness,
+  heading: string
+): Promise<void> {
+  const path = join(editor.directory, editor.file);
+  const html = await readFile(path, 'utf8');
+  const replaced = html.replace(
+    /(<h1\b[^>]*>)[^<]*(<\/h1>)/,
+    `$1${heading}$2`
+  );
+  if (replaced === html) {
+    throw new Error('Could not find a heading to replace.');
+  }
+  await writeFile(path, replaced, 'utf8');
 }
 
 async function dragSorterTile(
@@ -656,7 +776,7 @@ test(
       await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
       expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
       await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
     } finally {
       await closeEditor(editor);
     }
@@ -1101,7 +1221,7 @@ test(
       await page.reload();
       const reloadedFrame = page.frameLocator(FRAME_SELECTOR);
       await expect(reloadedFrame.locator('h1')).toContainText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
 
       const afterReload = await slideInnerGeometry(reloadedFrame);
       expect(afterReload.position).toBe('absolute');
@@ -1132,7 +1252,7 @@ test(
       expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
       expect(await slideInnerGeometry(editor.frame)).toEqual(wrapperBefore);
       await expect(heading).toHaveText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
     } finally {
       await closeEditor(editor);
     }
@@ -1172,7 +1292,7 @@ test(
       });
       await expect(outline).toHaveCount(0);
       await expect(heading).toHaveText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
 
       // pointercancel uses the same cancellation path.
       await heading.click();
@@ -1231,7 +1351,7 @@ test(
         await page.mouse.up();
       });
       await expect(outline).toHaveCount(0);
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
     } finally {
       await closeEditor(editor);
     }
@@ -1296,7 +1416,7 @@ test(
       );
 
       await expect(page.getByTestId('toolbar')).toBeVisible();
-      await expect(page.getByTestId('play')).toBeDisabled();
+      await expect(page.getByTestId('play')).toBeEnabled();
       await expect(page.getByTestId('export-html')).toBeDisabled();
     } finally {
       await closeEditor(editor);
@@ -1346,7 +1466,7 @@ test(
       await page.reload();
       const frame = page.frameLocator(FRAME_SELECTOR);
       await expect(frame.locator('h1')).toContainText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       await expect(page.getByTestId('thumbnail')).toHaveCount(3);
       expect(await slideIds(page)).toEqual(addedIds);
       await expect.poll(() => slideTitles(page)).toEqual([
@@ -1500,7 +1620,7 @@ test(
       await page.reload();
       const frame = page.frameLocator(FRAME_SELECTOR);
       await expect(frame.locator('h1')).toHaveText('Untitled deck — 2');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       expect(await slideIds(page)).toEqual(reorderedIds);
     } finally {
       await closeEditor(editor);
@@ -1761,7 +1881,7 @@ test(
       await page.reload();
       const frame = page.frameLocator(FRAME_SELECTOR);
       await expect(frame.locator('[data-ppt-el="box1"]')).toBeVisible();
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       expect(
         (await inlineGeometryOf(frame.locator('[data-ppt-el="box1"]'))).left
       ).toBe(200);
@@ -1845,7 +1965,7 @@ test(
         .toBe(true);
 
       await page.reload();
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       await expect(page.getByTestId('transition-select')).toHaveValue('fade');
     } finally {
       await closeEditor(editor);
@@ -2038,7 +2158,7 @@ test(
         await expect(page.getByTestId('background-error')).toBeVisible();
         expect(saveRequests).toHaveLength(0);
         // A rejected value must not touch the deck or flip the save state.
-        await expect(page.getByTestId('save-status')).toHaveText('已載入');
+        await expect(page.getByTestId('save-status')).toHaveText('已同步');
         expect(
           (await savedSlideStyle(editor.directory, editor.file)).background
         ).toBeNull();
@@ -2047,6 +2167,8 @@ test(
         // applied without a lingering error.
         await value.fill('#112233');
         await expect(page.getByTestId('background-error')).toHaveCount(0);
+        await value.press('Escape');
+        await expect(value).toHaveValue('');
 
         // With no history entry from the rejected edit, Undo is a no-op and
         // must not restore a snapshot that drops the unrelated selection.
@@ -2266,7 +2388,7 @@ test(
 
       await page.reload();
       const frame = page.frameLocator(FRAME_SELECTOR);
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       const reloadedCopies = frame
         .locator('[data-ppt-el]')
         .filter({ hasText: 'Nudge me' });
@@ -2554,6 +2676,15 @@ test(
         await expect(page.getByTestId('toolbar')).toBeVisible();
 
         await page.keyboard.press('F5');
+        await expect(page.getByTestId('play-view')).toBeVisible();
+        await expect(playFrameFor(page).locator('h1')).toHaveText(
+          'Untitled deck'
+        );
+        await page.keyboard.press('Escape');
+        await expect(page.getByTestId('toolbar')).toBeVisible();
+
+        // The toolbar Play button routes to the same play-from-first action.
+        await page.getByTestId('play').click();
         await expect(page.getByTestId('play-view')).toBeVisible();
         await expect(playFrameFor(page).locator('h1')).toHaveText(
           'Untitled deck'
@@ -2849,7 +2980,7 @@ test(
         await expectNoDeckSave(page, () =>
           page.keyboard.press('Control+Shift+E')
         );
-        await expect(page.getByTestId('save-status')).toHaveText('已載入');
+        await expect(page.getByTestId('save-status')).toHaveText('已同步');
         expect(
           (
             await inlineGeometryOf(
@@ -2883,7 +3014,7 @@ test(
         page.keyboard.press('Backspace')
       );
       expect(page.url()).toBe(url);
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       expect(
         (
           await inlineGeometryOf(
@@ -3008,7 +3139,7 @@ test(
         },
         1000
       );
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
 
       // No history entry was recorded either, so undo is a quiet no-op.
       await expectNoDeckSave(
@@ -3024,7 +3155,7 @@ test(
       await page.reload();
       const frame = page.frameLocator(FRAME_SELECTOR);
       await expect(frame.locator('[data-ppt-el="box1"]')).toBeVisible();
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       expect(
         (
           await inlineGeometryOf(
@@ -3070,6 +3201,780 @@ test(
         (await copy.getAttribute('data-ppt-el')) ?? ''
       );
     } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+for (const kind of ['text', 'notes', 'numeric', 'background'] as const) {
+  test(`pending ${kind} survives external SSE and explicit reload discards only that draft`,
+    { tag: '@feature:live-sync' }, async ({ page }) => {
+      const observed = await observeLiveSync(page);
+      const editor = await openNudgeDeck(page);
+      try {
+        let draft: Locator;
+        const value = kind === 'numeric' ? 'invalid-number' : kind === 'background' ? 'invalid-color' : 'Unapplied local draft';
+        if (kind === 'text') {
+          draft = editor.frame.locator('h1');
+          await draft.dblclick();
+        } else if (kind === 'notes') {
+          await page.getByTestId('inspector-tab-notes').click();
+          draft = page.getByTestId('notes-input');
+        } else if (kind === 'numeric') {
+          await editor.frame.locator('[data-ppt-el="box1"]').click();
+          draft = page.getByTestId('field-x');
+        } else {
+          draft = page.getByTestId('background-value');
+        }
+        await draft.fill(value);
+        await writeExternalHeading(editor, 'External replaces old draft');
+        await expect(page.getByTestId('conflict-banner')).toBeVisible();
+        if (kind === 'text') await expect(draft).toHaveText(value);
+        else await expect(draft).toHaveValue(value);
+        await expect(page.getByTestId('conflict-overwrite')).toBeDisabled();
+        await expect(page.getByTestId('pending-edit-instruction')).toBeVisible();
+        await expectNoDeckSave(page, async () => {
+          if (kind === 'numeric') await draft.press('Enter');
+          if (kind === 'background') await page.getByTestId('apply-background').click();
+        }, 1000);
+        if (kind === 'numeric' || kind === 'background') {
+          await expect(draft).toHaveValue(value);
+          await expect(page.getByTestId('conflict-overwrite')).toBeDisabled();
+        }
+        await page.getByTestId('conflict-reload').click();
+        await expect(editor.frame.locator('h1')).toHaveText('External replaces old draft');
+        await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+        await expect(page.getByTestId('save-status')).toHaveText('已同步');
+        expect(observed.saves).toHaveLength(0);
+        expect(await savedDocument(editor)).not.toContain(value);
+        if (kind === 'notes') await expect(page.getByTestId('notes-input')).toHaveValue('');
+        if (kind === 'numeric') await expect(page.getByTestId('field-x')).toHaveValue('120');
+        if (kind === 'background') await expect(page.getByTestId('background-value')).toHaveValue('');
+        await observed.healthy();
+      } finally {
+        await closeEditor(editor);
+      }
+    });
+}
+
+for (const kind of ['drag', 'resize', 'rotate'] as const) {
+  test(`pending ${kind} keeps its live geometry through external SSE and cancels without saving`,
+    { tag: '@feature:live-sync' }, async ({ page }) => {
+      const observed = await observeLiveSync(page);
+      const editor = await openNudgeDeck(page);
+      try {
+        const box = editor.frame.locator('[data-ppt-el="box1"]');
+        await box.click();
+        const target = kind === 'drag' ? box : page.getByTestId(kind === 'resize' ? 'handle-se' : 'rotate-handle');
+        const bounds = await target.boundingBox();
+        if (!bounds) throw new Error('Missing gesture target');
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(bounds.x + bounds.width / 2 + 35, bounds.y + bounds.height / 2 + 30);
+        const preview = await box.getAttribute('style');
+        await writeExternalHeading(editor, 'External during gesture');
+        await expect(page.getByTestId('conflict-banner')).toBeVisible();
+        await expect(box).toHaveAttribute('style', preview ?? '');
+        await expect(page.getByTestId('conflict-overwrite')).toBeDisabled();
+        if (kind === 'resize') {
+          await page.getByTestId('handle-se').dispatchEvent('pointercancel', { pointerId: 1 });
+        } else {
+          await page.keyboard.press('Escape');
+        }
+        await page.mouse.up();
+        await expect(page.getByTestId('conflict-overwrite')).toBeEnabled();
+        await expect.poll(async () => (await inlineGeometryOf(box)).left).toBe(120);
+        await expectNoDeckSave(page, async () => {}, 1000);
+        expect(observed.saves).toHaveLength(0);
+        await page.getByTestId('conflict-reload').click();
+        await expect(editor.frame.locator('h1')).toHaveText('External during gesture');
+        await observed.healthy();
+      } finally {
+        await page.mouse.up();
+        await closeEditor(editor);
+      }
+    });
+}
+
+test('pending input during a delayed external GET fences clean replacement',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    const [held] = await holdDeckResponses(page, 1, 'GET');
+    if (!held) throw new Error('Missing GET gate');
+    try {
+      await writeExternalHeading(editor, 'Held external snapshot');
+      expect((await held.forwarded.promise).status()).toBe(200);
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await heading.fill('Typed after GET started');
+      held.gate.resolve();
+      await held.delivered.promise;
+      await expect(page.getByTestId('conflict-banner')).toBeVisible();
+      await expect(heading).toHaveText('Typed after GET started');
+      expect(observed.saves).toHaveLength(0);
+      await observed.healthy();
+    } finally {
+      held.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  });
+
+for (const commit of [false, true]) {
+  test(`pending reload fence retains newer ${commit ? 'commit' : 'input'} and blocks repeated recovery`,
+    { tag: '@feature:live-sync' }, async ({ page }) => {
+      const observed = await observeLiveSync(page);
+      const editor = await openNudgeDeck(page);
+      let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
+      try {
+        await createRealSaveConflict(page, editor);
+        const field = page.getByTestId('field-x');
+        await field.fill('200');
+        [held] = await holdDeckResponses(page, 1, 'GET');
+        if (!held) throw new Error('Missing GET gate');
+        const gets: Request[] = [];
+        page.on('request', (request) => {
+          if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/deck') gets.push(request);
+        });
+        await page.getByTestId('conflict-reload').click();
+        expect((await held.forwarded.promise).status()).toBe(200);
+        await expect(page.getByTestId('conflict-reload')).toBeDisabled();
+        await expect(page.getByTestId('conflict-overwrite')).toBeDisabled();
+        await page.getByTestId('conflict-reload').click({ force: true });
+        await page.getByTestId('conflict-overwrite').click({ force: true });
+        expect(gets).toHaveLength(1);
+        expect(observed.saves).toHaveLength(1);
+        await field.fill('250');
+        if (commit) await field.press('Enter');
+        held.gate.resolve();
+        await held.delivered.promise;
+        await expect(field).toHaveValue('250');
+        await expect(page.getByTestId('conflict-banner')).toBeVisible();
+        await expect(page.getByTestId('save-status')).toHaveText('衝突');
+        expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('120px');
+        if (!commit) await field.press('Enter');
+        await page.getByTestId('conflict-overwrite').click();
+        await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+        expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('250px');
+        await observed.healthy();
+      } finally {
+        held?.gate.resolve();
+        await page.unroute('**/api/deck');
+        await closeEditor(editor);
+      }
+    });
+}
+
+for (const kind of ['pending', 'dirty'] as const) {
+  test(`${kind} unload warning cancels real navigation and retains local work`,
+    { tag: '@feature:live-sync' }, async ({ page }) => {
+      const observed = await observeLiveSync(page);
+      const editor = await openNudgeDeck(page);
+      try {
+        if (kind === 'pending') {
+          await page.getByTestId('background-value').fill('Unapplied unload draft');
+        } else {
+          await createRealSaveConflict(page, editor);
+        }
+        const dialogs: string[] = [];
+        page.on('dialog', async (dialog) => {
+          dialogs.push(dialog.type());
+          await dialog.dismiss();
+        });
+        await page.goto('about:blank').catch((cause: unknown) => {
+          expect(String(cause)).toContain('ERR_ABORTED');
+        });
+        expect(dialogs).toEqual(['beforeunload']);
+        expect(page.url()).toBe(editor.host.url);
+        if (kind === 'pending') {
+          await expect(page.getByTestId('background-value')).toHaveValue('Unapplied unload draft');
+          expect(observed.saves).toHaveLength(0);
+        } else {
+          expect((await inlineGeometryOf(editor.frame.locator('[data-ppt-el="box1"]'))).left).toBe(121);
+          await expect(page.getByTestId('conflict-banner')).toBeVisible();
+        }
+        await observed.healthy();
+      } finally {
+        await closeEditor(editor);
+      }
+    });
+}
+
+test('pending recovery generation rejects an older clean GET after a newer reload',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    const holds = await holdDeckResponses(page, 2, 'GET');
+    const [old, reload] = holds;
+    if (!old || !reload) throw new Error('Missing GET gates');
+    try {
+      await writeExternalHeading(editor, 'Old clean GET');
+      expect((await old.forwarded.promise).status()).toBe(200);
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await page.keyboard.press('ArrowRight');
+      const rejected = waitForDeckSave(page);
+      await page.keyboard.press('Control+s');
+      expect((await rejected).status()).toBe(409);
+      await expect(page.getByTestId('conflict-banner')).toBeVisible();
+      await writeExternalHeading(editor, 'New reload snapshot');
+      const external = await hostDeck(page, editor);
+      await expect.poll(() => observed.events).toContainEqual({ revision: external.revision, source: 'external' });
+      await page.getByTestId('conflict-reload').click();
+      const response = await reload.forwarded.promise;
+      expect(response.status()).toBe(200);
+      expect(await response.json()).toMatchObject({ revision: external.revision });
+      reload.gate.resolve();
+      await reload.delivered.promise;
+      await expect(editor.frame.locator('h1')).toHaveText('New reload snapshot');
+      old.gate.resolve();
+      await old.delivered.promise;
+      await expectNoDeckSave(page, async () => {}, 1000);
+      await expect(editor.frame.locator('h1')).toHaveText('New reload snapshot');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      expect(await savedDocument(editor)).toBe(external.html);
+      await observed.healthy();
+    } finally {
+      for (const held of holds) held.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  });
+
+test('pending input during overwrite is not a saved snapshot and recovery stays busy',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
+    try {
+      await createRealSaveConflict(page, editor);
+      [held] = await holdDeckResponses(page);
+      if (!held) throw new Error('Missing PUT gate');
+      await page.getByTestId('conflict-overwrite').click();
+      const response = await held.forwarded.promise;
+      expect(response.status()).toBe(200);
+      const saved = await response.json() as { revision: string };
+      await expect(page.getByTestId('conflict-overwrite')).toBeDisabled();
+      await expect(page.getByTestId('conflict-reload')).toBeDisabled();
+      await page.getByTestId('conflict-overwrite').click({ force: true });
+      await page.getByTestId('conflict-reload').click({ force: true });
+      expect(observed.saves).toHaveLength(2);
+      const field = page.getByTestId('field-x');
+      await field.fill('777');
+      held.gate.resolve();
+      await held.delivered.promise;
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      await expect(field).toHaveValue('777');
+      await expectNoDeckSave(page, async () => {}, 1000);
+      expect(observed.saves).toHaveLength(2);
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
+      await field.press('Enter');
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('777px');
+      expect(observed.saves).toHaveLength(3);
+      expect(observed.saves[2]?.postDataJSON()).toMatchObject({ baseRevision: saved.revision });
+      expect(observed.saves[2]?.postDataJSON()).not.toHaveProperty('force');
+      await observed.healthy();
+    } finally {
+      held?.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  });
+
+test('pending invalid drafts block slide selection and view replacement until cancelled',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    try {
+      const background = page.getByTestId('background-value');
+      await background.fill('invalid-color');
+      await page.getByTestId('thumbnail').nth(1).click();
+      await expect(background).toHaveValue('invalid-color');
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+      await page.getByTestId('view-sorter').click();
+      await expect(background).toBeVisible();
+      await page.locator('[data-testid="object-row"][data-object-id="box1"]').click();
+      await expect(background).toBeVisible();
+      await background.press('Escape');
+      await page.locator('[data-testid="object-row"][data-object-id="box1"]').click();
+      const field = page.getByTestId('field-x');
+      await field.fill('not-a-number');
+      await page.getByTestId('thumbnail').nth(1).click();
+      await expect(field).toHaveValue('not-a-number');
+      await expect(field).toHaveAttribute('aria-invalid', 'true');
+      await field.press('Escape');
+      await page.getByTestId('thumbnail').nth(1).click();
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck — 2');
+      await expectNoDeckSave(page, async () => {}, 1000);
+      expect(observed.saves).toHaveLength(0);
+      await observed.healthy();
+    } finally {
+      await closeEditor(editor);
+    }
+  });
+
+test('pending valid drafts settle before slide and view replacement without retargeting',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await heading.fill('Local first slide');
+      await page.getByTestId('thumbnail').nth(1).click();
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck — 2');
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      expect(await savedDocument(editor)).toContain('Local first slide');
+      await page.getByTestId('background-value').fill('#112233');
+      await page.getByTestId('view-sorter').click();
+      await expect(page.getByTestId('sorter-slide')).toHaveCount(2);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await page.getByTestId('view-normal').click();
+      await expect(page.getByTestId('background-value')).toHaveValue('rgb(17, 34, 51)');
+      await page.getByTestId('thumbnail').nth(0).click();
+      await expect(editor.frame.locator('h1')).toHaveText('Local first slide');
+      await expect(page.getByTestId('background-value')).toHaveValue('');
+      await observed.healthy();
+    } finally {
+      await closeEditor(editor);
+    }
+  });
+
+test('pending ownership ignores focus and no-op text and numeric edits',
+  { tag: '@feature:live-sync' }, async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await page.keyboard.press('Escape');
+      await heading.dblclick();
+      await heading.fill('Temporary text');
+      await heading.fill('Untitled deck');
+      await page.keyboard.press('Escape');
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      const field = page.getByTestId('field-x');
+      await field.fill('300');
+      await field.fill('120');
+      await field.press('Enter');
+      await page.getByTestId('undo').click();
+      await expectNoDeckSave(page, async () => {}, 1000);
+      expect(observed.saves).toHaveLength(0);
+      await expect(page.getByTestId('selection-outline')).toBeVisible();
+      await writeExternalHeading(editor, 'Clean after no-op');
+      await expect(heading).toHaveText('Clean after no-op');
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      await observed.healthy();
+    } finally {
+      await closeEditor(editor);
+    }
+  });
+
+test(
+  'in-flight own SSE waits for the PUT response without recursive draining',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    const [held] = await holdDeckResponses(page);
+    if (!held) throw new Error('Missing response gate');
+    try {
+      await expect.poll(() => observed.events.length).toBe(1);
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Control+s');
+      const response = await held.forwarded.promise;
+      expect(response.status()).toBe(200);
+      const { revision } = await response.json() as { revision: string };
+      await expect.poll(() => observed.events).toContainEqual({ revision, source: 'editor' });
+      await expect(page.getByTestId('save-status')).toHaveText('儲存中…');
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
+      await observed.healthy();
+      held.gate.resolve();
+      await held.delivered.promise;
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      await observed.healthy();
+    } finally {
+      held.gate.resolve();
+      await held.delivered.promise;
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'queued saves use the latest revision and stale own SSE cannot conflict with a newer edit',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    const holds = await holdDeckResponses(page, 2);
+    const [first, second] = holds;
+    if (!first || !second) throw new Error('Missing response gates');
+    try {
+      await expect.poll(() => observed.events.length).toBe(1);
+      const initial = await hostDeck(page, editor);
+      const box = editor.frame.locator('[data-ppt-el="box1"]');
+      await box.click();
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Control+s');
+      const firstResponse = await first.forwarded.promise;
+      expect(firstResponse.status()).toBe(200);
+      const firstSaved = await firstResponse.json() as { revision: string };
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: firstSaved.revision, source: 'editor'
+      });
+      await page.keyboard.press('Shift+ArrowRight');
+      await page.keyboard.press('Control+s');
+      expect(observed.saves).toHaveLength(1);
+      first.gate.resolve();
+      const secondResponse = await second.forwarded.promise;
+      expect(secondResponse.status()).toBe(200);
+      const secondSaved = await secondResponse.json() as { revision: string };
+      expect(secondSaved.revision).not.toBe(firstSaved.revision);
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: secondSaved.revision, source: 'editor'
+      });
+      expect(observed.saves).toHaveLength(2);
+      expect(observed.saves[0]?.postDataJSON()).toMatchObject({ baseRevision: initial.revision });
+      expect(observed.saves[1]?.postDataJSON()).toMatchObject({ baseRevision: firstSaved.revision });
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('131px');
+      await page.keyboard.press('ArrowRight');
+      expect((await inlineGeometryOf(box)).left).toBe(132);
+      second.gate.resolve();
+      await second.delivered.promise;
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      expect(observed.saves).toHaveLength(3);
+      expect(observed.saves[2]?.postDataJSON()).toMatchObject({ baseRevision: secondSaved.revision });
+      for (const request of observed.saves) {
+        expect(request.postDataJSON()).not.toHaveProperty('force');
+      }
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('132px');
+      expect((await hostDeck(page, editor)).html).toBe(await savedDocument(editor));
+      await observed.healthy();
+    } finally {
+      for (const held of holds) held.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'a real 409 overwrite saves a newer in-flight edit with a later ordinary PUT',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
+    try {
+      await createRealSaveConflict(page, editor);
+      [held] = await holdDeckResponses(page);
+      if (!held) throw new Error('Missing response gate');
+      await page.getByTestId('conflict-overwrite').click();
+      const response = await held.forwarded.promise;
+      expect(response.status()).toBe(200);
+      const saved = await response.json() as { revision: string };
+      await expect.poll(() => observed.events).toContainEqual({ revision: saved.revision, source: 'editor' });
+      expect(observed.saves).toHaveLength(2);
+      expect(observed.saves[1]?.postDataJSON()).toHaveProperty('force', true);
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
+      const box = editor.frame.locator('[data-ppt-el="box1"]');
+      await box.click();
+      await page.keyboard.press('Shift+ArrowRight');
+      expect((await inlineGeometryOf(box)).left).toBe(131);
+      held.gate.resolve();
+      await held.delivered.promise;
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      expect(observed.saves).toHaveLength(3);
+      expect(observed.saves[2]?.postDataJSON()).toMatchObject({ baseRevision: saved.revision });
+      expect(observed.saves[2]?.postDataJSON()).not.toHaveProperty('force');
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('131px');
+      expect(await savedDocument(editor)).not.toContain('External conflict');
+      expect((await hostDeck(page, editor)).html).toBe(await savedDocument(editor));
+      const manual = waitForDeckSave(page);
+      await page.keyboard.press('Control+s');
+      expect((await manual).status()).toBe(200);
+      expect(observed.saves).toHaveLength(4);
+      expect(observed.saves[3]?.postDataJSON()).not.toHaveProperty('force');
+      await observed.healthy();
+    } finally {
+      held?.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'an external revision newer than an in-flight overwrite keeps its conflict',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const observed = await observeLiveSync(page);
+    const editor = await openNudgeDeck(page);
+    let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
+    try {
+      await createRealSaveConflict(page, editor);
+      [held] = await holdDeckResponses(page);
+      if (!held) throw new Error('Missing response gate');
+      await page.getByTestId('conflict-overwrite').click();
+      const response = await held.forwarded.promise;
+      expect(response.status()).toBe(200);
+      const saved = await response.json() as { revision: string };
+      await expect.poll(() => observed.events).toContainEqual({ revision: saved.revision, source: 'editor' });
+      const box = editor.frame.locator('[data-ppt-el="box1"]');
+      await box.click();
+      await page.keyboard.press('Shift+ArrowRight');
+      await writeExternalHeading(editor, 'Newer external conflict');
+      const external = await hostDeck(page, editor);
+      expect(external.revision).not.toBe(saved.revision);
+      await expect.poll(() => observed.events).toContainEqual({ revision: external.revision, source: 'external' });
+      held.gate.resolve();
+      await held.delivered.promise;
+      await expect(page.getByTestId('save-status')).toHaveText('衝突');
+      await expect(page.getByTestId('conflict-banner')).toBeVisible();
+      await expectNoDeckSave(page, () => page.keyboard.press('Control+s'), 1200);
+      expect(observed.saves).toHaveLength(2);
+      expect((await inlineGeometryOf(box)).left).toBe(131);
+      expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
+      expect(await savedDocument(editor)).toBe(external.html);
+      await observed.healthy();
+    } finally {
+      held?.gate.resolve();
+      await page.unroute('**/api/deck');
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'a clean external write applies live within two seconds without reloading',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      await page.evaluate(() => {
+        (
+          globalThis as unknown as { __htmlpptNoReload?: string }
+        ).__htmlpptNoReload = 'kept';
+      });
+
+      await writeExternalHeading(editor, '外部更新');
+
+      await expect(editor.frame.locator('h1')).toHaveText('外部更新', {
+        timeout: 2000
+      });
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      await expect(page.getByTestId('conflict-banner')).toHaveCount(0);
+      const marker = await page.evaluate(
+        () =>
+          (globalThis as unknown as { __htmlpptNoReload?: string })
+            .__htmlpptNoReload
+      );
+      expect(marker).toBe('kept');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'a dirty external write shows the conflict banner and reload discards local edits',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await page.keyboard.press('ArrowRight');
+      await writeExternalHeading(editor, '外部衝突');
+
+      const banner = page.getByTestId('conflict-banner');
+      await expect(banner).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId('save-status')).toHaveText('衝突');
+
+      await page.getByTestId('conflict-reload').click();
+      await expect(banner).toHaveCount(0);
+      await expect(editor.frame.locator('h1')).toHaveText('外部衝突', {
+        timeout: 5000
+      });
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      const saved = await savedNudgeBoxStyle(editor.directory, editor.file);
+      expect(Number.parseFloat(saved.left ?? '')).toBe(120);
+      await expect
+        .poll(async () => (await inlineGeometryOf(
+          editor.frame.locator('[data-ppt-el="box1"]')
+        )).left)
+        .toBe(120);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'overwrite resolves a conflict by writing the local deck with force',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const box = editor.frame.locator('[data-ppt-el="box1"]');
+      await box.click();
+      await page.keyboard.press('ArrowRight');
+      await writeExternalHeading(editor, '外部第一次');
+      const banner = page.getByTestId('conflict-banner');
+      await expect(banner).toBeVisible({ timeout: 5000 });
+      await page.getByTestId('conflict-reload').click();
+      await expect(banner).toHaveCount(0);
+      await expect(editor.frame.locator('h1')).toHaveText('外部第一次', {
+        timeout: 5000
+      });
+
+      await box.click();
+      await page.keyboard.press('Shift+ArrowRight');
+      await writeExternalHeading(editor, '外部第二次');
+      await expect(banner).toBeVisible({ timeout: 5000 });
+
+      const forced = page.waitForRequest((request) => {
+        if (!isDeckSaveRequest(request)) return false;
+        const body = request.postDataJSON() as { force?: boolean } | null;
+        return body?.force === true;
+      });
+      await page.getByTestId('conflict-overwrite').click();
+      const forcedRequest = await forced;
+      expect(forcedRequest.method()).toBe('PUT');
+      await expect(banner).toHaveCount(0);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const saved = await savedDocument(editor);
+      expect(saved).toContain('外部第一次');
+      expect(saved).not.toContain('外部第二次');
+      await expect
+        .poll(async () =>
+          Number.parseFloat(
+            (await savedNudgeBoxStyle(editor.directory, editor.file)).left ?? ''
+          )
+        )
+        .toBeCloseTo(130, 1);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'autosave persists an edit 800 ms after the last commit without a keystroke',
+  { tag: '@feature:live-sync' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const saves: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saves.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await editor.frame.locator('[data-ppt-el="box1"]').click();
+        const save = waitForDeckSave(page);
+        // The debounce keeps the PUT out of the first half-second; the same
+        // commit still saves without any explicit save action.
+        await expectNoDeckSave(
+          page,
+          () => page.keyboard.press('ArrowRight'),
+          400
+        );
+        expect((await save).ok()).toBe(true);
+        await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+        expect(saves).toHaveLength(1);
+        await expect
+          .poll(async () =>
+            Number.parseFloat(
+              (await savedNudgeBoxStyle(editor.directory, editor.file)).left ??
+                ''
+            )
+          )
+          .toBeCloseTo(121, 1);
+      } finally {
+        page.off('request', countSave);
+      }
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'two tabs conflict on each other and both recovery paths work',
+  { tag: '@feature:live-sync' },
+  async ({ page, context }) => {
+    const editor = await openNudgeDeck(page);
+    const second = await context.newPage();
+    try {
+      await second.goto(editor.host.url);
+      const secondFrame = second.frameLocator(FRAME_SELECTOR);
+      const boxB = secondFrame.locator('[data-ppt-el="box1"]');
+      await expect(boxB).toBeVisible();
+      await expect(second.getByTestId('save-status')).toHaveText('已同步');
+
+      // Tab B edits first and stays dirty.
+      await boxB.click();
+      await second.keyboard.press('ArrowRight');
+
+      // Tab A saves immediately, so B sees the revision before its autosave.
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await page.keyboard.press('Shift+ArrowRight');
+      const firstSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+s');
+      expect((await firstSave).ok()).toBe(true);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const banner = second.getByTestId('conflict-banner');
+      await expect(banner).toBeVisible({ timeout: 5000 });
+      await expect(second.getByTestId('save-status')).toHaveText('衝突');
+
+      // Reload discards B's nudge and adopts A's saved geometry.
+      await second.getByTestId('conflict-reload').click();
+      await expect(banner).toHaveCount(0);
+      await expect(second.getByTestId('save-status')).toHaveText('已同步');
+      const adoptedLeft = Number.parseFloat(
+        (await savedNudgeBoxStyle(editor.directory, editor.file)).left ?? ''
+      );
+      expect(adoptedLeft).toBeCloseTo(130, 1);
+      await expect
+        .poll(async () => (await inlineGeometryOf(boxB)).left)
+        .toBeCloseTo(adoptedLeft, 1);
+
+      // B edits again, A saves again, and B overwrites with its local deck.
+      await boxB.click();
+      await second.keyboard.press('Shift+ArrowRight');
+      const localLeft = (await inlineGeometryOf(boxB)).left;
+      expect(localLeft).toBeCloseTo(140, 1);
+
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await page.keyboard.press('ArrowRight');
+      const secondSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+s');
+      expect((await secondSave).ok()).toBe(true);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      await expect(banner).toBeVisible({ timeout: 5000 });
+      await second.getByTestId('conflict-overwrite').click();
+      await expect(banner).toHaveCount(0);
+      await expect(second.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(async () =>
+          Number.parseFloat(
+            (await savedNudgeBoxStyle(editor.directory, editor.file)).left ?? ''
+          )
+        )
+        .toBeCloseTo(localLeft ?? 0, 1);
+    } finally {
+      await second.close();
       await closeEditor(editor);
     }
   }

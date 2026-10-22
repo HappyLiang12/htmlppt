@@ -6,6 +6,11 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import { detectSlides, type Transition } from '@htmlppt/core';
+import { openDeckEvents, tokenFromLocation } from './api';
+import {
+  planConflictResolution,
+  type ConflictResolution
+} from './live-sync';
 import {
   nudge,
   normalizeAngle,
@@ -241,7 +246,8 @@ export function App() {
     filePath,
     selection,
     selections,
-    master
+    master,
+    conflict
   } = state;
 
   const activeSlide = slides[activeIndex];
@@ -257,6 +263,8 @@ export function App() {
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   const sessionRef = useRef<TransformSession | null>(null);
+  const finishSessionRef = useRef<() => void>(() => undefined);
+  const textBaselineRef = useRef(new WeakMap<HTMLElement, string>());
   const detachSessionRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -288,7 +296,7 @@ export function App() {
    * would read a stale active index and act on the wrong slide.
    */
   const runSlideOp = useCallback(async (operation: () => Promise<unknown>) => {
-    if (slideOpBusyRef.current) return;
+    if (slideOpBusyRef.current || !actionsRef.current.settlePendingEdits()) return;
     slideOpBusyRef.current = true;
     setSlideOpError('');
     try {
@@ -353,7 +361,30 @@ export function App() {
     setGuides([]);
   }, []);
 
+  const startPlay = useCallback(
+    (fromCurrent: boolean) => {
+      if (!actionsRef.current.settlePendingEdits()) return;
+      const current = stateRef.current;
+      if (current.slides.length === 0) return;
+      actionsRef.current.clearSelection();
+      clearOverlay();
+      if (!fromCurrent) actionsRef.current.showSlide(0);
+      setPlaying(true);
+    },
+    [clearOverlay]
+  );
+
+  const resolveConflict = useCallback((choice: ConflictResolution) => {
+    const plan = planConflictResolution(choice);
+    if (plan.applyExternal) {
+      void actionsRef.current.reload();
+    } else {
+      void actionsRef.current.overwrite();
+    }
+  }, []);
+
   const handleSelectObject = useCallback((path: number[]) => {
+    if (!actionsRef.current.settlePendingEdits()) return;
     const current = stateRef.current;
     const slideInfo = current.slides[current.activeIndex];
     if (!slideInfo) return;
@@ -368,6 +399,7 @@ export function App() {
 
   const handleGeometryCommit = useCallback(
     (field: GeometryField, value: number): boolean => {
+      if (!actionsRef.current.settlePendingEdits()) return false;
       const current = stateRef.current;
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
@@ -396,6 +428,7 @@ export function App() {
 
   const handleTransitionChange = useCallback(
     (transition: Transition) => {
+      if (!actionsRef.current.settlePendingEdits()) return;
       const current = stateRef.current;
       const master = current.master;
       if (!master) return;
@@ -411,6 +444,7 @@ export function App() {
 
   const handleBackgroundChange = useCallback(
     (background: SlideBackground): boolean => {
+      if (!actionsRef.current.settlePendingEdits()) return false;
       const current = stateRef.current;
       const master = current.master;
       if (!master) return false;
@@ -425,6 +459,7 @@ export function App() {
   );
 
   const handleClearBackground = useCallback((): boolean => {
+    if (!actionsRef.current.settlePendingEdits()) return false;
     const current = stateRef.current;
     const master = current.master;
     if (!master) return false;
@@ -438,6 +473,7 @@ export function App() {
 
   const handleNotesChange = useCallback(
     (notes: string) => {
+      if (!actionsRef.current.settlePendingEdits()) return;
       const current = stateRef.current;
       const master = current.master;
       const slide = current.slides[current.activeIndex];
@@ -470,6 +506,40 @@ export function App() {
   useEffect(() => {
     void actions.load();
   }, [actions]);
+
+  /**
+   * Connects once the initial deck exists, so the hello revision is compared
+   * against a loaded master instead of an empty one. EventSource reconnects on
+   * its own; a host restart changes the port/token and needs a page reload.
+   */
+  const liveEventsRef = useRef<EventSource | null>(null);
+  useEffect(() => {
+    if (liveEventsRef.current || !master) return;
+    const token = tokenFromLocation();
+    if (!token) return;
+    liveEventsRef.current = openDeckEvents(token, (event) => {
+      actionsRef.current.receiveRevision(event);
+    });
+  }, [master]);
+
+  useEffect(
+    () => () => {
+      liveEventsRef.current?.close();
+      liveEventsRef.current = null;
+    },
+    []
+  );
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!stateRef.current.dirty && !stateRef.current.pending) return;
+      actionsRef.current.flushBeforeUnload();
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   const computeFitScale = useCallback(() => {
     if (!canvas.current) return;
@@ -562,7 +632,7 @@ export function App() {
 
   const changeView = useCallback(
     (next: EditorView) => {
-      if (next === view) return;
+      if (next === view || !actionsRef.current.settlePendingEdits()) return;
       // Selection geometry belongs to the canvas iframe, which unmounts in
       // sorter view; dropping it keeps the next mount consistent.
       actionsRef.current.clearSelection();
@@ -638,6 +708,7 @@ export function App() {
 
   const cancelSession = useCallback((): boolean => {
     if (!sessionRef.current) return false;
+    actionsRef.current.cancelPendingEdit('gesture');
     sessionRef.current = null;
     detachSessionRef.current?.();
     detachSessionRef.current = null;
@@ -673,6 +744,18 @@ export function App() {
       }
     }
 
+    actionsRef.current.changePendingEdit('gesture', {
+      apply: () => {
+        finishSessionRef.current();
+        return true;
+      },
+      discard: () => {
+        sessionRef.current = null;
+        detachSessionRef.current?.();
+        detachSessionRef.current = null;
+        setGuides([]);
+      }
+    });
     event.preventDefault();
     const noSnap = session.altKey || event.altKey;
     const threshold = SNAP_THRESHOLD_SCREEN_PX / currentScale;
@@ -771,7 +854,7 @@ export function App() {
     setGuides([]);
   }, []);
 
-  const finishSession = useCallback(() => {
+  const applySession = useCallback(() => {
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
@@ -784,6 +867,12 @@ export function App() {
     }
     void commitFrame();
   }, [commitFrame, refreshOverlay]);
+  finishSessionRef.current = applySession;
+
+  const finishSession = useCallback(() => {
+    if (sessionRef.current?.moved) actionsRef.current.settlePendingEdits('gesture');
+    else applySession();
+  }, [applySession]);
 
   const attachSession = useCallback(
     (slide: Element) => {
@@ -1027,6 +1116,7 @@ export function App() {
     const editable = textElement as HTMLElement | null;
     if (!editable || !editable.textContent?.trim()) return false;
 
+    textBaselineRef.current.set(editable, editable.innerHTML);
     editable.setAttribute('contenteditable', 'true');
     editable.setAttribute(EDITING_ATTRIBUTE, 'true');
     editable.focus();
@@ -1201,11 +1291,7 @@ export function App() {
         case 'play':
         case 'play-from-current':
           event.preventDefault();
-          if (current.slides.length === 0) return;
-          actionsRef.current.clearSelection();
-          clearOverlay();
-          if (action.type === 'play') actionsRef.current.showSlide(0);
-          setPlaying(true);
+          startPlay(action.type === 'play-from-current');
           return;
         case 'nudge': {
           if (current.selections.length > 0) {
@@ -1233,6 +1319,7 @@ export function App() {
       computeFitScale,
       nudgeSelection,
       playing,
+      startPlay,
       startTextEditing,
       zoomBy
     ]
@@ -1249,6 +1336,7 @@ export function App() {
       const frameSlide = frameSlideElement(slideInfo, frameDocument);
       if (!frameSlide || !frameSlide.contains(target)) return;
       if (isEditableTarget(target)) return;
+      if (!actionsRef.current.settlePendingEdits()) return;
 
       const selected = selectionFromEvent(target, frameSlide, {
         slideIndex: current.activeIndex,
@@ -1353,6 +1441,9 @@ export function App() {
       const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
       if (!editable || !editable.textContent?.trim()) return;
       event.preventDefault();
+      if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
+        textBaselineRef.current.set(editable, editable.innerHTML);
+      }
       editable.setAttribute('contenteditable', 'true');
       editable.setAttribute(EDITING_ATTRIBUTE, 'true');
       editable.focus();
@@ -1372,10 +1463,33 @@ export function App() {
       keyDownRef.current(event, frameDocument);
     });
 
+    const recordTextInput = (editable: HTMLElement) => {
+      actionsRef.current.changePendingEdit('text',
+        editable.innerHTML === textBaselineRef.current.get(editable) ? null : {
+          apply: () => {
+            void commit(editable);
+            return true;
+          },
+          discard: () => {
+            editable.removeAttribute(EDITING_ATTRIBUTE);
+            editable.removeAttribute('contenteditable');
+          }
+        });
+    };
+
+    frameDocument.addEventListener('input', (event) => {
+      const target = event.target as HTMLElement | null;
+      const editable = target?.closest<HTMLElement>(`[${EDITING_ATTRIBUTE}]`);
+      if (editable) recordTextInput(editable);
+    });
+
     frameDocument.addEventListener('focusout', (event) => {
       const target = event.target as HTMLElement | null;
       if (target?.hasAttribute(EDITING_ATTRIBUTE)) {
-        void commit(target);
+        if (target.innerHTML !== textBaselineRef.current.get(target)) recordTextInput(target);
+        actionsRef.current.settlePendingEdits('text');
+        target.removeAttribute(EDITING_ATTRIBUTE);
+        target.removeAttribute('contenteditable');
       }
     });
 
@@ -1423,6 +1537,7 @@ export function App() {
         onDeleteSlide={() => handleDeleteSlide()}
         onUndo={actions.undo}
         onRedo={actions.redo}
+        onPlay={() => startPlay(false)}
         onViewChange={changeView}
         onPreviousSlide={() => goTo(activeIndex - 1)}
         onNextSlide={() => goTo(activeIndex + 1)}
@@ -1434,6 +1549,39 @@ export function App() {
           className="max-h-24 overflow-auto border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200"
         >
           {[error, slideOpError].filter(Boolean).join(' · ')}
+        </div>
+      )}
+
+      {conflict && (
+        <div
+          data-testid="conflict-banner"
+          role="alert"
+          className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/50 px-4 py-2 text-xs text-amber-100"
+        >
+          <span>外部已修改檔案，本機有尚未儲存的變更。</span>
+          {state.pending && (
+            <span data-testid="pending-edit-instruction">請先套用或取消尚未完成的編輯，再覆寫。</span>
+          )}
+          <button
+            type="button"
+            data-testid="conflict-reload"
+            disabled={state.recoveryBusy}
+            onPointerDown={(event) => event.preventDefault()}
+            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
+            onClick={() => resolveConflict('reload')}
+          >
+            重新載入
+          </button>
+          <button
+            type="button"
+            data-testid="conflict-overwrite"
+            disabled={state.recoveryBusy || state.pending}
+            onPointerDown={(event) => event.preventDefault()}
+            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
+            onClick={() => resolveConflict('overwrite')}
+          >
+            覆寫
+          </button>
         </div>
       )}
 
@@ -1476,6 +1624,7 @@ export function App() {
                 }}
               >
                 <iframe
+                  key={state.documentEpoch}
                   ref={frame}
                   title="投影片預覽"
                   sandbox="allow-same-origin"
@@ -1509,6 +1658,8 @@ export function App() {
           </main>
 
           <Inspector
+            key={`${state.documentEpoch}:${activeSlide?.id}`}
+            pendingActions={actions}
             slide={activeSlide}
             selection={selection}
             selectionCount={selections.length}

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   detectSlides,
   normalizeDeck,
@@ -6,12 +6,22 @@ import {
   type SlideInfo
 } from '@htmlppt/core';
 import {
+  DeckConflictError,
   fetchDeck,
+  flushDeck,
   saveDeck,
   tokenFromLocation,
   type DeckResponse
 } from './api';
 import { History, type HistoryEntry } from './history';
+import {
+  AUTOSAVE_DELAY_MS,
+  createAutosave,
+  decideRevision,
+  remapSelections,
+  type Autosave,
+  type DeckRevisionEvent
+} from './live-sync';
 import { topLevelObjects, type SelectionTarget } from './selection';
 import {
   collectObjectHtml,
@@ -27,6 +37,8 @@ export type SaveStatus =
   | 'ready'
   | 'saving'
   | 'saved'
+  | 'external'
+  | 'conflict'
   | 'load-error'
   | 'error';
 
@@ -46,6 +58,9 @@ export interface DeckControllerState {
   scale: number;
   status: SaveStatus;
   dirty: boolean;
+  pending: boolean;
+  recoveryBusy: boolean;
+  documentEpoch: number;
   conflict: DeckConflict | null;
   srcDoc: string;
   filePath: string;
@@ -59,7 +74,15 @@ export interface SlideMutationOptions {
   coalesceKey?: string;
 }
 
+export interface PendingEdit {
+  apply(): boolean;
+  discard(): void;
+}
+
 export interface DeckControllerActions {
+  changePendingEdit(owner: string, edit: PendingEdit | null): void;
+  cancelPendingEdit(owner: string): void;
+  settlePendingEdits(owner?: string): boolean;
   load(deck?: DeckResponse): Promise<void>;
   showSlide(index: number): void;
   select(target: SelectionTarget | null): void;
@@ -88,6 +111,10 @@ export interface DeckControllerActions {
   redo(): void;
   reload(deck?: DeckResponse): Promise<void>;
   overwrite(): Promise<void>;
+  /** Consumes an SSE revision (or hello) signal from the host. */
+  receiveRevision(event: DeckRevisionEvent): void;
+  /** Best-effort keepalive write for an unloading page with unsaved edits. */
+  flushBeforeUnload(): void;
 }
 
 export interface DeckController {
@@ -126,6 +153,9 @@ function createInitialState(): DeckControllerState {
     scale: 1,
     status: 'loading',
     dirty: false,
+    pending: false,
+    recoveryBusy: false,
+    documentEpoch: 0,
     conflict: null,
     srcDoc: '',
     filePath: '',
@@ -171,12 +201,39 @@ export function useDeckController(
   const revisionRef = useRef('');
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const saveGenerationRef = useRef(0);
+  const saveInFlightRef = useRef(0);
   const editVersionRef = useRef(0);
+  const committedVersionRef = useRef(0);
+  const operationGenerationRef = useRef(0);
+  const pendingEditsRef = useRef(new Map<string, PendingEdit>());
+  const settlingRef = useRef(false);
   const historyRef = useRef(new History<string, number>());
   const clipboardRef = useRef<string[]>([]);
   const tokenRef = useRef(options.token ?? tokenFromLocation());
   const measurePastedRef = useRef(options.measurePastedObject);
   measurePastedRef.current = options.measurePastedObject;
+
+  // Function refs break the cycle between the save queue, the autosave timer,
+  // and the SSE drain: each callback is created below but may run after any
+  // render.
+  const autosaveActionRef = useRef<() => void>(() => undefined);
+  const scheduleAutosaveRef = useRef<() => void>(() => undefined);
+  const drainLiveEventsRef = useRef<() => void>(() => undefined);
+  const liveEventsRef = useRef<DeckRevisionEvent[]>([]);
+  const acknowledgedRevisionsRef = useRef(new Set<string>());
+  const liveDrainingRef = useRef(false);
+  const externalBusyRef = useRef(false);
+  const autosaveRef = useRef<Autosave | null>(null);
+  if (autosaveRef.current === null) {
+    autosaveRef.current = createAutosave(AUTOSAVE_DELAY_MS, () => {
+      autosaveActionRef.current();
+    });
+  }
+
+  useEffect(() => {
+    const autosave = autosaveRef.current;
+    return () => autosave?.cancel();
+  }, []);
 
   const update = useCallback((patch: Partial<DeckControllerState>) => {
     const next = { ...stateRef.current, ...patch };
@@ -184,33 +241,129 @@ export function useDeckController(
     setState(next);
   }, []);
 
+  const syncPending = useCallback(() => {
+    const pending = pendingEditsRef.current.size > 0;
+    update({ pending });
+    if (!pending && stateRef.current.dirty) scheduleAutosaveRef.current();
+  }, [update]);
+
+  const changePendingEdit = useCallback((owner: string, edit: PendingEdit | null) => {
+    editVersionRef.current += 1;
+    if (edit) pendingEditsRef.current.set(owner, edit);
+    else pendingEditsRef.current.delete(owner);
+    autosaveRef.current?.cancel();
+    syncPending();
+  }, [syncPending]);
+
+  const cancelPendingEdit = useCallback((owner: string) => {
+    const edit = pendingEditsRef.current.get(owner);
+    pendingEditsRef.current.delete(owner);
+    edit?.discard();
+    syncPending();
+  }, [syncPending]);
+
+  const settlePendingEdits = useCallback((owner?: string): boolean => {
+    if (settlingRef.current) return true;
+    settlingRef.current = true;
+    try {
+      for (const [key, edit] of pendingEditsRef.current) {
+        if (owner !== undefined && key !== owner) continue;
+        pendingEditsRef.current.delete(key);
+        if (!edit.apply()) {
+          pendingEditsRef.current.set(key, edit);
+          update({ error: '請先套用或取消尚未完成的編輯。' });
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      settlingRef.current = false;
+      syncPending();
+    }
+  }, [syncPending, update]);
+
   const enqueueSave = useCallback(
-    (save: (revision: string) => Promise<{ revision: string }>) => {
+    (
+      save: (revision: string) => Promise<{ revision: string }>,
+      resolvedConflict: DeckConflict | null = null
+    ) => {
       const generation = saveGenerationRef.current;
-      const editVersion = editVersionRef.current;
-      const task = saveChainRef.current.then(async () => {
+      const committedVersion = committedVersionRef.current;
+      saveInFlightRef.current += 1;
+      const run = saveChainRef.current.then(async () => {
         // A load or reload that happened while this save was queued owns the
         // deck now; writing would persist stale content.
         if (saveGenerationRef.current !== generation) return;
-        const saved = await save(revisionRef.current);
-        revisionRef.current = saved.revision;
-        // Only report clean when no newer edit was recorded after this
-        // snapshot was taken; otherwise that edit is still pending.
-        if (editVersionRef.current === editVersion) {
-          update({ status: 'saved', dirty: false, error: '', conflict: null });
+        try {
+          const saved = await save(revisionRef.current);
+          if (saved.revision !== revisionRef.current) {
+            acknowledgedRevisionsRef.current.add(saved.revision);
+          }
+          revisionRef.current = saved.revision;
+          const conflict = stateRef.current.conflict === resolvedConflict
+            ? null
+            : stateRef.current.conflict;
+          const dirty = committedVersionRef.current !== committedVersion;
+          update({
+            status: conflict ? 'conflict' : dirty ? 'saving' : 'saved',
+            dirty,
+            error: '',
+            conflict
+          });
+          if (dirty) scheduleAutosaveRef.current();
+        } catch (cause) {
+          if (cause instanceof DeckConflictError) {
+            // Never retry a conflict: the banner offers reload or overwrite.
+            autosaveRef.current?.cancel();
+            update({
+              conflict: { revision: cause.revision },
+              status: 'conflict',
+              error: ''
+            });
+          } else {
+            update({ status: 'error', error: toMessage(cause), dirty: true });
+          }
+          throw cause;
         }
       });
-      saveChainRef.current = task.catch(() => undefined);
-      return task;
+      saveChainRef.current = run.then(
+        () => undefined,
+        () => undefined
+      );
+      return run.finally(() => {
+        saveInFlightRef.current -= 1;
+        drainLiveEventsRef.current();
+      });
     },
     [update]
   );
+
+  // Commit paths only mark the deck dirty and restart the debounce; the PUT is
+  // issued from here 800 ms later with the latest master.
+  scheduleAutosaveRef.current = () => {
+    if (!stateRef.current.conflict && !pendingEditsRef.current.size && !externalBusyRef.current) {
+      autosaveRef.current?.schedule();
+    }
+  };
+
+  autosaveActionRef.current = () => {
+    if (stateRef.current.conflict || pendingEditsRef.current.size || externalBusyRef.current) return;
+    const master = masterRef.current;
+    if (!master) return;
+    const html = serializeDeck(master);
+    update({ status: 'saving', error: '' });
+    void enqueueSave((revision) =>
+      saveDeck(tokenRef.current, html, revision)
+    ).catch(() => undefined);
+  };
 
   const load = useCallback(
     async (provided?: DeckResponse) => {
       // Invalidate queued saves for the outgoing deck, then let an in-flight
       // save finish before the revision is replaced by the fetched one.
       saveGenerationRef.current += 1;
+      autosaveRef.current?.cancel();
+      liveEventsRef.current = [];
       await saveChainRef.current;
       update({ status: 'loading', error: '' });
       try {
@@ -250,8 +403,147 @@ export function useDeckController(
     [update]
   );
 
+  const applyExternal = useCallback(
+    async (deck: DeckResponse, editVersion: number, generation: number, source?: string) => {
+      await saveChainRef.current;
+      if (operationGenerationRef.current !== generation) return;
+      if (editVersionRef.current !== editVersion) {
+        autosaveRef.current?.cancel();
+        update({ conflict: { revision: deck.revision, source }, status: 'conflict', error: '' });
+        return;
+      }
+      autosaveRef.current?.cancel();
+      for (const edit of pendingEditsRef.current.values()) edit.discard();
+      pendingEditsRef.current.clear();
+
+      const master = parseDeck(deck.html);
+      if (!hasEditorArtifacts(master)) {
+        normalizeDeck(master);
+      }
+      const nextSlides = detectSlides(master);
+      const previousSlides = slidesRef.current;
+      const previousActiveId =
+        previousSlides[activeIndexRef.current]?.id ?? null;
+      let nextActive = activeIndexRef.current;
+      if (previousActiveId) {
+        const found = nextSlides.findIndex(
+          (slide) => slide.id === previousActiveId
+        );
+        if (found >= 0) nextActive = found;
+      }
+      const activeIndex = clampSlideIndex(nextActive, nextSlides.length);
+      const selections = remapSelections(
+        stateRef.current.selections,
+        previousSlides,
+        nextSlides
+      );
+
+      masterRef.current = master;
+      revisionRef.current = deck.revision;
+      slidesRef.current = nextSlides;
+      activeIndexRef.current = activeIndex;
+      historyRef.current.clear();
+      historyRef.current.push(serializeDeck(master), { meta: activeIndex });
+      const slide = nextSlides[activeIndex];
+      update({
+        master,
+        slides: nextSlides,
+        activeIndex,
+        srcDoc: slide ? buildSlideSrcDoc(master, slide) : '',
+        selection: selections[0] ?? null,
+        selections,
+        status: 'ready',
+        dirty: false,
+        pending: false,
+        documentEpoch: stateRef.current.documentEpoch + 1,
+        conflict: null,
+        filePath: deck.filePath,
+        error: ''
+      });
+    },
+    [update]
+  );
+
+  const drainLiveEvents = useCallback(async () => {
+    if (liveDrainingRef.current) return;
+    liveDrainingRef.current = true;
+    try {
+      while (liveEventsRef.current.length > 0) {
+        // A pending or in-flight save owns the revision for now, and a reload
+        // in progress must finish before events are compared against it.
+        // Re-evaluate the event after it settles so our own write is
+        // recognized.
+        if (saveInFlightRef.current > 0 || externalBusyRef.current) return;
+        if (!revisionRef.current) {
+          liveEventsRef.current = [];
+          break;
+        }
+        const acknowledgedIndex = liveEventsRef.current.findIndex((event) =>
+          acknowledgedRevisionsRef.current.has(event.revision)
+        );
+        if (acknowledgedIndex >= 0) {
+          for (const event of liveEventsRef.current.splice(0, acknowledgedIndex + 1)) {
+            acknowledgedRevisionsRef.current.delete(event.revision);
+          }
+          continue;
+        }
+        const event = liveEventsRef.current.shift();
+        if (!event) break;
+        const decision = decideRevision(event, {
+          revision: revisionRef.current,
+          dirty: stateRef.current.dirty || stateRef.current.pending || stateRef.current.conflict !== null
+        });
+        if (decision.type === 'ignore') continue;
+        if (decision.type === 'conflict') {
+          // The pending autosave would write stale content; drop it. The
+          // banner is the only recovery path.
+          autosaveRef.current?.cancel();
+          update({
+            conflict: {
+              revision: decision.revision,
+              source: decision.source
+            },
+            status: 'conflict',
+            error: ''
+          });
+          continue;
+        }
+
+        update({ status: 'external', error: '' });
+        const editVersion = editVersionRef.current;
+        const generation = operationGenerationRef.current;
+        try {
+          const deck = await fetchDeck(tokenRef.current);
+          if (operationGenerationRef.current !== generation) continue;
+          if (deck.revision === revisionRef.current && editVersionRef.current === editVersion) {
+            update({ status: 'ready' });
+            continue;
+          }
+          await applyExternal(deck, editVersion, generation, decision.source);
+        } catch (cause) {
+          if (operationGenerationRef.current === generation) {
+            update({ status: 'error', error: toMessage(cause) });
+          }
+        }
+      }
+    } finally {
+      liveDrainingRef.current = false;
+    }
+  }, [applyExternal, update]);
+
+  const receiveRevision = useCallback((event: DeckRevisionEvent) => {
+    if (!revisionRef.current) return;
+    liveEventsRef.current.push(event);
+    drainLiveEventsRef.current();
+  }, []);
+
+  drainLiveEventsRef.current = () => {
+    void drainLiveEvents();
+  };
+
   const showSlide = useCallback(
     (index: number) => {
+      if (!settlePendingEdits()) return;
       const master = masterRef.current;
       if (!master) return;
       const source = sourceDocFor(master, index);
@@ -268,11 +560,12 @@ export function useDeckController(
         selections: []
       });
     },
-    [update]
+    [settlePendingEdits, update]
   );
 
   const applySelections = useCallback(
     (targets: SelectionTarget[]) => {
+      if (!settlePendingEdits()) return;
       const unique: SelectionTarget[] = [];
       for (const target of targets) {
         if (!unique.some((candidate) => sameTarget(candidate, target))) {
@@ -281,7 +574,7 @@ export function useDeckController(
       }
       update({ selection: unique[0] ?? null, selections: unique });
     },
-    [update]
+    [settlePendingEdits, update]
   );
 
   const select = useCallback(
@@ -328,8 +621,9 @@ export function useDeckController(
   }, [applySelections]);
 
   const clearSelection = useCallback(() => {
+    if (!settlePendingEdits()) return;
     update({ selection: null, selections: [] });
-  }, [update]);
+  }, [settlePendingEdits, update]);
 
   const setScale = useCallback(
     (scale: number) => {
@@ -344,6 +638,7 @@ export function useDeckController(
       mutate: (slide: Element, master: Document) => void,
       mutationOptions: SlideMutationOptions = {}
     ): string | null => {
+      if (!settlePendingEdits()) return null;
       const master = masterRef.current;
       if (!master) return null;
       const slides = detectSlides(master);
@@ -352,6 +647,7 @@ export function useDeckController(
 
       mutate(slide.element, master);
       editVersionRef.current += 1;
+      committedVersionRef.current += 1;
       const html = serializeDeck(master);
       historyRef.current.push(html, {
         coalesceKey: mutationOptions.coalesceKey,
@@ -367,13 +663,15 @@ export function useDeckController(
         srcDoc: source.srcDoc,
         dirty: true
       });
+      scheduleAutosaveRef.current();
       return html;
     },
-    [update]
+    [settlePendingEdits, update]
   );
 
   const commit = useCallback(
     async (mutate: SlideCommit) => {
+      if (!settlePendingEdits()) return;
       const master = masterRef.current;
       const slide = slidesRef.current[activeIndexRef.current];
       if (!master || !slide) return;
@@ -391,28 +689,24 @@ export function useDeckController(
         throw cause;
       }
       editVersionRef.current += 1;
+      committedVersionRef.current += 1;
       historyRef.current.push(html, { meta: activeIndexRef.current });
 
       const slides = detectSlides(master);
       slidesRef.current = slides;
-      update({ slides, dirty: true, status: 'saving' });
-
-      const task = enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision)
-      );
-
-      try {
-        await task;
-      } catch (cause) {
-        update({ status: 'error', error: toMessage(cause), dirty: true });
-        throw cause;
-      }
+      update({
+        slides,
+        dirty: true,
+        status: stateRef.current.conflict ? 'conflict' : 'saving'
+      });
+      scheduleAutosaveRef.current();
     },
-    [enqueueSave, update]
+    [settlePendingEdits, update]
   );
 
   const commitMaster = useCallback(
     async (mutate: MasterCommit) => {
+      if (!settlePendingEdits()) return;
       const master = masterRef.current;
       if (!master) return;
 
@@ -427,6 +721,7 @@ export function useDeckController(
         throw cause;
       }
       editVersionRef.current += 1;
+      committedVersionRef.current += 1;
       historyRef.current.push(html, { meta: activeIndexRef.current });
 
       const source = sourceDocFor(master, activeIndexRef.current);
@@ -437,21 +732,11 @@ export function useDeckController(
         activeIndex: source.activeIndex,
         srcDoc: source.srcDoc,
         dirty: true,
-        status: 'saving'
+        status: stateRef.current.conflict ? 'conflict' : 'saving'
       });
-
-      const task = enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision)
-      );
-
-      try {
-        await task;
-      } catch (cause) {
-        update({ status: 'error', error: toMessage(cause), dirty: true });
-        throw cause;
-      }
+      scheduleAutosaveRef.current();
     },
-    [enqueueSave, update]
+    [settlePendingEdits, update]
   );
 
   const copySelection = useCallback(() => {
@@ -534,19 +819,19 @@ export function useDeckController(
   }, [applySelections, commitMaster]);
 
   const saveNow = useCallback(async () => {
+    if (externalBusyRef.current || !settlePendingEdits()) return;
     const master = masterRef.current;
     if (!master) return;
+    // A conflict needs an explicit banner choice; Ctrl+S must not silently
+    // retry a save that will be rejected again.
+    if (stateRef.current.conflict) return;
     const html = serializeDeck(master);
+    autosaveRef.current?.cancel();
     update({ status: 'saving', error: '' });
-    try {
-      await enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision)
-      );
-    } catch (cause) {
-      update({ status: 'error', error: toMessage(cause), dirty: true });
-      throw cause;
-    }
-  }, [enqueueSave, update]);
+    await enqueueSave((revision) =>
+      saveDeck(tokenRef.current, html, revision)
+    );
+  }, [enqueueSave, settlePendingEdits, update]);
 
   const restore = useCallback(
     (entry: HistoryEntry<string, number>) => {
@@ -556,13 +841,14 @@ export function useDeckController(
       slidesRef.current = source.slides;
       activeIndexRef.current = source.activeIndex;
       editVersionRef.current += 1;
+      committedVersionRef.current += 1;
       update({
         master,
         slides: source.slides,
         activeIndex: source.activeIndex,
         srcDoc: source.srcDoc,
         dirty: true,
-        status: 'saving',
+        status: stateRef.current.conflict ? 'conflict' : 'saving',
         selection: null,
         selections: [],
         error: ''
@@ -570,49 +856,86 @@ export function useDeckController(
 
       // Undo and redo are content operations; persist them like a commit so a
       // reload cannot resurrect the undone state.
-      const task = enqueueSave((revision) =>
-        saveDeck(tokenRef.current, entry.value, revision)
-      );
-      void task.catch((cause) => {
-        update({ status: 'error', error: toMessage(cause), dirty: true });
-      });
+      scheduleAutosaveRef.current();
     },
-    [enqueueSave, update]
+    [update]
   );
 
   const undo = useCallback(() => {
+    if (!settlePendingEdits()) return;
     const entry = historyRef.current.undo();
     if (entry !== null) restore(entry);
-  }, [restore]);
+  }, [restore, settlePendingEdits]);
 
   const redo = useCallback(() => {
+    if (!settlePendingEdits()) return;
     const entry = historyRef.current.redo();
     if (entry !== null) restore(entry);
-  }, [restore]);
+  }, [restore, settlePendingEdits]);
 
   const reload = useCallback(
     async (provided?: DeckResponse) => {
-      await load(provided);
+      if (externalBusyRef.current) return;
+      const editVersion = editVersionRef.current;
+      const generation = ++operationGenerationRef.current;
+      saveGenerationRef.current += 1;
+      autosaveRef.current?.cancel();
+      externalBusyRef.current = true;
+      update({ status: 'loading', recoveryBusy: true, error: '' });
+      try {
+        await saveChainRef.current;
+        const deck = provided ?? (await fetchDeck(tokenRef.current));
+        await applyExternal(deck, editVersion, generation);
+      } catch (cause) {
+        update({ status: 'error', error: toMessage(cause) });
+      } finally {
+        externalBusyRef.current = false;
+        update({ recoveryBusy: false });
+        if (stateRef.current.dirty) scheduleAutosaveRef.current();
+        drainLiveEventsRef.current();
+      }
     },
-    [load]
+    [applyExternal, update]
   );
 
   const overwrite = useCallback(async () => {
     const master = masterRef.current;
-    if (!master) return;
+    if (!master || externalBusyRef.current) return;
+    if (pendingEditsRef.current.size) {
+      update({ error: '請先套用或取消尚未完成的編輯，再覆寫。' });
+      return;
+    }
+    operationGenerationRef.current += 1;
+    externalBusyRef.current = true;
     const html = serializeDeck(master);
-    update({ status: 'saving', error: '' });
+    autosaveRef.current?.cancel();
+    update({ status: 'saving', recoveryBusy: true, error: '' });
     try {
-      await enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision, { force: true })
+      await enqueueSave(
+        (revision) => saveDeck(tokenRef.current, html, revision, { force: true }),
+        stateRef.current.conflict
       );
-    } catch (cause) {
-      update({ status: 'error', error: toMessage(cause), dirty: true });
+    } catch {
+      // enqueueSave already set the error or conflict state; keep the banner.
+    } finally {
+      externalBusyRef.current = false;
+      update({ recoveryBusy: false });
+      drainLiveEventsRef.current();
+      if (stateRef.current.dirty) scheduleAutosaveRef.current();
     }
   }, [enqueueSave, update]);
 
+  const flushBeforeUnload = useCallback(() => {
+    const master = masterRef.current;
+    if (!master || !stateRef.current.dirty || stateRef.current.pending || stateRef.current.conflict || externalBusyRef.current) return;
+    flushDeck(tokenRef.current, serializeDeck(master), revisionRef.current);
+  }, []);
+
   const actions = useMemo<DeckControllerActions>(
     () => ({
+      changePendingEdit,
+      cancelPendingEdit,
+      settlePendingEdits,
       load,
       showSlide,
       select,
@@ -631,9 +954,14 @@ export function useDeckController(
       undo,
       redo,
       reload,
-      overwrite
+      overwrite,
+      receiveRevision,
+      flushBeforeUnload
     }),
     [
+      changePendingEdit,
+      cancelPendingEdit,
+      settlePendingEdits,
       load,
       showSlide,
       select,
@@ -652,7 +980,9 @@ export function useDeckController(
       undo,
       redo,
       reload,
-      overwrite
+      overwrite,
+      receiveRevision,
+      flushBeforeUnload
     ]
   );
 

@@ -14,6 +14,7 @@ export interface ToolbarProps {
   onDeleteSlide: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onPlay: () => void;
   onViewChange: (view: EditorView) => void;
   onPreviousSlide: () => void;
   onNextSlide: () => void;
@@ -21,9 +22,11 @@ export interface ToolbarProps {
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   loading: '載入中…',
-  ready: '已載入',
+  ready: '已同步',
   saving: '儲存中…',
   saved: '已儲存',
+  external: '外部更新',
+  conflict: '衝突',
   'load-error': '載入失敗',
   error: '儲存失敗'
 };
@@ -45,6 +48,7 @@ export function Toolbar({
   onDeleteSlide,
   onUndo,
   onRedo,
+  onPlay,
   onViewChange,
   onPreviousSlide,
   onNextSlide
@@ -63,10 +67,13 @@ export function Toolbar({
 
       <span
         data-testid="save-status"
+        role="status"
         className={`text-xs ${
           status === 'error' || status === 'load-error'
             ? 'text-red-400'
-            : 'text-zinc-400'
+            : status === 'conflict' || status === 'external'
+              ? 'text-amber-300'
+              : 'text-zinc-400'
         }`}
       >
         {STATUS_LABEL[status]}
@@ -78,7 +85,11 @@ export function Toolbar({
           data-testid="add-slide"
           className={BUTTON_CLASS}
           title="在目前投影片後新增"
-          onClick={onAddSlide}
+          onClick={(event) => {
+            // A double click also emits a second click with detail 2; one
+            // toolbar gesture must create one slide.
+            if (event.detail <= 1) onAddSlide();
+          }}
         >
           新增
         </button>
@@ -87,7 +98,9 @@ export function Toolbar({
           data-testid="duplicate-slide"
           className={BUTTON_CLASS}
           title="複製目前投影片"
-          onClick={onDuplicateSlide}
+          onClick={(event) => {
+            if (event.detail <= 1) onDuplicateSlide();
+          }}
         >
           複製
         </button>
@@ -96,7 +109,9 @@ export function Toolbar({
           data-testid="delete-slide"
           className={BUTTON_CLASS}
           title={canDelete ? '刪除目前投影片' : '至少需要保留一頁'}
-          onClick={onDeleteSlide}
+          onClick={(event) => {
+            if (event.detail <= 1) onDeleteSlide();
+          }}
           disabled={!canDelete}
         >
           刪除
@@ -176,8 +191,8 @@ export function Toolbar({
           type="button"
           data-testid="play"
           className={BUTTON_CLASS}
-          title="播放（M4 提供）"
-          disabled
+          title="播放"
+          onClick={onPlay}
         >
           播放
         </button>

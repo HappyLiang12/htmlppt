@@ -197,7 +197,9 @@ export function SorterView({
                   type="button"
                   data-testid="sorter-duplicate"
                   aria-label={`複製第 ${index + 1} 頁`}
-                  onClick={() => onDuplicate(index)}
+                  onClick={(event) => {
+                    if (event.detail <= 1) onDuplicate(index);
+                  }}
                   className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30"
                 >
                   複製
@@ -206,7 +208,9 @@ export function SorterView({
                   type="button"
                   data-testid="sorter-delete"
                   aria-label={`刪除第 ${index + 1} 頁`}
-                  onClick={() => onDelete(index)}
+                  onClick={(event) => {
+                    if (event.detail <= 1) onDelete(index);
+                  }}
                   disabled={!canDelete}
                   className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30 disabled:opacity-40"
                 >
