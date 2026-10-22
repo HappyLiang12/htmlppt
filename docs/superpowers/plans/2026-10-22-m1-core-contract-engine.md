@@ -2008,8 +2008,8 @@ git commit -m "feat(core): add validated slide mutations"
 - Modify: `docs/features.json`
 
 **Interfaces:**
-- Template output: slides after the first are hidden in normal media by a `[data-ppt-deck] > [data-slide-id]:not(:first-of-type)` rule; print media shows all slides and breaks pages.
-- Runtime: active slide uses its original inline display or `block`, the initial CSS hide is overridden on navigation, print CSS is injected once, `beforeprint`/`afterprint` restore display, and navigation keys are ignored in editable controls or with modifiers.
+- Template output: the deck root starts without `data-ppt-ready`; a screen-only rule hides every slide that follows another slide while the root is not ready. Print media never hides slides and only adds page breaks.
+- Runtime: marks deck roots ready, hides inactive slides, restores each active slide's original inline display (never fabricates `block`), injects print page-break CSS once, restores display on `beforeprint`/`afterprint`, and ignores navigation keys in editable controls or with modifiers.
 
 - [ ] **Step 1: Write failing template test**
 
@@ -2020,10 +2020,11 @@ it('hides every slide after the first until the runtime runs', () => {
   const html = createDeckHtml({ slides: 2 });
 
   expect(html).toContain(
-    '[data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }'
+    '@media screen {\n    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }\n  }'
   );
   expect(html).toContain('@media print');
   expect(html).toContain('break-after: page');
+  expect(html).not.toContain('display: block !important');
 });
 ```
 
@@ -2037,13 +2038,15 @@ Expected: FAIL — rules absent.
 In `createDeckHtml`'s `<style>`, after the `.slide` rule, add:
 
 ```css
-  [data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }
+  @media screen {
+    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }
+  }
   @media print {
-    [data-ppt-deck] > [data-slide-id] { display: block !important; break-after: page; }
+    [data-ppt-deck] > [data-slide-id] { break-after: page; }
   }
 ```
 
-Keep the runtime script and the rest of the template unchanged.
+The screen rule is gated on the absence of `data-ppt-ready`, which the runtime sets before its first `show`. That keeps arbitrary stylesheet display values intact: the runtime only writes `display:none` to inactive slides and restores the active slide's original inline value, never `block`. The print rule does not touch `display`, so authored flex/grid survives printing. Keep the runtime script and the rest of the template unchanged.
 
 - [ ] **Step 4: Run template GREEN**
 
@@ -2088,20 +2091,41 @@ test.describe('presentation runtime', () => {
     }
   });
 
-  test('prints every slide and restores screen state', { tag: '@feature:runtime' }, async ({ page }) => {
+  test('prints every slide while preserving stylesheet display', { tag: '@feature:runtime' }, async ({ page }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
     try {
       await execa('node', [cliPath, 'new', 'deck.html', '--slides', '2'], { cwd: directory });
-      const html = await readFile(join(directory, 'deck.html'), 'utf8');
+      const file = join(directory, 'deck.html');
+      const html = (await readFile(file, 'utf8')).replace(
+        '.slide {',
+        '.slide { display: flex;'
+      );
       const server = await serveHtml(html);
       try {
         await page.goto(server.url);
         await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
-        await page.emulateMedia({ media: 'print' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
-        await page.emulateMedia({ media: 'screen' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+
         await page.keyboard.press('ArrowRight');
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page
+            .locator('[data-slide-id="s2"]')
+            .evaluate((element) => getComputedStyle(element).display)
+        ).toBe('flex');
+
+        await page.emulateMedia({ media: 'print' });
+        await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+        await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page
+            .locator('[data-slide-id="s2"]')
+            .evaluate((element) => getComputedStyle(element).display)
+        ).toBe('flex');
+
+        await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+        await page.emulateMedia({ media: 'screen' });
+        await expect(page.locator('[data-slide-id="s1"]')).toBeHidden();
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
       } finally {
         await server.close();
@@ -2157,11 +2181,16 @@ export const RUNTIME_SOURCE = String.raw`
   var runtimeStyle = 'data-ppt-runtime-style';
   var originalDisplay = slides.map(function (slide) { return slide.style.display; });
 
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
+    deck.setAttribute('data-ppt-ready', '1');
+  });
+
   function isEditing(target) {
     var element = target;
-    while (element && element !== document.body) {
+    while (element) {
       var tag = element.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      if (element === document.body) return false;
       element = element.parentElement;
     }
     return false;
@@ -2170,13 +2199,13 @@ export const RUNTIME_SOURCE = String.raw`
   function show(next) {
     index = Math.max(0, Math.min(slides.length - 1, next));
     slides.forEach(function (slide, i) {
-      slide.style.display = i === index ? (originalDisplay[i] || 'block') : 'none';
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
     history.replaceState(null, '', '#/' + (index + 1));
   }
 
   document.addEventListener('keydown', function (event) {
-    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target)) return;
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
     if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
       event.preventDefault();
       show(index + 1);
@@ -2200,7 +2229,7 @@ export const RUNTIME_SOURCE = String.raw`
   if (!document.querySelector('[' + runtimeStyle + ']')) {
     var style = document.createElement('style');
     style.setAttribute(runtimeStyle, '1');
-    style.textContent = '@media print{[data-slide-id]{display:block !important;break-after:page;page-break-after:always}}';
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
     document.head.appendChild(style);
   }
 
@@ -2222,7 +2251,7 @@ export const RUNTIME_SOURCE = String.raw`
 `;
 ```
 
-The active slide uses `originalDisplay[i] || 'block'` so the template's `:not(:first-of-type)` CSS cannot keep slide 2 hidden after navigation. `beforeprint` clears runtime inline display; the injected print CSS forces every slide visible. The runtime style is injected once.
+The runtime marks deck roots ready, which disables the screen-only initial-hide rule while the first `show` hides inactive slides inline. The active slide gets its original inline `display` back (possibly empty), so stylesheet flex/grid is preserved. The injected print style only adds page breaks; `beforeprint` removes runtime-added inline display so every slide prints with its authored layout, and `afterprint` restores the screen state. Keys are ignored in editable controls (including a contenteditable body) and with any modifier.
 
 - [ ] **Step 8: Activate the runtime feature**
 
