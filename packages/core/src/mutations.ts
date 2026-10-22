@@ -10,8 +10,16 @@ export type { ElementTarget };
 
 export type Transition = 'none' | 'fade' | 'slide';
 
+export interface SlideBackground {
+  color?: string;
+  gradient?: string;
+  image?: string;
+}
+
 const STYLE_PROPERTY = /^-?[a-zA-Z][a-zA-Z0-9-]*$/;
 const CUSTOM_STYLE_PROPERTY = /^--[a-zA-Z0-9_-]+$/;
+const BACKGROUND_FIELDS = new Set<string>(['color', 'gradient', 'image']);
+const URL_FUNCTION = /^url\(/i;
 const TRANSITIONS = new Set<string>(['none', 'fade', 'slide']);
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
 const TEXT_NODE = 3;
@@ -327,4 +335,47 @@ export function setTransition(doc: Document, slideId: string, transition: Transi
     fail('invalid-transition', `Transition "${transition}" is not one of none, fade, slide.`);
   }
   findSlide(doc, slideId).element.setAttribute('data-ppt-transition', transition);
+}
+
+function backgroundImage(value: string): string {
+  if (URL_FUNCTION.test(value)) return value;
+  return `url("${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
+}
+
+/**
+ * Replaces the slide background. Exactly one of `color`, `gradient`, or
+ * `image` may be set. Colors use the `background` shorthand; gradients and
+ * images use `background-image`, and any previous background value is cleared
+ * so the three forms never mix.
+ */
+export function setSlideBackground(
+  doc: Document,
+  slideId: string,
+  background: SlideBackground
+): void {
+  const entries = Object.entries(background).filter(
+    ([, value]) => value !== undefined
+  );
+  if (
+    entries.length !== 1 ||
+    entries.some(([field]) => !BACKGROUND_FIELDS.has(field))
+  ) {
+    fail(
+      'invalid-background',
+      'Background must set exactly one of color, gradient, or image.'
+    );
+  }
+  const [field, rawValue] = entries[0];
+  const value = rawValue?.trim() ?? '';
+  if (!value) {
+    fail('invalid-background', `Background ${field} must not be empty.`);
+  }
+
+  const slide = findSlide(doc, slideId).element;
+  if (field === 'color') {
+    setStyle(slide, { background: value, 'background-image': null });
+    return;
+  }
+  const image = field === 'gradient' ? value : backgroundImage(value);
+  setStyle(slide, { background: null, 'background-image': image });
 }

@@ -1,7 +1,13 @@
 export { detectSlides, readCanvasSize } from './detect.js';
 export type { CanvasSize, SlideInfo } from './detect.js';
-export { getOutline, readSlide } from './outline.js';
-export type { DeckOutline, OutlineElement, OutlineSlide, SlideReadModel } from './outline.js';
+export { getElement, getOutline, readSlide } from './outline.js';
+export type {
+  DeckOutline,
+  ElementReadModel,
+  OutlineElement,
+  OutlineSlide,
+  SlideReadModel
+} from './outline.js';
 export { validateDeck } from './validate.js';
 export type { Diagnostic, DiagnosticSeverity, ValidationResult } from './types.js';
 export { serializeDeck, serializeExport } from './serialize.js';
@@ -17,16 +23,23 @@ export {
   addSlide,
   deleteSlide,
   duplicateSlide,
+  findSlide,
   moveSlide,
   mutateDeck,
   removeElement,
   resolveTarget,
   setElementHtml,
   setNotes,
+  setSlideBackground,
   setSlideOrder,
   setStyle,
   setText,
   setTransition,
   updateSlideHtml
 } from './mutations.js';
-export type { AddSlideOptions, ElementTarget, Transition } from './mutations.js';
+export type {
+  AddSlideOptions,
+  ElementTarget,
+  SlideBackground,
+  Transition
+} from './mutations.js';
