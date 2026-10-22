@@ -47,6 +47,7 @@ import {
   applyGeometryEdit,
   applyNotes,
   applyTransition,
+  clearBackground,
   notesOf,
   readGeometry,
   snapshotGeometry,
@@ -276,12 +277,22 @@ export function App() {
     async (mutate: (master: Document) => void) => {
       try {
         await actionsRef.current.commitMaster(mutate);
+        // A successful inspector commit proves the editor is healthy again;
+        // do not leave an earlier slide-op failure in the banner.
+        setSlideOpError('');
       } catch {
         // The controller surfaced the failure in its status and error state.
       }
     },
     []
   );
+
+  const clearOverlay = useCallback(() => {
+    setSelectionRect(null);
+    setSelectionRotation(0);
+    setSelectionGeometry(null);
+    setGuides([]);
+  }, []);
 
   const handleSelectObject = useCallback((path: number[]) => {
     const current = stateRef.current;
@@ -297,20 +308,22 @@ export function App() {
   }, []);
 
   const handleGeometryCommit = useCallback(
-    (field: GeometryField, value: number) => {
+    (field: GeometryField, value: number): boolean => {
       const current = stateRef.current;
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const frameDocument = frame.current?.contentDocument;
-      if (!selected || !slideInfo || !frameDocument) return;
+      if (!selected || !slideInfo || !frameDocument) return false;
       const slide = frameSlideElement(slideInfo, frameDocument);
-      if (!slide) return;
+      if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
-      if (!element) return;
+      if (!element) return false;
       const snapshot = snapshotGeometry(element, slide);
+      let applied = false;
       void commitMasterDocument((master) => {
-        applyGeometryEdit(master, selected, snapshot, field, value);
+        applied = applyGeometryEdit(master, selected, snapshot, field, value);
       });
+      return applied;
     },
     [commitMasterDocument]
   );
@@ -326,14 +339,25 @@ export function App() {
   );
 
   const handleBackgroundChange = useCallback(
-    (background: SlideBackground) => {
+    (background: SlideBackground): boolean => {
       const slideIndex = stateRef.current.activeIndex;
+      let applied = false;
       void commitMasterDocument((master) => {
-        applyBackground(master, slideIndex, background);
+        applied = applyBackground(master, slideIndex, background);
       });
+      return applied;
     },
     [commitMasterDocument]
   );
+
+  const handleClearBackground = useCallback((): boolean => {
+    const slideIndex = stateRef.current.activeIndex;
+    let cleared = false;
+    void commitMasterDocument((master) => {
+      cleared = clearBackground(master, slideIndex);
+    });
+    return cleared;
+  }, [commitMasterDocument]);
 
   const handleNotesChange = useCallback(
     (notes: string) => {
@@ -341,11 +365,26 @@ export function App() {
       const slide = current.slides[current.activeIndex];
       if (!slide || notesOf(slide.element) === notes) return;
       const slideIndex = current.activeIndex;
+      const before = Array.from(slide.element.children);
+      let structureChanged = false;
       void commitMasterDocument((master) => {
-        applyNotes(master, slideIndex, notes);
+        if (!applyNotes(master, slideIndex, notes)) return;
+        const updated = detectSlides(master)[slideIndex]?.element;
+        if (!updated) return;
+        const after = Array.from(updated.children);
+        structureChanged =
+          after.length !== before.length ||
+          after.some((child, index) => child !== before[index]);
       });
+      if (structureChanged) {
+        // Raw child paths key the selection; adding or removing the notes
+        // aside shifts sibling indices and would silently retarget the next
+        // geometry edit. Dropping the selection is the safe mapping.
+        actionsRef.current.clearSelection();
+        clearOverlay();
+      }
     },
-    [commitMasterDocument]
+    [clearOverlay, commitMasterDocument]
   );
 
   useEffect(() => {
@@ -408,13 +447,6 @@ export function App() {
     } catch {
       // The controller already surfaced the status and message.
     }
-  }, []);
-
-  const clearOverlay = useCallback(() => {
-    setSelectionRect(null);
-    setSelectionRotation(0);
-    setSelectionGeometry(null);
-    setGuides([]);
   }, []);
 
   const changeView = useCallback(
@@ -1059,6 +1091,7 @@ export function App() {
             onCommitGeometry={handleGeometryCommit}
             onSetTransition={handleTransitionChange}
             onSetBackground={handleBackgroundChange}
+            onClearBackground={handleClearBackground}
             onSetNotes={handleNotesChange}
           />
         </div>

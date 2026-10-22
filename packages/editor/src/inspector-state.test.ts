@@ -9,7 +9,9 @@ import {
   applyNotes,
   applyTransition,
   backgroundOf,
+  clearBackground,
   formatGeometryValue,
+  geometryCommitValue,
   notesOf,
   parseGeometryValue,
   readGeometry,
@@ -123,6 +125,19 @@ describe('inspector geometry state', () => {
     expect(parseGeometryValue('x', '')).toBeNull();
     expect(parseGeometryValue('width', '0')).toBeNull();
     expect(parseGeometryValue('height', '-3')).toBeNull();
+  });
+
+  it('treats the rounded display value as a no-op draft', () => {
+    // Focus/blur on a fractional flow object must not count as an edit.
+    expect(geometryCommitValue('x', '120.33', 120.333)).toBeNull();
+    expect(geometryCommitValue('x', '120.333', 120.333)).toBeNull();
+    expect(geometryCommitValue('rotation', '10', 10)).toBeNull();
+    expect(geometryCommitValue('x', 'abc', 120.333)).toBeNull();
+    expect(geometryCommitValue('x', '120.34', 120.333)).toBe(120.34);
+    expect(geometryCommitValue('rotation', '370', 10)).toBeNull();
+    expect(geometryCommitValue('rotation', '25', 10)).toBe(25);
+    // A null baseline (no selection) never commits.
+    expect(geometryCommitValue('x', '42', null)).toBeNull();
   });
 
   it('pins a flow object on the first numeric edit and keeps slide coordinates', () => {
@@ -305,6 +320,60 @@ describe('inspector slide settings', () => {
     expect(
       applyBackground(master, 0, { kind: 'color', value: '  ' })
     ).toBe(false);
+  });
+
+  it('clears both background longhands and the shorthand', () => {
+    const master = parseDeck(DECK_HTML);
+    const slide = slideOf(master);
+    const style = (slide as HTMLElement).style;
+
+    expect(
+      applyBackground(master, 0, { kind: 'color', value: '#112233' })
+    ).toBe(true);
+    expect(clearBackground(master, 0)).toBe(true);
+    expect(style.getPropertyValue('background')).toBe('');
+    expect(style.getPropertyValue('background-color')).toBe('');
+    expect(style.getPropertyValue('background-image')).toBe('');
+    expect(backgroundOf(slide)).toBeNull();
+
+    expect(
+      applyBackground(master, 0, {
+        kind: 'image',
+        value: 'https://example.com/bg.png'
+      })
+    ).toBe(true);
+    expect(clearBackground(master, 0)).toBe(true);
+    expect(style.getPropertyValue('background-image')).toBe('');
+    expect(backgroundOf(slide)).toBeNull();
+  });
+
+  it('rejects invalid color and gradient values without mutating the slide', () => {
+    const master = parseDeck(DECK_HTML);
+    const slide = slideOf(master);
+    const style = (slide as HTMLElement).style;
+
+    expect(
+      applyBackground(master, 0, { kind: 'color', value: '#112233' })
+    ).toBe(true);
+    const before = (slide as HTMLElement).getAttribute('style');
+
+    expect(
+      applyBackground(master, 0, { kind: 'color', value: 'not-a-color' })
+    ).toBe(false);
+    expect((slide as HTMLElement).getAttribute('style')).toBe(before);
+
+    expect(
+      applyBackground(master, 0, {
+        kind: 'gradient',
+        value: 'linear-gradient(broken'
+      })
+    ).toBe(false);
+    expect((slide as HTMLElement).getAttribute('style')).toBe(before);
+    expect(style.getPropertyValue('background')).toBe('rgb(17, 34, 51)');
+    expect(backgroundOf(slide)).toEqual({
+      kind: 'color',
+      value: 'rgb(17, 34, 51)'
+    });
   });
 
   it('writes the slide transition attribute', () => {

@@ -68,6 +68,49 @@ async function createNudgeFixture(
   );
 }
 
+async function createFractionalFlowFixture(
+  directory: string,
+  file: string
+): Promise<void> {
+  await createTemplate(directory, file, 1);
+  const path = join(directory, file);
+  const html = await readFile(path, 'utf8');
+  const closing = html.indexOf('</section>');
+  if (closing === -1) {
+    throw new Error('Template slide closing tag was not found.');
+  }
+  const object =
+    '    <div data-ppt-el="frac" style="margin-left:10.333px;margin-top:20.667px;width:240.333px;height:120px">Fractional flow</div>\n';
+  await writeFile(
+    path,
+    `${html.slice(0, closing)}${object}${html.slice(closing)}`,
+    'utf8'
+  );
+}
+
+async function createNotesFirstFixture(
+  directory: string,
+  file: string
+): Promise<void> {
+  await createTemplate(directory, file);
+  const path = join(directory, file);
+  const html = await readFile(path, 'utf8');
+  const sectionStart = html.indexOf('<section');
+  const sectionOpenEnd = html.indexOf('>', sectionStart);
+  if (sectionStart === -1 || sectionOpenEnd === -1) {
+    throw new Error('Template slide opening tag was not found.');
+  }
+  const children =
+    '\n      <aside data-ppt-notes hidden>Legacy notes</aside>\n' +
+    '      <div data-ppt-el="box-a" style="position:absolute;left:120px;top:160px;width:100px;height:60px">A</div>\n' +
+    '      <div data-ppt-el="box-b" style="position:absolute;left:400px;top:160px;width:100px;height:60px">B</div>\n';
+  await writeFile(
+    path,
+    `${html.slice(0, sectionOpenEnd + 1)}${children}${html.slice(sectionOpenEnd + 1)}`,
+    'utf8'
+  );
+}
+
 async function openDeck(
   page: Page,
   prepare: (directory: string, file: string) => Promise<void>,
@@ -122,6 +165,19 @@ function openNudgeDeck(page: Page): Promise<EditorHarness> {
       await expect(frame.locator('[data-ppt-el="box1"]')).toBeVisible();
     }
   );
+}
+
+function openFractionalFlowDeck(page: Page): Promise<EditorHarness> {
+  return openDeck(page, createFractionalFlowFixture, async (frame) => {
+    await expect(frame.locator('[data-ppt-el="frac"]')).toBeVisible();
+  });
+}
+
+function openNotesFirstDeck(page: Page): Promise<EditorHarness> {
+  return openDeck(page, createNotesFirstFixture, async (frame) => {
+    await expect(frame.locator('[data-ppt-el="box-a"]')).toBeVisible();
+    await expect(frame.locator('[data-ppt-el="box-b"]')).toBeVisible();
+  });
 }
 
 async function closeEditor(editor: EditorHarness): Promise<void> {
@@ -268,7 +324,10 @@ async function savedStyle(
     top: styleDeclaration(style, 'top'),
     width: styleDeclaration(style, 'width'),
     height: styleDeclaration(style, 'height'),
-    transform: styleDeclaration(style, 'transform')
+    transform: styleDeclaration(style, 'transform'),
+    background: styleDeclaration(style, 'background'),
+    'background-image': styleDeclaration(style, 'background-image'),
+    'background-color': styleDeclaration(style, 'background-color')
   };
 }
 
@@ -280,6 +339,17 @@ async function savedSlideInnerStyle(
     directory,
     file,
     /<div[^>]*class="slide-inner"[^>]*>/
+  );
+}
+
+async function savedSlideStyle(
+  directory: string,
+  file: string
+): Promise<Record<string, string | null>> {
+  return savedStyle(
+    directory,
+    file,
+    /<section[^>]*data-slide-id="s1"[^>]*>/
   );
 }
 
@@ -1534,6 +1604,14 @@ test(
         '[data-testid="object-row"][data-object-id="box1"]'
       );
       await expect(boxRow).toHaveCount(1);
+      await expect(boxRow).toContainText('div');
+      await expect(boxRow).toContainText('Nudge me');
+      const innerRow = page.locator(
+        '[data-testid="object-row"][data-object-path="0"]'
+      );
+      await expect(innerRow).toContainText('div');
+      await expect(innerRow).toContainText('htmlppt');
+      await expect(innerRow).toContainText('Untitled deck');
       await boxRow.click();
 
       const outline = page.getByTestId('selection-outline');
@@ -1629,7 +1707,10 @@ test(
       await expect
         .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
         .toBe(true);
-      expect(await savedDocument(editor)).toContain('講者備註：先問候觀眾');
+      const savedWithNotes = await savedDocument(editor);
+      expect(savedWithNotes).toMatch(
+        /<aside[^>]*data-ppt-notes[^>]*>講者備註：先問候觀眾<\/aside>/
+      );
 
       await page.getByTestId('inspector-tab-notes').click();
       await expect(notes).toHaveValue('講者備註：先問候觀眾');
@@ -1640,6 +1721,9 @@ test(
       await expect
         .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
         .toBe(false);
+      expect(await savedDocument(editor)).not.toMatch(
+        /<aside[^>]*data-ppt-notes/
+      );
     } finally {
       await closeEditor(editor);
     }
@@ -1669,6 +1753,220 @@ test(
       await page.reload();
       await expect(page.getByTestId('save-status')).toHaveText('已載入');
       await expect(page.getByTestId('transition-select')).toHaveValue('fade');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'a no-op blur on fractional flow geometry neither pins nor saves',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openFractionalFlowDeck(page);
+    try {
+      const object = editor.frame.locator('[data-ppt-el="frac"]');
+      await page
+        .locator('[data-testid="object-row"][data-object-id="frac"]')
+        .click();
+
+      const outline = page.getByTestId('selection-outline');
+      await expect(outline).toHaveAttribute('data-selected-id', 'frac');
+      await expect(outline).toHaveAttribute('data-selected-path', '1');
+      const fieldX = page.getByTestId('field-x');
+      await expect(fieldX).toHaveValue('10.33');
+      expect((await inlineGeometryOf(object)).position).toBe('');
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await expectNoDeckSave(page, async () => {
+          await fieldX.focus();
+          await page.getByTestId('field-y').focus();
+        });
+
+        const untouched = await inlineGeometryOf(object);
+        expect(untouched.position).toBe('');
+        expect(untouched.left).toBeNull();
+        expect(untouched.top).toBeNull();
+
+        // Undo with no recorded entry is a no-op; a stale commit would clear
+        // the selection and restore the unpinned snapshot instead.
+        await page.getByTestId('undo').click();
+        await expect(outline).toBeVisible();
+        expect(saveRequests).toHaveLength(0);
+      } finally {
+        page.off('request', countSave);
+      }
+
+      const commitRequests: Request[] = [];
+      const countCommit = (request: Request) => {
+        if (isDeckSaveRequest(request)) commitRequests.push(request);
+      };
+      page.on('request', countCommit);
+      try {
+        const save = waitForDeckSave(page);
+        await fieldX.fill('50');
+        await fieldX.press('Enter');
+        expect((await save).ok()).toBeTruthy();
+        await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+        const pinned = await inlineGeometryOf(object);
+        expect(pinned.position).toBe('absolute');
+        expect(pinned.left).toBeCloseTo(50, 2);
+        expect(commitRequests).toHaveLength(1);
+        await expect(fieldX).toHaveValue('50');
+      } finally {
+        page.off('request', countCommit);
+      }
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'removing notes that shift sibling indices clears the object selection',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNotesFirstDeck(page);
+    try {
+      const boxA = editor.frame.locator('[data-ppt-el="box-a"]');
+      const boxB = editor.frame.locator('[data-ppt-el="box-b"]');
+      await page
+        .locator('[data-testid="object-row"][data-object-id="box-a"]')
+        .click();
+
+      const outline = page.getByTestId('selection-outline');
+      await expect(outline).toHaveAttribute('data-selected-id', 'box-a');
+      await expect(outline).toHaveAttribute('data-selected-path', '1');
+      await expect(page.getByTestId('inspector-geometry')).toBeVisible();
+
+      await page.getByTestId('inspector-tab-notes').click();
+      const notes = page.getByTestId('notes-input');
+      await expect(notes).toHaveValue('Legacy notes');
+      const save = waitForDeckSave(page);
+      await notes.fill('');
+      await page.getByTestId('inspector-tab-design').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(async () =>
+          (await savedDocument(editor)).includes('data-ppt-notes')
+        )
+        .toBe(false);
+
+      // The notes aside was the first child, so the old path 1 now resolves to
+      // box-b. The selection must be dropped instead of remapped.
+      await expect(page.getByTestId('selection-outline')).toHaveCount(0);
+      await expect(page.getByTestId('inspector-geometry')).toHaveCount(0);
+      await expect(page.getByTestId('slide-settings')).toBeVisible();
+
+      // Leave the tablist so ArrowRight is handled by the canvas, not by the
+      // inspector's roving tab navigation.
+      await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
+      await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck — 2');
+
+      await page.getByTestId('thumbnail').nth(0).click();
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+      expect((await inlineGeometryOf(boxA)).left).toBe(120);
+      expect((await inlineGeometryOf(boxB)).left).toBe(400);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'slide background applies and clears from the inspector',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openSingleSlideDeck(page);
+    try {
+      const value = page.getByTestId('background-value');
+      await expect(value).toHaveValue('');
+      await value.fill('#112233');
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('apply-background').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file)).background
+        )
+        .toBe('rgb(17, 34, 51)');
+
+      const clear = page.getByTestId('clear-background');
+      await expect(clear).toBeEnabled();
+      const clearSave = waitForDeckSave(page);
+      await clear.click();
+      expect((await clearSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file)).background
+        )
+        .toBeNull();
+      const cleared = await savedSlideStyle(editor.directory, editor.file);
+      expect(cleared['background-image']).toBeNull();
+      expect(cleared['background-color']).toBeNull();
+      await expect(value).toHaveValue('');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'inspector tabs support roving arrow-key navigation',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const design = page.getByTestId('inspector-tab-design');
+      const text = page.getByTestId('inspector-tab-text');
+      const notes = page.getByTestId('inspector-tab-notes');
+
+      await design.focus();
+      await expect(design).toHaveAttribute('tabindex', '0');
+      await expect(text).toHaveAttribute('tabindex', '-1');
+      await expect(notes).toHaveAttribute('tabindex', '-1');
+
+      await page.keyboard.press('ArrowRight');
+      await expect(text).toBeFocused();
+      await expect(text).toHaveAttribute('aria-selected', 'true');
+      await expect(design).toHaveAttribute('aria-selected', 'false');
+      await expect(text).toHaveAttribute('tabindex', '0');
+      await expect(design).toHaveAttribute('tabindex', '-1');
+      await expect(page.getByTestId('text-placeholder')).toBeVisible();
+
+      await page.keyboard.press('End');
+      await expect(notes).toBeFocused();
+      await expect(notes).toHaveAttribute('aria-selected', 'true');
+
+      await page.keyboard.press('ArrowRight');
+      await expect(design).toBeFocused();
+      await expect(design).toHaveAttribute('aria-selected', 'true');
+
+      await page.keyboard.press('ArrowLeft');
+      await expect(notes).toBeFocused();
+      await expect(notes).toHaveAttribute('aria-selected', 'true');
+
+      await page.keyboard.press('Home');
+      await expect(design).toBeFocused();
+      await expect(design).toHaveAttribute('aria-selected', 'true');
+
+      // Clicking still selects a tab outside the keyboard path.
+      await text.click();
+      await expect(text).toHaveAttribute('aria-selected', 'true');
+      await expect(page.getByTestId('text-placeholder')).toBeVisible();
     } finally {
       await closeEditor(editor);
     }

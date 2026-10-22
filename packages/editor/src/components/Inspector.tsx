@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent
+} from 'react';
 import type { SlideInfo, Transition } from '@htmlppt/core';
 import type { SelectionTarget } from '../selection';
 import {
   backgroundOf,
   formatGeometryValue,
+  geometryCommitValue,
   notesOf,
-  parseGeometryValue,
   summarizeObjects,
   transitionOf,
   type BackgroundKind,
@@ -21,9 +26,10 @@ export interface InspectorProps {
   selection: SelectionTarget | null;
   geometry: GeometryValues | null;
   onSelectObject: (path: number[]) => void;
-  onCommitGeometry: (field: GeometryField, value: number) => void;
+  onCommitGeometry: (field: GeometryField, value: number) => boolean;
   onSetTransition: (transition: Transition) => void;
-  onSetBackground: (background: SlideBackground) => void;
+  onSetBackground: (background: SlideBackground) => boolean;
+  onClearBackground: () => boolean;
   onSetNotes: (notes: string) => void;
 }
 
@@ -45,7 +51,7 @@ interface NumberFieldProps {
   label: string;
   value: number | null;
   disabled: boolean;
-  onCommit: (field: GeometryField, value: number) => void;
+  onCommit: (field: GeometryField, value: number) => boolean;
 }
 
 function NumberField({
@@ -75,12 +81,12 @@ function NumberField({
       reset();
       return;
     }
-    const parsed = parseGeometryValue(field, draft);
-    if (parsed === null || parsed === value) {
+    const parsed = geometryCommitValue(field, draft, value);
+    if (parsed === null) {
       reset();
       return;
     }
-    onCommit(field, parsed);
+    if (!onCommit(field, parsed)) reset();
   };
 
   return (
@@ -124,12 +130,19 @@ export function Inspector({
   onCommitGeometry,
   onSetTransition,
   onSetBackground,
+  onClearBackground,
   onSetNotes
 }: InspectorProps) {
   const [tab, setTab] = useState<InspectorTab>('design');
+  const tabRefs = useRef<Record<InspectorTab, HTMLButtonElement | null>>({
+    design: null,
+    text: null,
+    notes: null
+  });
   const notes = notesOf(slide?.element);
   const [notesDraft, setNotesDraft] = useState(notes);
   const notesFocusedRef = useRef(false);
+  const notesSlideIdRef = useRef<string | undefined>(undefined);
 
   const background = backgroundOf(slide?.element);
   const [backgroundKind, setBackgroundKind] = useState<BackgroundKind>(
@@ -138,25 +151,74 @@ export function Inspector({
   const [backgroundValue, setBackgroundValue] = useState(
     background?.value ?? ''
   );
+  const [backgroundError, setBackgroundError] = useState('');
+
+  useEffect(() => {
+    // A programmatic slide change invalidates any in-flight notes draft.
+    notesFocusedRef.current = false;
+    notesSlideIdRef.current = undefined;
+    setNotesDraft(notes);
+  }, [slide?.id]);
 
   useEffect(() => {
     if (!notesFocusedRef.current) setNotesDraft(notes);
-  }, [notes, slide?.id]);
+  }, [notes]);
 
   useEffect(() => {
     setBackgroundKind(background?.kind ?? 'color');
     setBackgroundValue(background?.value ?? '');
+    setBackgroundError('');
   }, [background?.kind, background?.value, slide?.id]);
 
   const objects = slide ? summarizeObjects(slide.element) : [];
   const readOnly = selection !== null && selection.path.length > 1;
   const selectedTopPath = selection?.path[0];
 
+  const selectTab = (next: InspectorTab, focus: boolean) => {
+    setTab(next);
+    if (focus) tabRefs.current[next]?.focus();
+  };
+
+  const handleTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    current: InspectorTab
+  ) => {
+    const order = TABS.map((candidate) => candidate.id);
+    const index = order.indexOf(current);
+    let nextIndex: number;
+    if (event.key === 'ArrowRight') {
+      nextIndex = (index + 1) % order.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (index - 1 + order.length) % order.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = order.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const next = order[nextIndex];
+    if (next) selectTab(next, true);
+  };
+
   const applyBackground = () => {
     const value = backgroundValue.trim();
-    if (!value) return;
+    if (!value) {
+      setBackgroundError('背景值不可為空。');
+      return;
+    }
     setBackgroundValue(value);
-    onSetBackground({ kind: backgroundKind, value });
+    setBackgroundError(
+      onSetBackground({ kind: backgroundKind, value })
+        ? ''
+        : '背景值無效，未套用。'
+    );
+  };
+
+  const clearBackground = () => {
+    setBackgroundError(onClearBackground() ? '' : '無法清除背景。');
+    setBackgroundValue('');
   };
 
   return (
@@ -181,7 +243,12 @@ export function Inspector({
               aria-selected={active}
               aria-controls={`inspector-panel-${candidate.id}`}
               data-testid={`inspector-tab-${candidate.id}`}
-              onClick={() => setTab(candidate.id)}
+              ref={(element) => {
+                tabRefs.current[candidate.id] = element;
+              }}
+              tabIndex={active ? 0 : -1}
+              onClick={() => selectTab(candidate.id, false)}
+              onKeyDown={(event) => handleTabKeyDown(event, candidate.id)}
               className={`flex-1 border-b-2 px-2 py-2 text-xs transition-colors ${
                 active
                   ? 'border-amber-400 text-amber-200'
@@ -326,9 +393,11 @@ export function Inspector({
                   data-testid="background-kind"
                   aria-label="背景類型"
                   value={backgroundKind}
-                  onChange={(event) =>
-                    setBackgroundKind(event.target.value as BackgroundKind)
-                  }
+                  onChange={(event) => {
+                    setBackgroundKind(event.target.value as BackgroundKind);
+                    setBackgroundValue('');
+                    setBackgroundError('');
+                  }}
                   className={`${FIELD_CLASS} w-24 shrink-0`}
                 >
                   <option value="color">顏色</option>
@@ -359,15 +428,35 @@ export function Inspector({
                   className={FIELD_CLASS}
                 />
               </div>
-              <button
-                type="button"
-                data-testid="apply-background"
-                onClick={applyBackground}
-                disabled={!backgroundValue.trim()}
-                className="self-end rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40"
-              >
-                套用
-              </button>
+              <div className="flex justify-end gap-1">
+                <button
+                  type="button"
+                  data-testid="clear-background"
+                  onClick={clearBackground}
+                  disabled={background === null}
+                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40"
+                >
+                  清除背景
+                </button>
+                <button
+                  type="button"
+                  data-testid="apply-background"
+                  onClick={applyBackground}
+                  disabled={!backgroundValue.trim()}
+                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40"
+                >
+                  套用
+                </button>
+              </div>
+              {backgroundError && (
+                <p
+                  data-testid="background-error"
+                  role="alert"
+                  className="text-[11px] text-red-300"
+                >
+                  {backgroundError}
+                </p>
+              )}
             </div>
           </section>
         )}
@@ -398,6 +487,7 @@ export function Inspector({
         <div className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>講者備註</h3>
           <textarea
+            key={slide?.id ?? 'no-slide'}
             data-testid="notes-input"
             aria-label="講者備註"
             value={notesDraft}
@@ -405,10 +495,17 @@ export function Inspector({
             placeholder="輸入備註…"
             onFocus={() => {
               notesFocusedRef.current = true;
+              notesSlideIdRef.current = slide?.id;
             }}
             onChange={(event) => setNotesDraft(event.target.value)}
             onBlur={() => {
               notesFocusedRef.current = false;
+              const draftSlideId = notesSlideIdRef.current;
+              notesSlideIdRef.current = undefined;
+              if (draftSlideId !== slide?.id) {
+                setNotesDraft(notes);
+                return;
+              }
               if (notesDraft !== notes) onSetNotes(notesDraft);
             }}
             className={`${FIELD_CLASS} resize-y font-sans`}

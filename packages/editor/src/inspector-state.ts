@@ -110,6 +110,24 @@ export function parseGeometryValue(
 }
 
 /**
+ * Resolves a field draft to the value that should be committed. The displayed
+ * baseline is rounded to two decimals, so a focus/blur without typing on a
+ * fractional object must compare equal to that baseline instead of the raw
+ * measurement.
+ */
+export function geometryCommitValue(
+  field: GeometryField,
+  input: string,
+  current: number | null
+): number | null {
+  if (current === null) return null;
+  const parsed = parseGeometryValue(field, input);
+  if (parsed === null || parsed === current) return null;
+  const baseline = parseGeometryValue(field, formatGeometryValue(current));
+  return parsed === baseline ? null : parsed;
+}
+
+/**
  * Applies one numeric field to the master element addressed by the selection
  * path. Flow objects are pinned on their first edit so position and size apply
  * without reflowing the authored layout.
@@ -255,17 +273,34 @@ export function backgroundOf(
   return color ? { kind: 'color', value: color } : null;
 }
 
+function backgroundCssValue(background: SlideBackground): string | null {
+  const value = background.value.trim();
+  if (!value || /[\r\n]/.test(value)) return null;
+  if (background.kind === 'gradient' && !/gradient\(/i.test(value)) {
+    return null;
+  }
+  return background.kind === 'image' ? cssUrl(value) : value;
+}
+
 /**
  * Writes exactly one background kind inline and clears the competing values.
  * Setting the shorthand would otherwise leave an old background-image behind.
+ * Invalid colors and gradients are rejected by a detached probe before the
+ * slide is touched, so a bad edit cannot wipe the current background.
  */
 export function applyBackground(
   master: Document,
   slideIndex: number,
   background: SlideBackground
 ): boolean {
-  const value = background.value.trim();
-  if (!value || /[\r\n]/.test(value)) return false;
+  const cssValue = backgroundCssValue(background);
+  if (cssValue === null) return false;
+  const property =
+    background.kind === 'image' ? 'background-image' : 'background';
+  const probe = master.createElement('div');
+  probe.style.setProperty(property, cssValue);
+  if (!probe.style.getPropertyValue(property).trim()) return false;
+
   const slide = validSlide(master, slideIndex);
   const element = slide?.element as HTMLElement | undefined;
   const style = element?.style;
@@ -275,10 +310,20 @@ export function applyBackground(
   style.removeProperty('background-color');
   style.removeProperty('background-image');
 
-  if (background.kind === 'image') {
-    style.setProperty('background-image', cssUrl(value));
-  } else {
-    style.setProperty('background', value);
-  }
+  style.setProperty(property, cssValue);
+  return true;
+}
+
+/** Removes every inline background longhand and the shorthand. */
+export function clearBackground(
+  master: Document,
+  slideIndex: number
+): boolean {
+  const slide = validSlide(master, slideIndex);
+  const style = (slide?.element as HTMLElement | undefined)?.style;
+  if (!style) return false;
+  style.removeProperty('background');
+  style.removeProperty('background-color');
+  style.removeProperty('background-image');
   return true;
 }
