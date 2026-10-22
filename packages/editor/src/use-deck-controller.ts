@@ -68,7 +68,11 @@ export interface DeckControllerState {
 }
 
 export type SlideCommit = (master: Document, slide: SlideInfo) => string | void;
-export type MasterCommit = (master: Document) => void;
+/**
+ * Returning false means the mutation discovered a no-op before writing any
+ * meaningful change; the controller then skips history, dirty state and save.
+ */
+export type MasterCommit = (master: Document) => boolean | void;
 
 export interface SlideMutationOptions {
   coalesceKey?: string;
@@ -86,6 +90,7 @@ export interface DeckControllerActions {
   load(deck?: DeckResponse): Promise<void>;
   showSlide(index: number): void;
   select(target: SelectionTarget | null): void;
+  selectTargets(targets: SelectionTarget[]): void;
   toggleSelect(target: SelectionTarget): void;
   selectAll(): void;
   clearSelection(): void;
@@ -584,6 +589,13 @@ export function useDeckController(
     [applySelections]
   );
 
+  const selectTargets = useCallback(
+    (targets: SelectionTarget[]) => {
+      applySelections(targets);
+    },
+    [applySelections]
+  );
+
   const toggleSelect = useCallback(
     (target: SelectionTarget) => {
       const current = stateRef.current;
@@ -712,7 +724,8 @@ export function useDeckController(
 
       let html: string;
       try {
-        mutate(master);
+        const changed = mutate(master);
+        if (changed === false) return;
         html = serializeDeck(master);
       } catch (cause) {
         // The master may be partially mutated, but no snapshot was recorded,
@@ -939,6 +952,7 @@ export function useDeckController(
       load,
       showSlide,
       select,
+      selectTargets,
       toggleSelect,
       selectAll,
       clearSelection,
@@ -965,6 +979,7 @@ export function useDeckController(
       load,
       showSlide,
       select,
+      selectTargets,
       toggleSelect,
       selectAll,
       clearSelection,

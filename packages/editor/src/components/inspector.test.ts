@@ -53,8 +53,29 @@ function props(overrides: Partial<InspectorInputs> = {}): InspectorInputs {
     slide: first,
     selection: null,
     geometry: null,
+    objectActions: {
+      canGroup: false,
+      canUngroup: false,
+      canAlign: false,
+      canDistribute: false,
+      canOrder: false,
+      canToggle: false,
+      locked: false,
+      hidden: false,
+      group: false
+    },
     onSelectObject: () => undefined,
+    onObjectCommand: () => undefined,
+    onObjectRecovery: () => undefined,
     onCommitGeometry: () => true,
+    onSetAppearance: () => true,
+    onSetShapeText: () => true,
+    onSetImageAlt: () => true,
+    onSetImageCrop: () => true,
+    onReplaceImageFile: () => undefined,
+    onReplaceImageUrl: () => undefined,
+    onEditChart: () => undefined,
+    onPreviewTransition: () => undefined,
     onSetTransition: () => undefined,
     onSetBackground: () => true,
     onClearBackground: () => true,
@@ -185,6 +206,51 @@ describe('inspector notes draft', () => {
   });
 });
 
+describe('inspector transition staging', () => {
+  async function choose(value: string): Promise<void> {
+    await act(async () => {
+      const select = selectByTestId('transition-select');
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  it('previews and cancels without committing', async () => {
+    const onSetTransition = vi.fn();
+    const onPreviewTransition = vi.fn();
+    await render({ onSetTransition, onPreviewTransition });
+
+    expect(selectByTestId('transition-select').value).toBe('none');
+    expect(buttonByTestId('transition-preview').disabled).toBe(true);
+    expect(buttonByTestId('transition-apply').disabled).toBe(true);
+    expect(buttonByTestId('transition-cancel').disabled).toBe(true);
+
+    await choose('slide');
+    expect(onSetTransition).not.toHaveBeenCalled();
+    expect(buttonByTestId('transition-preview').disabled).toBe(false);
+    expect(buttonByTestId('transition-apply').disabled).toBe(false);
+
+    await click(buttonByTestId('transition-preview'));
+    expect(onPreviewTransition).toHaveBeenCalledWith('slide');
+    expect(onSetTransition).not.toHaveBeenCalled();
+
+    await click(buttonByTestId('transition-cancel'));
+    expect(selectByTestId('transition-select').value).toBe('none');
+    expect(onSetTransition).not.toHaveBeenCalled();
+  });
+
+  it('commits exactly the staged transition on apply', async () => {
+    const onSetTransition = vi.fn();
+    await render({ onSetTransition });
+
+    await choose('fade');
+    expect(onSetTransition).not.toHaveBeenCalled();
+    await click(buttonByTestId('transition-apply'));
+    expect(onSetTransition).toHaveBeenCalledTimes(1);
+    expect(onSetTransition).toHaveBeenCalledWith('fade');
+  });
+});
+
 describe('inspector background controls', () => {
   it('resets the value input when the kind changes', async () => {
     await render();
@@ -249,5 +315,102 @@ describe('inspector background controls', () => {
 
     expect(onClearBackground).toHaveBeenCalledTimes(1);
     expect(container.querySelector('[data-testid="background-error"]')).toBeNull();
+  });
+});
+
+describe('inspector object appearance', () => {
+  const SHAPE_STYLE = {
+    kind: 'shape' as const,
+    svg: false,
+    appearance: {
+      fill: 'rgb(79, 124, 255)',
+      stroke: '',
+      strokeWidth: '',
+      radius: '',
+      opacity: ''
+    },
+    text: '',
+    alt: '',
+    crop: { top: 0, right: 0, bottom: 0, left: 0 }
+  };
+  const IMAGE_STYLE = {
+    ...SHAPE_STYLE,
+    kind: 'image' as const,
+    appearance: { ...SHAPE_STYLE.appearance, fill: '', radius: '', opacity: '' },
+    alt: 'Pixel'
+  };
+  const selection = { slideIndex: 0, path: [0], elementId: 'e1' };
+
+  it('applies shape appearance values on blur', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    await render({ selection, style: SHAPE_STYLE, onSetAppearance });
+
+    expect(inputByTestId('style-fill').value).toBe('rgb(79, 124, 255)');
+    await act(async () => {
+      const fill = inputByTestId('style-fill');
+      fill.focus();
+      setInputValue(fill, '#ff0000');
+      fill.blur();
+    });
+
+    expect(onSetAppearance).toHaveBeenCalledWith({ fill: '#ff0000' });
+  });
+
+  it('shows validation feedback when an appearance value is rejected', async () => {
+    const onSetAppearance = vi.fn(() => false);
+    await render({ selection, style: SHAPE_STYLE, onSetAppearance });
+
+    await act(async () => {
+      const opacity = inputByTestId('style-opacity');
+      opacity.focus();
+      setInputValue(opacity, '2');
+      opacity.blur();
+    });
+
+    expect(onSetAppearance).toHaveBeenCalledWith({ opacity: 2 });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      '\u503c\u7121\u6548'
+    );
+  });
+
+  it('offers image replacement, alt text, crop, and style controls', async () => {
+    const onSetImageAlt = vi.fn(() => true);
+    const onSetImageCrop = vi.fn(() => true);
+    await render({
+      selection,
+      style: IMAGE_STYLE,
+      onSetImageAlt,
+      onSetImageCrop
+    });
+
+    expect(buttonByTestId('image-replace-upload')).not.toBeNull();
+    expect(buttonByTestId('image-replace-url')).not.toBeNull();
+    expect(inputByTestId('image-alt').value).toBe('Pixel');
+
+    await act(async () => {
+      const top = inputByTestId('image-crop-top');
+      top.focus();
+      setInputValue(top, '10');
+      top.blur();
+    });
+    expect(onSetImageCrop).toHaveBeenCalledWith({
+      top: 10,
+      right: 0,
+      bottom: 0,
+      left: 0
+    });
+
+    await render({
+      selection,
+      style: { ...IMAGE_STYLE, crop: { top: 10, right: 0, bottom: 0, left: 0 } },
+      onSetImageCrop
+    });
+    await act(async () => {
+      const top = inputByTestId('image-crop-top');
+      top.focus();
+      setInputValue(top, '0');
+      top.blur();
+    });
+    expect(onSetImageCrop).toHaveBeenLastCalledWith(null);
   });
 });

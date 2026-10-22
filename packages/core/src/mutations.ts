@@ -39,6 +39,12 @@ function hasNonWhitespaceText(container: Element): boolean {
   );
 }
 
+export function appendObject(slide: Element, element: Element): Element {
+  slide.appendChild(element);
+  if (!NON_OBJECT_TAGS.has(element.tagName)) assignElementId(slide, element);
+  return element;
+}
+
 function assignElementId(slide: Element, element: Element): void {
   if (element.getAttribute('data-ppt-el')?.trim()) return;
   const used = new Set<string>();

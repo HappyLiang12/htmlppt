@@ -238,8 +238,26 @@ describe('inspector object summaries', () => {
   it('lists top-level objects with tag, id, text, and raw path', () => {
     const master = parseDeck(DECK_HTML);
     expect(summarizeObjects(slideOf(master))).toEqual([
-      { path: [0], tag: 'div', elementId: 'box', text: 'Nudge me' },
-      { path: [1], tag: 'h1', elementId: 'title', text: 'Slide title' }
+      {
+        path: [0],
+        tag: 'div',
+        elementId: 'box',
+        text: 'Nudge me',
+        locked: false,
+        hidden: false,
+        group: false,
+        canUnhide: false
+      },
+      {
+        path: [1],
+        tag: 'h1',
+        elementId: 'title',
+        text: 'Slide title',
+        locked: false,
+        hidden: false,
+        group: false,
+        canUnhide: false
+      }
     ]);
   });
 });

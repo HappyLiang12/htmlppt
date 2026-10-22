@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateDeck } from '@htmlppt/core';
+import { createDeckHtml, MAX_IMAGE_BYTES, validateDeck } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
 import {
   readSession,
@@ -35,7 +35,9 @@ const tsupCli = createRequire(import.meta.url).resolve(
 
 const EXPECTED_TOOLS = [
   'add_element',
+  'add_image',
   'add_slide',
+  'add_table',
   'create_deck',
   'delete_slide',
   'duplicate_slide',
@@ -54,6 +56,7 @@ const EXPECTED_TOOLS = [
   'set_style',
   'set_text',
   'set_transition',
+  'update_chart',
   'update_slide_html',
   'validate_deck'
 ];
@@ -116,9 +119,41 @@ async function readDeckDocument(state: SurfaceState): Promise<Document> {
   return parseDeckHtml(await readFile(state.deckPath, 'utf8'));
 }
 
+async function readDeckAt(filePath: string): Promise<Document> {
+  return parseDeckHtml(await readFile(filePath, 'utf8'));
+}
+
 function slideIds(document: Document): Array<string | null> {
   return Array.from(document.querySelectorAll('[data-slide-id]')).map((slide) =>
     slide.getAttribute('data-slide-id')
+  );
+}
+
+const TINY_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+const TINY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#4f7cff"/></svg>';
+
+function chartFigure(id: string, width = 640, height = 360): string {
+  return `<figure data-ppt-el="${id}" data-ppt-chart='{"type":"bar","labels":["A","B","C"],"series":[{"name":"Series 1","values":[1,2,3]}]}' style="position: absolute; left: 100px; top: 100px; width: ${width}px; height: ${height}px;"><figcaption>Chart</figcaption></figure>`;
+}
+
+/** Builds a one-or-more-slide template deck whose first slide has a chart. */
+function deckHtmlWithChart(
+  title: string,
+  slides: number,
+  chartId: string,
+  chartWidth = 640,
+  chartHeight = 360
+): string {
+  const anchor = `<h1 data-ppt-el="e1">${title}</h1>\n      </div>`;
+  const html = createDeckHtml({ title, slides });
+  if (!html.includes(anchor)) {
+    throw new Error('The generated deck template changed shape.');
+  }
+  return html.replace(
+    anchor,
+    `${anchor}\n    ${chartFigure(chartId, chartWidth, chartHeight)}`
   );
 }
 
@@ -185,8 +220,7 @@ const MUTATION_TOOL_CASES: ToolCase[] = [
     name: 'create_deck',
     args: (state) => ({
       path: state.relativePath,
-      title: 'Surface mutations',
-      slides: 2
+      html: deckHtmlWithChart('Surface mutations', 2, 'surface-chart')
     }),
     verify: async (state, payload) => {
       expect(payload).toMatchObject({
@@ -334,6 +368,76 @@ const MUTATION_TOOL_CASES: ToolCase[] = [
           `[data-slide-id="${state.newSlideId}"] [data-ppt-el="surface-el"]`
         )
       ).not.toBeNull();
+    }
+  },
+  {
+    name: 'add_image',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      source: TINY_PNG_DATA_URL,
+      width: 320
+    }),
+    verify: async (state, payload) => {
+      expect(typeof payload.elementId).toBe('string');
+      const document = await readDeckDocument(state);
+      const image = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"] img[data-ppt-el="${String(payload.elementId)}"]`
+      ) as HTMLImageElement | null;
+      expect(image?.getAttribute('src')).toBe(TINY_PNG_DATA_URL);
+      expect(image?.style.left).toBe('100px');
+      expect(image?.style.top).toBe('100px');
+      expect(image?.style.width).toBe('320px');
+      expect(image?.style.height).toBe('180px');
+    }
+  },
+  {
+    name: 'add_table',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.newSlideId,
+      rows: 2,
+      columns: 3
+    }),
+    verify: async (state, payload) => {
+      expect(typeof payload.elementId).toBe('string');
+      const document = await readDeckDocument(state);
+      const table = document.querySelector(
+        `[data-slide-id="${state.newSlideId}"] table[data-ppt-el="${String(payload.elementId)}"]`
+      ) as HTMLTableElement | null;
+      expect(table?.style.left).toBe('100px');
+      expect(table?.style.top).toBe('100px');
+      expect(table?.style.width).toBe('960px');
+      expect(table?.querySelectorAll('tr')).toHaveLength(2);
+      expect(table?.querySelectorAll('tr')[0]?.querySelectorAll('th')).toHaveLength(3);
+      expect(table?.querySelectorAll('tr')[1]?.querySelectorAll('td')).toHaveLength(3);
+    }
+  },
+  {
+    name: 'update_chart',
+    args: (state) => ({
+      path: state.relativePath,
+      slideId: state.primarySlideId,
+      target: { elementId: 'surface-chart' },
+      chart: {
+        type: 'line',
+        title: 'Surface trend',
+        labels: ['A', 'B', 'C'],
+        series: [{ name: 'Series 1', values: [3, 2, 1] }]
+      }
+    }),
+    verify: async (state, payload) => {
+      expect(payload).toMatchObject({ width: 640, height: 360 });
+      const document = await readDeckDocument(state);
+      const figure = document.querySelector(
+        '[data-slide-id="s1"] figure[data-ppt-el="surface-chart"]'
+      );
+      const data = JSON.parse(
+        figure?.getAttribute('data-ppt-chart') ?? '{}'
+      ) as { type?: unknown; series?: Array<{ values?: unknown }> };
+      expect(data.type).toBe('line');
+      expect(data.series?.[0]?.values).toEqual([3, 2, 1]);
+      expect(figure?.querySelector('svg')).not.toBeNull();
     }
   },
   {
@@ -493,6 +597,27 @@ const INVALID_ARGUMENT_CASES: InvalidArgumentCase[] = [
   {
     name: 'add_element',
     invalidArgs: { path: 'deck.html', slideId: 's1', html: 5 }
+  },
+  {
+    name: 'add_image',
+    invalidArgs: { path: 'deck.html', slideId: 's1' }
+  },
+  {
+    name: 'add_table',
+    invalidArgs: {
+      path: 'deck.html',
+      slideId: 's1',
+      rows: 1.5,
+      columns: 2
+    }
+  },
+  {
+    name: 'update_chart',
+    invalidArgs: {
+      path: 'deck.html',
+      slideId: 's1',
+      target: { elementId: 'e1' }
+    }
   },
   {
     name: 'set_element_html',
@@ -933,6 +1058,495 @@ describe('htmlppt MCP stdio server', () => {
     ).toHaveLength(3);
   });
 
+  it('adds an image and a table, then updates a chart through direct stdio', async () => {
+    const relativePath = 'objects.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('MCP objects', 1, 'chart')
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const image = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: TINY_PNG_DATA_URL,
+      width: 320,
+      target: { elementId: 'chart' }
+    });
+    expect(image.result.isError).toBeFalsy();
+    expect(image.payload).toMatchObject({ path: deckPath });
+    expect(typeof image.payload.revision).toBe('string');
+    expect(typeof image.payload.elementId).toBe('string');
+
+    let document = await readDeckAt(deckPath);
+    const imageElement = document.querySelector(
+      `img[data-ppt-el="${String(image.payload.elementId)}"]`
+    ) as HTMLImageElement | null;
+    expect(imageElement?.getAttribute('src')).toBe(TINY_PNG_DATA_URL);
+    expect(imageElement?.style.position).toBe('absolute');
+    expect(imageElement?.style.left).toBe('100px');
+    expect(imageElement?.style.top).toBe('100px');
+    expect(imageElement?.style.width).toBe('320px');
+    expect(imageElement?.style.height).toBe('180px');
+    expect(imageElement?.style.objectFit).toBe('fill');
+    // The chart was the direct-child anchor; the image follows it.
+    expect(document.querySelector('figure[data-ppt-el="chart"]')?.nextElementSibling)
+      .toBe(imageElement);
+    expect(await readFile(deckPath, 'utf8')).toContain(
+      'data:image/png;base64,'
+    );
+
+    // Remote URLs are validated and stored verbatim, never fetched. The
+    // default geometry is 480x270 and follows the 16:9 ratio.
+    const remoteSource = 'https://example.invalid/remote-image.png';
+    const remote = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: remoteSource
+    });
+    expect(remote.result.isError).toBeFalsy();
+    document = await readDeckAt(deckPath);
+    const remoteImage = document.querySelector(
+      `img[data-ppt-el="${String(remote.payload.elementId)}"]`
+    ) as HTMLImageElement | null;
+    expect(remoteImage?.getAttribute('src')).toBe(remoteSource);
+    expect(remoteImage?.style.width).toBe('480px');
+    expect(remoteImage?.style.height).toBe('270px');
+
+    const table = await callTool('add_table', {
+      path: relativePath,
+      slideId: 's1',
+      rows: 2,
+      columns: 3,
+      target: { elementId: String(image.payload.elementId) }
+    });
+    expect(table.result.isError).toBeFalsy();
+    expect(table.payload).toMatchObject({ path: deckPath });
+    expect(typeof table.payload.elementId).toBe('string');
+
+    document = await readDeckAt(deckPath);
+    const tableElement = document.querySelector(
+      `table[data-ppt-el="${String(table.payload.elementId)}"]`
+    ) as HTMLTableElement | null;
+    expect(tableElement?.tagName).toBe('TABLE');
+    expect(tableElement?.style.left).toBe('100px');
+    expect(tableElement?.style.top).toBe('100px');
+    expect(tableElement?.style.width).toBe('960px');
+    const rows = Array.from(tableElement?.querySelectorAll('tr') ?? []);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.querySelectorAll('th')).toHaveLength(3);
+    expect(rows[1]?.querySelectorAll('td')).toHaveLength(3);
+    expect(rows[0]?.querySelector('th')?.getAttribute('scope')).toBe('col');
+    const anchorImage = document.querySelector(
+      `img[data-ppt-el="${String(image.payload.elementId)}"]`
+    );
+    expect(anchorImage?.nextElementSibling).toBe(tableElement);
+
+    const chart = await callTool('update_chart', {
+      path: relativePath,
+      slideId: 's1',
+      target: { elementId: 'chart' },
+      chart: JSON.stringify({
+        type: 'line',
+        title: 'Trend',
+        labels: ['A', 'B', 'C'],
+        series: [
+          { name: 'Actual', values: [3, 2, 1] },
+          { name: 'Plan', values: [1, 2, 3] }
+        ],
+        legend: true
+      })
+    });
+    expect(chart.result.isError).toBeFalsy();
+    expect(chart.payload).toMatchObject({ path: deckPath, width: 640, height: 360 });
+    expect(typeof chart.payload.revision).toBe('string');
+
+    document = await readDeckAt(deckPath);
+    const figure = document.querySelector('figure[data-ppt-el="chart"]');
+    const data = JSON.parse(
+      figure?.getAttribute('data-ppt-chart') ?? '{}'
+    ) as {
+      type?: unknown;
+      title?: unknown;
+      labels?: unknown;
+      series?: Array<{ values?: unknown }>;
+      legend?: unknown;
+    };
+    expect(data).toMatchObject({
+      type: 'line',
+      title: 'Trend',
+      labels: ['A', 'B', 'C'],
+      legend: true
+    });
+    expect(data.series?.map((series) => series.values)).toEqual([
+      [3, 2, 1],
+      [1, 2, 3]
+    ]);
+    const svg = figure?.querySelector('svg');
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 640 360');
+    expect(svg?.querySelectorAll('polyline')).toHaveLength(2);
+    expect(validateDeck(document).valid).toBe(true);
+  });
+
+  it('embeds a local image path as a data URL without modifying the file', async () => {
+    const relativePath = 'local-image.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Local image',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const imagePath = join(dir, 'pixel.svg');
+    await writeFile(imagePath, TINY_SVG, 'utf8');
+    const originalBytes = await readFile(imagePath);
+
+    const added = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'pixel.svg',
+      width: 240
+    });
+    expect(added.result.isError).toBeFalsy();
+
+    const document = await readDeckAt(deckPath);
+    const image = document.querySelector(
+      `img[data-ppt-el="${String(added.payload.elementId)}"]`
+    ) as HTMLImageElement | null;
+    const source = image?.getAttribute('src') ?? '';
+    expect(source).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(
+      Buffer.from(source.split(',')[1] ?? '', 'base64').toString('utf8')
+    ).toBe(TINY_SVG);
+    expect(image?.style.width).toBe('240px');
+    expect(image?.style.height).toBe('135px');
+    expect(await readFile(imagePath)).toEqual(originalBytes);
+  });
+
+  it('rejects oversized and unsupported local images without writing', async () => {
+    const relativePath = 'bad-image.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Bad image',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const outlineBefore = await callTool('get_outline', { path: relativePath });
+    const revisionBefore = outlineBefore.payload.revision;
+
+    const oversizedPath = join(dir, 'oversized.png');
+    await writeFile(oversizedPath, Buffer.alloc(MAX_IMAGE_BYTES + 1));
+    const oversized = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'oversized.png'
+    });
+    expect(oversized.result.isError).toBe(true);
+    expect(oversized.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(oversized.payload.message)).toContain('8 MB');
+    expect(String(oversized.payload.message)).toContain(
+      'Resize or compress'
+    );
+
+    await writeFile(join(dir, 'unsupported.bmp'), Buffer.from('not an image'));
+    const unsupported = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'unsupported.bmp'
+    });
+    expect(unsupported.result.isError).toBe(true);
+    expect(unsupported.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(unsupported.payload.message)).toContain(
+      'Unsupported image file type'
+    );
+    expect(String(unsupported.payload.message)).toContain('PNG, JPEG');
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+  it('reports local image open, stat, and read failures as invalid-image', async () => {
+    const relativePath = 'image-failures.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Image failures',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const revisionBefore = (
+      await callTool('get_outline', { path: relativePath })
+    ).payload.revision;
+
+    // A directory with an image extension is opened and fstat'ed but rejected
+    // as a non-regular file. The old stat-then-readFile sequence also had a
+    // path where a successful stat was followed by a failing read; this proves
+    // the descriptor-based path keeps every failure inside invalid-image.
+    await mkdir(join(dir, 'directory.png'));
+    const directory = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'directory.png'
+    });
+    expect(directory.result.isError).toBe(true);
+    expect(directory.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(directory.payload.message)).toContain('directory.png');
+    expect(String(directory.payload.message)).toContain('not a file');
+    expect(String(directory.payload.message)).not.toContain('file-unreadable');
+
+    // A file that disappears is an image error naming the image path, not a
+    // deck file-not-found error.
+    const deletedPath = join(dir, 'deleted.png');
+    await writeFile(deletedPath, TINY_SVG, 'utf8');
+    await rm(deletedPath);
+    const deleted = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'deleted.png'
+    });
+    expect(deleted.result.isError).toBe(true);
+    expect(deleted.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(deleted.payload.message)).toContain('Image file not found');
+    expect(String(deleted.payload.message)).toContain('deleted.png');
+
+    await writeFile(join(dir, 'empty.png'), Buffer.alloc(0));
+    const empty = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'empty.png'
+    });
+    expect(empty.result.isError).toBe(true);
+    expect(empty.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(empty.payload.message)).toContain('is empty');
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+  it('rejects UNC, protocol-relative, and drive-relative image sources', async () => {
+    const relativePath = 'image-sources.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Image sources',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const revisionBefore = (
+      await callTool('get_outline', { path: relativePath })
+    ).payload.revision;
+
+    // Neither form is a local file. URL validation rejects them before any
+    // filesystem access, so a Windows UNC share is never contacted.
+    for (const source of ['//server/share/pixel.png', '\\\\server\\share\\pixel.png']) {
+      const result = await callTool('add_image', {
+        path: relativePath,
+        slideId: 's1',
+        source
+      });
+      expect(result.result.isError).toBe(true);
+      expect(result.payload).toMatchObject({
+        code: 'invalid-image',
+        path: deckPath
+      });
+      expect(String(result.payload.message)).toContain('absolute http(s) URL');
+    }
+
+    // A single-letter drive prefix is a local path, not a `c:` URL.
+    const driveRelative = `C:htmlppt-missing-${randomUUID()}.png`;
+    const drive = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: driveRelative
+    });
+    expect(drive.result.isError).toBe(true);
+    expect(drive.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(drive.payload.message)).toContain('Image file not found');
+    expect(String(drive.payload.message)).not.toContain(
+      'Image URLs must use http:'
+    );
+
+    // Missing and empty-string sources are schema failures; whitespace reaches
+    // the handler and is an invalid-image domain error.
+    await expectInvalidArguments('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: ''
+    });
+    const blank = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: '   '
+    });
+    expect(blank.result.isError).toBe(true);
+    expect(blank.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(blank.payload.message)).toContain('Choose an image');
+
+    // A sub-pixel width used to pass `positive()` and then fail in core with
+    // invalid-insert; the schema now rejects it before the handler runs.
+    await expectInvalidArguments('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: TINY_PNG_DATA_URL,
+      width: 0.5
+    });
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+  it('preserves a 640x140 chart figure when updating chart data', async () => {
+    const relativePath = 'short-chart.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Short chart', 1, 'short-chart', 640, 140)
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const updated = await callTool('update_chart', {
+      path: relativePath,
+      slideId: 's1',
+      target: { elementId: 'short-chart' },
+      chart: {
+        type: 'line',
+        title: 'Short trend',
+        labels: ['A', 'B'],
+        series: [{ name: 'Series 1', values: [1, 2] }]
+      }
+    });
+    expect(updated.result.isError).toBeFalsy();
+    expect(updated.payload).toMatchObject({
+      path: deckPath,
+      width: 640,
+      height: 140
+    });
+
+    const document = await readDeckAt(deckPath);
+    const figure = document.querySelector('figure[data-ppt-el="short-chart"]');
+    expect(figure?.querySelector('svg')?.getAttribute('viewBox')).toBe(
+      '0 0 640 140'
+    );
+    expect(validateDeck(document).valid).toBe(true);
+  });
+
+  it('returns structured table and chart errors without writing', async () => {
+    const relativePath = 'bad-objects.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Bad objects', 1, 'chart')
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const outlineBefore = await callTool('get_outline', { path: relativePath });
+    const revisionBefore = outlineBefore.payload.revision;
+
+    for (const args of [
+      { rows: 0, columns: 2 },
+      { rows: 2, columns: 51 },
+      { rows: 2, columns: 0 }
+    ]) {
+      const table = await callTool('add_table', {
+        path: relativePath,
+        slideId: 's1',
+        ...args
+      });
+      expect(table.result.isError).toBe(true);
+      expect(table.payload).toMatchObject({
+        code: 'invalid-table',
+        path: deckPath
+      });
+      expect(String(table.payload.message).trim().length).toBeGreaterThan(0);
+    }
+
+    for (const chart of [
+      '{"type":"bar",',
+      '{"type":"bar","labels":["A","B"],"series":[{"name":"S","values":[1]}]}',
+      '{"type":"scatter","labels":["A"],"series":[{"name":"S","values":[1]}]}'
+    ]) {
+      const updated = await callTool('update_chart', {
+        path: relativePath,
+        slideId: 's1',
+        target: { elementId: 'chart' },
+        chart
+      });
+      expect(updated.result.isError).toBe(true);
+      expect(updated.payload).toMatchObject({
+        code: 'invalid-chart',
+        path: deckPath
+      });
+      expect(String(updated.payload.message)).toMatch(
+        /chart|JSON|labels|values/i
+      );
+    }
+
+    const nonChart = await callTool('update_chart', {
+      path: relativePath,
+      slideId: 's1',
+      target: { elementId: 'e1' },
+      chart: {
+        type: 'bar',
+        labels: ['A'],
+        series: [{ name: 'S', values: [1] }]
+      }
+    });
+    expect(nonChart.result.isError).toBe(true);
+    expect(nonChart.payload).toMatchObject({
+      code: 'not-a-chart',
+      path: deckPath
+    });
+
+    // e1 is nested inside the template's slide-inner wrapper, not a direct
+    // child of the slide, so it is not a valid insertion anchor.
+    const nestedAnchor = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: TINY_PNG_DATA_URL,
+      target: { elementId: 'e1' }
+    });
+    expect(nestedAnchor.result.isError).toBe(true);
+    expect(nestedAnchor.payload).toMatchObject({
+      code: 'target-invalid',
+      path: deckPath
+    });
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+
   it('reports a conflict after an external write and leaves the file unchanged', async () => {
     const deckPath = join(dir, 'conflict.deck.html');
     const created = await callTool('create_deck', {
@@ -1084,6 +1698,286 @@ describe('htmlppt MCP stdio server', () => {
           'utf8'
         )
       ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await events?.close();
+      await host.close();
+    }
+  });
+
+  it('applies asset, table, and chart tools through a live host', async () => {
+    const hostedDir = join(dir, 'hosted-tools');
+    await mkdir(hostedDir, { recursive: true });
+    const deckPath = join(hostedDir, 'hosted-tools.deck.html');
+    const relativePath = join('hosted-tools', 'hosted-tools.deck.html');
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Hosted tools', 1, 'chart')
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const imagePath = join(hostedDir, 'hosted.svg');
+    await writeFile(imagePath, TINY_SVG, 'utf8');
+
+    const hostedEditorDir = join(dir, 'hosted-tools-editor');
+    await mkdir(hostedEditorDir, { recursive: true });
+    await writeFile(
+      join(hostedEditorDir, 'index.html'),
+      '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+      'utf8'
+    );
+    const token = randomUUID();
+    const host = await startHost({
+      filePath: deckPath,
+      token,
+      editorDir: hostedEditorDir,
+      port: 0
+    });
+    const base = new URL(host.url).origin;
+    const authorization = { authorization: `Bearer ${token}` };
+    let events: SseStream | undefined;
+    try {
+      const health = await fetch(`${base}/api/health`, {
+        headers: authorization
+      });
+      expect(health.status).toBe(200);
+      const initial = (await health.json()) as { revision: string };
+      await writeSession({
+        path: deckPath,
+        port: host.port,
+        token,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: initial.revision
+      });
+
+      const eventsResponse = await fetchEventStream(
+        `${base}/api/events?token=${encodeURIComponent(token)}`
+      );
+      expect(eventsResponse.status).toBe(200);
+      events = openEventStream(eventsResponse);
+      expect((await events.next()).event).toBe('hello');
+
+      const calls: Array<{ name: string; args: Record<string, unknown> }> = [
+        {
+          name: 'add_image',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            source: join('hosted-tools', 'hosted.svg'),
+            width: 240
+          }
+        },
+        {
+          name: 'add_table',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            rows: 2,
+            columns: 2
+          }
+        },
+        {
+          name: 'update_chart',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            target: { elementId: 'chart' },
+            chart: {
+              type: 'pie',
+              title: 'Hosted update',
+              labels: ['Yes', 'No'],
+              series: [{ name: 'Votes', values: [7, 3] }]
+            }
+          }
+        }
+      ];
+
+      for (const call of calls) {
+        const { result, payload } = await callTool(call.name, call.args);
+        expect(
+          result.isError,
+          `${call.name} failed: ${JSON.stringify(payload)}`
+        ).toBeFalsy();
+        const revision = payload.revision;
+        expect(typeof revision).toBe('string');
+
+        const deckResponse = await fetch(`${base}/api/deck`, {
+          headers: authorization
+        });
+        expect(deckResponse.status).toBe(200);
+        expect(await deckResponse.json()).toMatchObject({ revision });
+        expect(await events.next()).toEqual({
+          event: 'revision',
+          data: { revision, source: 'mcp' }
+        });
+      }
+
+      const html = await readFile(deckPath, 'utf8');
+      expect(html).toContain('data:image/svg+xml;base64,');
+      expect(html).not.toContain('hosted.svg');
+      const document = parseDeckHtml(html);
+      const image = document.querySelector('img');
+      expect(image?.getAttribute('src')).toMatch(
+        /^data:image\/svg\+xml;base64,/
+      );
+      expect(image?.style.width).toBe('240px');
+      expect(document.querySelectorAll('table tr')).toHaveLength(2);
+      const figure = document.querySelector(
+        'figure[data-ppt-el="chart"]'
+      );
+      const data = JSON.parse(
+        figure?.getAttribute('data-ppt-chart') ?? '{}'
+      ) as { type?: unknown; title?: unknown };
+      expect(data).toMatchObject({ type: 'pie', title: 'Hosted update' });
+      expect(figure?.querySelector('svg')).not.toBeNull();
+      expect(validateDeck(document).valid).toBe(true);
+    } finally {
+      await events?.close();
+      await host.close();
+    }
+  });
+
+  it('returns object-tool failures and a revision conflict through a live host', async () => {
+    const hostedDir = join(dir, 'hosted-errors');
+    await mkdir(hostedDir, { recursive: true });
+    const deckPath = join(hostedDir, 'hosted-errors.deck.html');
+    const relativePath = join('hosted-errors', 'hosted-errors.deck.html');
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Hosted errors', 1, 'chart')
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const hostedEditorDir = join(dir, 'hosted-errors-editor');
+    await mkdir(hostedEditorDir, { recursive: true });
+    await writeFile(
+      join(hostedEditorDir, 'index.html'),
+      '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+      'utf8'
+    );
+    const token = randomUUID();
+    const host = await startHost({
+      filePath: deckPath,
+      token,
+      editorDir: hostedEditorDir,
+      port: 0
+    });
+    const base = new URL(host.url).origin;
+    const authorization = { authorization: `Bearer ${token}` };
+    let events: SseStream | undefined;
+    try {
+      const health = await fetch(`${base}/api/health`, {
+        headers: authorization
+      });
+      expect(health.status).toBe(200);
+      const initial = (await health.json()) as { revision: string };
+      await writeSession({
+        path: deckPath,
+        port: host.port,
+        token,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: initial.revision
+      });
+
+      const eventsResponse = await fetchEventStream(
+        `${base}/api/events?token=${encodeURIComponent(token)}`
+      );
+      expect(eventsResponse.status).toBe(200);
+      events = openEventStream(eventsResponse);
+      expect((await events.next()).event).toBe('hello');
+
+      const before = await readFile(deckPath);
+      const initialRevision = initial.revision;
+
+      // Domain failures inside the mutation run before the host PUT, so each
+      // must return its structured code and leave both the file and the host
+      // revision untouched.
+      const failures = [
+        {
+          name: 'add_image',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            source: join('hosted-errors', 'missing.png')
+          },
+          code: 'invalid-image'
+        },
+        {
+          name: 'add_table',
+          args: { path: relativePath, slideId: 's1', rows: 0, columns: 2 },
+          code: 'invalid-table'
+        },
+        {
+          name: 'update_chart',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            target: { elementId: 'chart' },
+            chart: '{"type":"bar",'
+          },
+          code: 'invalid-chart'
+        }
+      ];
+      for (const failure of failures) {
+        const { result, payload } = await callTool(
+          failure.name,
+          failure.args
+        );
+        expect(
+          result.isError,
+          `${failure.name} unexpectedly succeeded: ${JSON.stringify(payload)}`
+        ).toBe(true);
+        expect(payload).toMatchObject({
+          code: failure.code,
+          path: deckPath
+        });
+        expect(String(payload.message).trim().length).toBeGreaterThan(0);
+        const deckResponse = await fetch(`${base}/api/deck`, {
+          headers: authorization
+        });
+        expect(await deckResponse.json()).toMatchObject({
+          revision: initialRevision
+        });
+      }
+      expect(await readFile(deckPath)).toEqual(before);
+
+      const table = await callTool('add_table', {
+        path: relativePath,
+        slideId: 's1',
+        rows: 2,
+        columns: 2
+      });
+      expect(table.result.isError).toBeFalsy();
+      const tableRevision = table.payload.revision;
+      expect(typeof tableRevision).toBe('string');
+      expect(await events.next()).toEqual({
+        event: 'revision',
+        data: { revision: tableRevision, source: 'mcp' }
+      });
+
+      // Changing the deck outside the MCP server invalidates the revision it
+      // cached after add_table; the next object mutation must report conflict.
+      const external = (await readFile(deckPath, 'utf8')).replace(
+        'Hosted errors',
+        'External host edit'
+      );
+      await writeFile(deckPath, external, 'utf8');
+      const externalBytes = await readFile(deckPath);
+
+      const conflict = await callTool('add_image', {
+        path: relativePath,
+        slideId: 's1',
+        source: TINY_PNG_DATA_URL
+      });
+      expect(conflict.result.isError).toBe(true);
+      expect(conflict.payload).toMatchObject({
+        code: 'conflict',
+        path: deckPath
+      });
+      expect(String(conflict.payload.message)).toContain('Re-read');
+      expect(typeof conflict.payload.currentRevision).toBe('string');
+      expect(await readFile(deckPath)).toEqual(externalBytes);
     } finally {
       await events?.close();
       await host.close();

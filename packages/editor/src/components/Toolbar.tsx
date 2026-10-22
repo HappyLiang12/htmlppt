@@ -1,4 +1,6 @@
+import type { ShapeKind } from '@htmlppt/core';
 import type { SaveStatus } from '../use-deck-controller';
+import { InsertMenu } from './InsertMenu';
 
 export type EditorView = 'normal' | 'sorter';
 
@@ -12,6 +14,12 @@ export interface ToolbarProps {
   onAddSlide: () => void;
   onDuplicateSlide: () => void;
   onDeleteSlide: () => void;
+  onInsertText: () => void;
+  onInsertShape: (shape: ShapeKind) => void;
+  onInsertTable: (rows: number, columns: number) => void;
+  onInsertChart: () => void;
+  onInsertImageFile: (file: File) => void;
+  onInsertImageUrl: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onPlay: () => void;
@@ -46,6 +54,12 @@ export function Toolbar({
   onAddSlide,
   onDuplicateSlide,
   onDeleteSlide,
+  onInsertText,
+  onInsertShape,
+  onInsertTable,
+  onInsertChart,
+  onInsertImageFile,
+  onInsertImageUrl,
   onUndo,
   onRedo,
   onPlay,
@@ -117,6 +131,15 @@ export function Toolbar({
           刪除
         </button>
       </div>
+
+      <InsertMenu
+        onInsertText={onInsertText}
+        onInsertShape={onInsertShape}
+        onInsertTable={onInsertTable}
+        onInsertChart={onInsertChart}
+        onInsertImageFile={onInsertImageFile}
+        onInsertImageUrl={onInsertImageUrl}
+      />
 
       <div className="flex items-center gap-1">
         <button
