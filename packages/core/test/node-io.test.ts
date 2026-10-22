@@ -89,6 +89,73 @@ describe('node deck I/O', () => {
     expect(result.hash).toBe(hashHtml('<h1>Two</h1>'));
   });
 
+  it('keeps each snapshot internally consistent while writes race', async () => {
+    const file = join(dir, 'racing.html');
+    const initial = '<h1>0</h1>';
+    await writeFile(file, initial, 'utf8');
+    const mtimes = new Map<string, number>([[initial, (await stat(file)).mtimeMs]]);
+
+    let writing = true;
+    const mismatches: string[] = [];
+    const reader = async (): Promise<void> => {
+      let reads = 0;
+      while (writing && reads < 2000) {
+        const snapshot = await readDeckFile(file);
+        reads += 1;
+        if (snapshot.hash !== hashHtml(snapshot.html)) {
+          mismatches.push('hash mismatch');
+        }
+        const expectedMtime = mtimes.get(snapshot.html);
+        if (expectedMtime !== undefined && expectedMtime !== snapshot.mtimeMs) {
+          mismatches.push('mtime mismatch');
+        }
+      }
+    };
+    const readers = [reader(), reader()];
+
+    try {
+      for (let index = 1; index <= 40; index += 1) {
+        const html = `<h1>${index}</h1>${' '.repeat(16 * 1024)}`;
+        const result = await writeDeckFileAtomic(file, html);
+        mtimes.set(html, result.mtimeMs);
+      }
+    } finally {
+      writing = false;
+    }
+    await Promise.all(readers);
+
+    expect(mismatches).toEqual([]);
+  });
+
+  it('serializes compare-and-swap writers so exactly one wins', async () => {
+    for (let round = 0; round < 5; round += 1) {
+      const file = join(dir, `cas-${round}.html`);
+      await writeFile(file, '<h1>base</h1>', 'utf8');
+      const base = await readDeckFile(file);
+      const htmlA = `<h1>A${round}</h1>${'a'.repeat(128 * 1024)}`;
+      const htmlB = `<h1>B${round}</h1>${'b'.repeat(128 * 1024)}`;
+
+      const results = await Promise.allSettled([
+        writeDeckFileAtomic(file, htmlA, base.hash),
+        writeDeckFileAtomic(file, htmlB, base.hash)
+      ]);
+
+      const fulfilled = results.flatMap((result, index) =>
+        result.status === 'fulfilled' ? [index] : []
+      );
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toBeInstanceOf(DeckFileConflictError);
+      expect(await readFile(file, 'utf8')).toBe(
+        fulfilled[0] === 0 ? htmlA : htmlB
+      );
+    }
+    expect(await readdir(dir)).toHaveLength(5);
+  });
+
   it('cleans up the temporary file when the rename fails', async () => {
     const file = join(dir, 'deck.html');
     await mkdir(file);

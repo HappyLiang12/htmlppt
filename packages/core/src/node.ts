@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseHTML } from 'linkedom';
+
+const fileQueues = new Map<string, Promise<unknown>>();
 
 export function parseDeckHtml(html: string): Document {
   const { document } = parseHTML(html);
@@ -33,9 +35,16 @@ export class DeckFileConflictError extends Error {
 }
 
 export async function readDeckFile(filePath: string): Promise<DeckFileSnapshot> {
-  const html = await readFile(filePath, 'utf8');
-  const stats = await stat(filePath);
-  return { html, hash: hashHtml(html), mtimeMs: stats.mtimeMs };
+  return withFileLock(filePath, async () => {
+    const handle = await open(filePath, 'r');
+    try {
+      const html = await handle.readFile({ encoding: 'utf8' });
+      const stats = await handle.stat();
+      return { html, hash: hashHtml(html), mtimeMs: stats.mtimeMs };
+    } finally {
+      await handle.close();
+    }
+  });
 }
 
 /**
@@ -43,6 +52,16 @@ export async function readDeckFile(filePath: string): Promise<DeckFileSnapshot> 
  * replaces the file via a unique temporary file and a rename.
  */
 export async function writeDeckFileAtomic(
+  filePath: string,
+  html: string,
+  expectedHash?: string
+): Promise<DeckWriteResult> {
+  return withFileLock(filePath, () =>
+    writeDeckFileAtomicLocked(filePath, html, expectedHash)
+  );
+}
+
+async function writeDeckFileAtomicLocked(
   filePath: string,
   html: string,
   expectedHash?: string
@@ -91,4 +110,28 @@ async function assertCurrentHash(
   if (hashHtml(currentHtml) !== expectedHash) {
     throw new DeckFileConflictError();
   }
+}
+
+/**
+ * Serializes reads and writes per file so this process never opens a path
+ * while it is being replaced and concurrent compare-and-swap writers queue
+ * instead of racing.
+ */
+function withFileLock<T>(
+  filePath: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const key = path.resolve(filePath);
+  const previous = fileQueues.get(key) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const settled = run.then(
+    () => undefined,
+    () => undefined
+  );
+  fileQueues.set(key, settled);
+  return run.finally(() => {
+    if (fileQueues.get(key) === settled) {
+      fileQueues.delete(key);
+    }
+  });
 }
