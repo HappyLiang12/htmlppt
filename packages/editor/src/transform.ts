@@ -48,7 +48,7 @@ function inlineRect(element: Element, slide?: Element): Rect | null {
  * Authored slides are not always positioned, so `left`/`top` may be relative
  * to an ancestor of the slide; the editor stores geometry in slide pixels.
  */
-function containingBlockOffset(element: Element, slide: Element): Point {
+export function containingBlockOffset(element: Element, slide: Element): Point {
   const parent = (element as HTMLElement).offsetParent;
   if (!parent || parent === slide) return { x: 0, y: 0 };
   const parentRect = parent.getBoundingClientRect();

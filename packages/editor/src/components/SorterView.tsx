@@ -133,11 +133,7 @@ export function SorterView({
         <h2 className="text-sm font-semibold text-zinc-200">排序檢視</h2>
         <p className="text-xs text-zinc-500">拖曳投影片以重新排序</p>
       </div>
-      <div
-        role="listbox"
-        aria-label="投影片排序"
-        className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
-      >
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {slides.map((slide, index) => {
           const active = index === activeIndex;
           const title = slideTitle(slide);
@@ -159,34 +155,42 @@ export function SorterView({
                 isDropTarget ? 'ring-2 ring-amber-400' : ''
               }`}
             >
+              {/* One single-option listbox per tile keeps its action row
+                  outside the listbox while staying attached to the card. */}
               <div
-                role="option"
-                tabIndex={0}
-                aria-selected={active}
-                aria-current={active ? 'page' : undefined}
-                aria-label={`第 ${index + 1} 頁：${title}`}
-                data-testid="sorter-slide"
-                data-slide-id={slide.id}
-                data-slide-title={title}
-                onKeyDown={(event) => handleKeyDown(event, index)}
-                className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+                role="listbox"
+                aria-label={`第 ${index + 1} 頁`}
+                className="rounded"
               >
-                <span className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
-                  {index + 1}
-                </span>
-                <SlideMiniature
-                  master={master}
-                  slide={slide}
-                  width={SORTER_PREVIEW_WIDTH}
-                  className="rounded-[3px] shadow-md shadow-black/40"
-                />
-                <span
-                  className={`truncate px-1 text-xs ${
-                    active ? 'text-amber-200' : 'text-zinc-300'
-                  }`}
+                <div
+                  role="option"
+                  tabIndex={0}
+                  aria-selected={active}
+                  aria-current={active ? 'page' : undefined}
+                  aria-label={`第 ${index + 1} 頁：${title}`}
+                  data-testid="sorter-slide"
+                  data-slide-id={slide.id}
+                  data-slide-title={title}
+                  onKeyDown={(event) => handleKeyDown(event, index)}
+                  className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
                 >
-                  {title}
-                </span>
+                  <span className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
+                    {index + 1}
+                  </span>
+                  <SlideMiniature
+                    master={master}
+                    slide={slide}
+                    width={SORTER_PREVIEW_WIDTH}
+                    className="rounded-[3px] shadow-md shadow-black/40"
+                  />
+                  <span
+                    className={`truncate px-1 text-xs ${
+                      active ? 'text-amber-200' : 'text-zinc-300'
+                    }`}
+                  >
+                    {title}
+                  </span>
+                </div>
               </div>
               <div className="flex justify-end gap-1">
                 <button

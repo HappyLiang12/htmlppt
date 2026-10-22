@@ -150,6 +150,27 @@ describe('useDeckController', () => {
     expect(controller.state.srcDoc).toContain('Changed heading');
   });
 
+  it('surfaces master mutation failures without recording history', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    await act(async () => {
+      await expect(
+        controller.actions.commitMaster(() => {
+          throw new Error('Master mutation failed');
+        })
+      ).rejects.toThrow('Master mutation failed');
+    });
+
+    expect(controller.state.status).toBe('error');
+    expect(controller.state.error).toBe('Master mutation failed');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.master?.querySelector('h1')?.textContent).toBe(
+      'First slide'
+    );
+  });
+
   it('keeps decks with authored data-ppt-editing markers unnormalized', async () => {
     const authored: DeckResponse = {
       revision: 'revision-authored',

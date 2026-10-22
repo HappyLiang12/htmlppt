@@ -5,7 +5,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { detectSlides } from '@htmlppt/core';
+import { detectSlides, type Transition } from '@htmlppt/core';
 import {
   nudge,
   normalizeAngle,
@@ -17,7 +17,11 @@ import {
   type Point,
   type Rect
 } from './geometry';
-import { selectionFromEvent, topLevelObjects } from './selection';
+import {
+  elementAtPath,
+  selectionFromEvent,
+  topLevelObjects
+} from './selection';
 import {
   buildSlideSrcDoc,
   commitSlide,
@@ -38,7 +42,20 @@ import {
   snapAngle,
   type TransformTarget
 } from './transform';
+import {
+  applyBackground,
+  applyGeometryEdit,
+  applyNotes,
+  applyTransition,
+  notesOf,
+  readGeometry,
+  snapshotGeometry,
+  type GeometryField,
+  type GeometryValues,
+  type SlideBackground
+} from './inspector-state';
 import { CanvasOverlay } from './components/CanvasOverlay';
+import { Inspector } from './components/Inspector';
 import { SorterView } from './components/SorterView';
 import { ThumbnailRail } from './components/ThumbnailRail';
 import { Toolbar, type EditorView } from './components/Toolbar';
@@ -100,16 +117,8 @@ interface RotateSession extends GestureBase {
 
 type TransformSession = DragSession | ResizeSession | RotateSession;
 
-function elementAtPath(
-  root: Element,
-  path: readonly number[]
-): Element | null {
-  let current: Element | null = root;
-  for (const index of path) {
-    if (!current) return null;
-    current = current.children[index] ?? null;
-  }
-  return current;
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function eventElement(target: EventTarget | null): Element | null {
@@ -182,8 +191,11 @@ export function App() {
   const [view, setView] = useState<EditorView>('normal');
   const [selectionRect, setSelectionRect] = useState<Rect | null>(null);
   const [selectionRotation, setSelectionRotation] = useState(0);
+  const [selectionGeometry, setSelectionGeometry] =
+    useState<GeometryValues | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
   const [frameEpoch, setFrameEpoch] = useState(0);
+  const [slideOpError, setSlideOpError] = useState('');
 
   const sessionRef = useRef<TransformSession | null>(null);
   const detachSessionRef = useRef<(() => void) | null>(null);
@@ -219,10 +231,13 @@ export function App() {
   const runSlideOp = useCallback(async (operation: () => Promise<unknown>) => {
     if (slideOpBusyRef.current) return;
     slideOpBusyRef.current = true;
+    setSlideOpError('');
     try {
       await operation();
-    } catch {
-      // The controller surfaces mutation and save errors through its state.
+    } catch (cause) {
+      // Slide operations report expected failures as return values; anything
+      // thrown here is unexpected and must reach the error banner.
+      setSlideOpError(errorMessage(cause));
     } finally {
       slideOpBusyRef.current = false;
     }
@@ -251,6 +266,86 @@ export function App() {
       void runSlideOp(() => reorderSlides(slideOpsContext(), slideIds));
     },
     [runSlideOp, slideOpsContext]
+  );
+
+  /**
+   * Inspector edits mutate the master directly; the resulting srcDoc reload
+   * renders them without reconciling the iframe clone over the master.
+   */
+  const commitMasterDocument = useCallback(
+    async (mutate: (master: Document) => void) => {
+      try {
+        await actionsRef.current.commitMaster(mutate);
+      } catch {
+        // The controller surfaced the failure in its status and error state.
+      }
+    },
+    []
+  );
+
+  const handleSelectObject = useCallback((path: number[]) => {
+    const current = stateRef.current;
+    const slideInfo = current.slides[current.activeIndex];
+    if (!slideInfo) return;
+    const element = elementAtPath(slideInfo.element, path);
+    if (!element) return;
+    actionsRef.current.select({
+      slideIndex: current.activeIndex,
+      path,
+      elementId: element.getAttribute('data-ppt-el')?.trim() || null
+    });
+  }, []);
+
+  const handleGeometryCommit = useCallback(
+    (field: GeometryField, value: number) => {
+      const current = stateRef.current;
+      const selected = current.selection;
+      const slideInfo = current.slides[current.activeIndex];
+      const frameDocument = frame.current?.contentDocument;
+      if (!selected || !slideInfo || !frameDocument) return;
+      const slide = frameSlideElement(slideInfo, frameDocument);
+      if (!slide) return;
+      const element = elementAtPath(slide, selected.path);
+      if (!element) return;
+      const snapshot = snapshotGeometry(element, slide);
+      void commitMasterDocument((master) => {
+        applyGeometryEdit(master, selected, snapshot, field, value);
+      });
+    },
+    [commitMasterDocument]
+  );
+
+  const handleTransitionChange = useCallback(
+    (transition: Transition) => {
+      const slideIndex = stateRef.current.activeIndex;
+      void commitMasterDocument((master) => {
+        applyTransition(master, slideIndex, transition);
+      });
+    },
+    [commitMasterDocument]
+  );
+
+  const handleBackgroundChange = useCallback(
+    (background: SlideBackground) => {
+      const slideIndex = stateRef.current.activeIndex;
+      void commitMasterDocument((master) => {
+        applyBackground(master, slideIndex, background);
+      });
+    },
+    [commitMasterDocument]
+  );
+
+  const handleNotesChange = useCallback(
+    (notes: string) => {
+      const current = stateRef.current;
+      const slide = current.slides[current.activeIndex];
+      if (!slide || notesOf(slide.element) === notes) return;
+      const slideIndex = current.activeIndex;
+      void commitMasterDocument((master) => {
+        applyNotes(master, slideIndex, notes);
+      });
+    },
+    [commitMasterDocument]
   );
 
   useEffect(() => {
@@ -318,6 +413,7 @@ export function App() {
   const clearOverlay = useCallback(() => {
     setSelectionRect(null);
     setSelectionRotation(0);
+    setSelectionGeometry(null);
     setGuides([]);
   }, []);
 
@@ -354,6 +450,7 @@ export function App() {
     }
     setSelectionRect(frameRectOf(rectOf(element, slide), slideOffsetOf(slide)));
     setSelectionRotation(rotationOf(element));
+    setSelectionGeometry(readGeometry(element, slide));
   }, [clearOverlay]);
 
   useEffect(() => {
@@ -874,12 +971,12 @@ export function App() {
         onNextSlide={() => goTo(activeIndex + 1)}
       />
 
-      {error && (
+      {(error || slideOpError) && (
         <div
           data-testid="editor-error"
           className="max-h-24 overflow-auto border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200"
         >
-          {error}
+          {[error, slideOpError].filter(Boolean).join(' · ')}
         </div>
       )}
 
@@ -953,6 +1050,17 @@ export function App() {
               <p className="text-sm text-zinc-500">找不到投影片。</p>
             )}
           </main>
+
+          <Inspector
+            slide={activeSlide}
+            selection={selection}
+            geometry={selectionGeometry}
+            onSelectObject={handleSelectObject}
+            onCommitGeometry={handleGeometryCommit}
+            onSetTransition={handleTransitionChange}
+            onSetBackground={handleBackgroundChange}
+            onSetNotes={handleNotesChange}
+          />
         </div>
       )}
     </div>

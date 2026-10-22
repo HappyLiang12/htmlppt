@@ -44,6 +44,7 @@ export interface DeckControllerState {
 }
 
 export type SlideCommit = (master: Document, slide: SlideInfo) => string | void;
+export type MasterCommit = (master: Document) => void;
 
 export interface SlideMutationOptions {
   coalesceKey?: string;
@@ -61,6 +62,12 @@ export interface DeckControllerActions {
     options?: SlideMutationOptions
   ): string | null;
   commit(mutate: SlideCommit): Promise<void>;
+  /**
+   * Mutates the master directly (inspector style and slide settings) and
+   * re-renders the active slide. Text commits keep using `commit`, whose
+   * iframe reconciliation would overwrite master-side inline styles.
+   */
+  commitMaster(mutate: MasterCommit): Promise<void>;
   undo(): void;
   redo(): void;
   reload(deck?: DeckResponse): Promise<void>;
@@ -313,6 +320,49 @@ export function useDeckController(
     [enqueueSave, update]
   );
 
+  const commitMaster = useCallback(
+    async (mutate: MasterCommit) => {
+      const master = masterRef.current;
+      if (!master) return;
+
+      let html: string;
+      try {
+        mutate(master);
+        html = serializeDeck(master);
+      } catch (cause) {
+        // The master may be partially mutated, but no snapshot was recorded,
+        // so the dirty flag keeps its previous value.
+        update({ status: 'error', error: toMessage(cause) });
+        throw cause;
+      }
+      editVersionRef.current += 1;
+      historyRef.current.push(html);
+
+      const source = sourceDocFor(master, activeIndexRef.current);
+      slidesRef.current = source.slides;
+      activeIndexRef.current = source.activeIndex;
+      update({
+        slides: source.slides,
+        activeIndex: source.activeIndex,
+        srcDoc: source.srcDoc,
+        dirty: true,
+        status: 'saving'
+      });
+
+      const task = enqueueSave((revision) =>
+        saveDeck(tokenRef.current, html, revision)
+      );
+
+      try {
+        await task;
+      } catch (cause) {
+        update({ status: 'error', error: toMessage(cause), dirty: true });
+        throw cause;
+      }
+    },
+    [enqueueSave, update]
+  );
+
   const restore = useCallback(
     (html: string) => {
       const master = parseDeck(html);
@@ -374,6 +424,7 @@ export function useDeckController(
       setScale,
       applySlideMutation,
       commit,
+      commitMaster,
       undo,
       redo,
       reload,
@@ -387,6 +438,7 @@ export function useDeckController(
       setScale,
       applySlideMutation,
       commit,
+      commitMaster,
       undo,
       redo,
       reload,

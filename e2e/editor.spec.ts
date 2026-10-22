@@ -1517,3 +1517,160 @@ test(
     }
   }
 );
+
+test(
+  'inspector shows slide settings without a selection and geometry with one',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const settings = page.getByTestId('slide-settings');
+      await expect(settings).toBeVisible();
+      await expect(page.getByTestId('transition-select')).toHaveValue('none');
+      await expect(page.getByTestId('inspector-geometry')).toHaveCount(0);
+      await expect(page.getByTestId('object-row')).toHaveCount(2);
+
+      const boxRow = page.locator(
+        '[data-testid="object-row"][data-object-id="box1"]'
+      );
+      await expect(boxRow).toHaveCount(1);
+      await boxRow.click();
+
+      const outline = page.getByTestId('selection-outline');
+      await expect(outline).toHaveAttribute('data-selected-id', 'box1');
+      await expect(outline).toHaveAttribute('data-selected-path', '1');
+      await expect(outline).not.toHaveAttribute('data-readonly', 'true');
+      await expect(page.getByTestId('inspector-geometry')).toBeVisible();
+      await expect(page.getByTestId('field-x')).toHaveValue('120');
+      await expect(page.getByTestId('field-y')).toHaveValue('160');
+      await expect(page.getByTestId('field-width')).toHaveValue('240');
+      await expect(page.getByTestId('field-height')).toHaveValue('120');
+      await expect(page.getByTestId('field-rotation')).toHaveValue('0');
+      await expect(settings).toHaveCount(0);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'editing X in the inspector moves the object and persists after reload',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const object = editor.frame.locator('[data-ppt-el="box1"]');
+      await page
+        .locator('[data-testid="object-row"][data-object-id="box1"]')
+        .click();
+      const field = page.getByTestId('field-x');
+      await expect(field).toHaveValue('120');
+
+      const save = waitForDeckSave(page);
+      await field.fill('200');
+      await field.press('Enter');
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      await expect
+        .poll(async () => (await inlineGeometryOf(object)).left)
+        .toBe(200);
+      await expect(field).toHaveValue('200');
+      await expect
+        .poll(async () => {
+          const saved = await savedNudgeBoxStyle(
+            editor.directory,
+            editor.file
+          );
+          return Number.parseFloat(saved.left ?? '');
+        })
+        .toBe(200);
+
+      await page.reload();
+      const frame = page.frameLocator(FRAME_SELECTOR);
+      await expect(frame.locator('[data-ppt-el="box1"]')).toBeVisible();
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      expect(
+        (await inlineGeometryOf(frame.locator('[data-ppt-el="box1"]'))).left
+      ).toBe(200);
+
+      await page
+        .locator('[data-testid="object-row"][data-object-id="box1"]')
+        .click();
+      await expect(page.getByTestId('field-x')).toHaveValue('200');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'inspector tabs switch and notes persist as a hidden aside',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      await page.getByTestId('inspector-tab-text').click();
+      await expect(page.getByTestId('inspector-tab-text')).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      await expect(page.getByTestId('text-placeholder')).toBeVisible();
+
+      await page.getByTestId('inspector-tab-notes').click();
+      const notes = page.getByTestId('notes-input');
+      await expect(notes).toBeVisible();
+
+      const save = waitForDeckSave(page);
+      await notes.fill('講者備註：先問候觀眾');
+      await page.getByTestId('inspector-tab-design').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .toBe(true);
+      expect(await savedDocument(editor)).toContain('講者備註：先問候觀眾');
+
+      await page.getByTestId('inspector-tab-notes').click();
+      await expect(notes).toHaveValue('講者備註：先問候觀眾');
+      const removeSave = waitForDeckSave(page);
+      await notes.fill('');
+      await page.getByTestId('inspector-tab-design').click();
+      expect((await removeSave).ok()).toBeTruthy();
+      await expect
+        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .toBe(false);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'slide transition selection is written and survives reload',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const select = page.getByTestId('transition-select');
+      await expect(select).toBeVisible();
+      await expect(select).toHaveValue('none');
+
+      const save = waitForDeckSave(page);
+      await select.selectOption('fade');
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      await expect
+        .poll(async () =>
+          (await savedDocument(editor)).includes('data-ppt-transition="fade"')
+        )
+        .toBe(true);
+
+      await page.reload();
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('transition-select')).toHaveValue('fade');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);

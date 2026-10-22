@@ -13,8 +13,8 @@ export const NEW_SLIDE_HTML = '<h1>新投影片</h1>';
 
 /**
  * The controller surface slide operations need. It is deliberately narrow so
- * the operations can run against the hook in unit tests and in the app without
- * owning any React state themselves.
+ * the operations can run against a controller double in unit tests and the
+ * real controller in the app without owning any React state themselves.
  */
 export interface SlideOpsContext {
   master: Document | null;

@@ -112,7 +112,7 @@ describe('sorter accessibility', () => {
     expect(tiles[1]?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('keeps duplicate and delete actions outside the option', () => {
+  it('keeps duplicate and delete actions outside the listbox', () => {
     const doc = parse(
       renderToStaticMarkup(
         createElement(SorterView, {
@@ -126,16 +126,30 @@ describe('sorter accessibility', () => {
       )
     );
 
+    // Every listbox owns only its option; action rows are siblings, not
+    // listbox children.
+    const listboxes = Array.from(doc.querySelectorAll('[role="listbox"]'));
+    expect(listboxes).toHaveLength(2);
+    for (const listbox of listboxes) {
+      const children = Array.from(listbox.children);
+      expect(children).toHaveLength(1);
+      for (const child of children) {
+        expect(child.getAttribute('role')).toBe('option');
+      }
+    }
+
     const duplicate = doc.querySelectorAll('[data-testid="sorter-duplicate"]');
     const remove = doc.querySelectorAll('[data-testid="sorter-delete"]');
     expect(duplicate).toHaveLength(2);
     expect(remove).toHaveLength(2);
 
     for (const button of Array.from(duplicate)) {
+      expect(button.closest('[role="listbox"]')).toBeNull();
       expect(button.closest('[role="option"]')).toBeNull();
       expect(button.getAttribute('aria-label')).toMatch(/^複製第 \d+ 頁$/);
     }
     for (const button of Array.from(remove)) {
+      expect(button.closest('[role="listbox"]')).toBeNull();
       expect(button.closest('[role="option"]')).toBeNull();
       expect(button.getAttribute('aria-label')).toMatch(/^刪除第 \d+ 頁$/);
     }

@@ -23,6 +23,19 @@ export function topLevelObjects(slide: Element): Element[] {
   return Array.from(slide.children).filter(isObjectElement);
 }
 
+/** Resolves a raw child-index path from the slide to its element. */
+export function elementAtPath(
+  root: Element,
+  path: readonly number[]
+): Element | null {
+  let current: Element | null = root;
+  for (const index of path) {
+    if (!current) return null;
+    current = current.children[index] ?? null;
+  }
+  return current;
+}
+
 function asElement(eventTarget: EventTarget | null): Element | null {
   if (!eventTarget) return null;
   const node = eventTarget as Node;
