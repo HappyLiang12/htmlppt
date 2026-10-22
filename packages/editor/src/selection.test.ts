@@ -30,6 +30,33 @@ function makeSlide(): Element {
   return slide;
 }
 
+// Regression fixture: excluded siblings before numbered objects mean filtered
+// object indices and raw child indices disagree.
+function makeNotesFirstSlide(): Element {
+  const slide = document.createElement('section');
+
+  const notes = document.createElement('aside');
+  notes.setAttribute('data-ppt-notes', '1');
+  notes.innerHTML = '<p>Speaker notes</p>';
+
+  const group = document.createElement('div');
+  group.setAttribute('data-ppt-group', '1');
+  group.setAttribute('data-ppt-el', 'g1');
+  const heading = document.createElement('h1');
+  heading.setAttribute('data-ppt-el', 'e1');
+  heading.innerHTML = 'Title <span data-ppt-el="e2">nested</span>';
+  group.append(heading);
+
+  const script = document.createElement('script');
+  script.textContent = 'void 0;';
+
+  const figure = document.createElement('figure');
+  figure.setAttribute('data-ppt-el', 'f1');
+
+  slide.append(notes, group, script, figure);
+  return slide;
+}
+
 describe('topLevelObjects', () => {
   it('lists direct object children and skips notes and non-object tags', () => {
     const objects = topLevelObjects(makeSlide());
@@ -80,6 +107,38 @@ describe('selectionFromEvent', () => {
       slideIndex: 3,
       path: [1],
       elementId: 'f1'
+    });
+  });
+
+  it('uses raw child indices when excluded siblings precede an object', () => {
+    const slide = makeNotesFirstSlide();
+    const span = slide.querySelector('span');
+    const figure = slide.querySelector('figure');
+    if (!span || !figure) throw new Error('Missing fixture nodes.');
+
+    expect(selectionFromEvent(span, slide)).toEqual({
+      slideIndex: 0,
+      path: [1],
+      elementId: 'g1'
+    });
+    expect(selectionFromEvent(figure, slide)).toEqual({
+      slideIndex: 0,
+      path: [3],
+      elementId: 'f1'
+    });
+  });
+
+  it('uses the same raw path for Alt drill with excluded siblings before the object', () => {
+    const slide = makeNotesFirstSlide();
+    const span = slide.querySelector('span');
+    if (!span) throw new Error('Missing fixture span.');
+
+    expect(
+      selectionFromEvent(span, slide, { altKey: true, slideIndex: 2 })
+    ).toEqual({
+      slideIndex: 2,
+      path: [1, 0, 0],
+      elementId: 'e2'
     });
   });
 

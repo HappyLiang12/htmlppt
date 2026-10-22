@@ -75,10 +75,16 @@ export interface DeckControllerOptions {
   token?: string;
 }
 
-// Authored editor-only attributes make a deck invalid on save (M1 host contract).
-// Do not sanitize them at load: the save must fail so the author sees the error.
+// Authored editor-only attributes are a contract error under the M1 host rules
+// (the host rejects such a save with 400). Normalizing would strip them and
+// launder the invalid deck into a successful write, so load leaves decks that
+// carry them untouched for the host to reject.
 const EDITOR_ARTIFACT_SELECTOR =
   '[data-ppt-editing], [data-ppt-frame-slide]';
+
+export function hasEditorArtifacts(doc: Document): boolean {
+  return doc.querySelector(EDITOR_ARTIFACT_SELECTOR) !== null;
+}
 
 function createInitialState(): DeckControllerState {
   return {
@@ -130,6 +136,8 @@ export function useDeckController(
   const activeIndexRef = useRef(0);
   const revisionRef = useRef('');
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const saveGenerationRef = useRef(0);
+  const editVersionRef = useRef(0);
   const historyRef = useRef(new History<string>());
   const tokenRef = useRef(options.token ?? tokenFromLocation());
 
@@ -139,13 +147,39 @@ export function useDeckController(
     setState(next);
   }, []);
 
+  const enqueueSave = useCallback(
+    (save: (revision: string) => Promise<{ revision: string }>) => {
+      const generation = saveGenerationRef.current;
+      const editVersion = editVersionRef.current;
+      const task = saveChainRef.current.then(async () => {
+        // A load or reload that happened while this save was queued owns the
+        // deck now; writing would persist stale content.
+        if (saveGenerationRef.current !== generation) return;
+        const saved = await save(revisionRef.current);
+        revisionRef.current = saved.revision;
+        // Only report clean when no newer edit was recorded after this
+        // snapshot was taken; otherwise that edit is still pending.
+        if (editVersionRef.current === editVersion) {
+          update({ status: 'saved', dirty: false, error: '', conflict: null });
+        }
+      });
+      saveChainRef.current = task.catch(() => undefined);
+      return task;
+    },
+    [update]
+  );
+
   const load = useCallback(
     async (provided?: DeckResponse) => {
+      // Invalidate queued saves for the outgoing deck, then let an in-flight
+      // save finish before the revision is replaced by the fetched one.
+      saveGenerationRef.current += 1;
+      await saveChainRef.current;
       update({ status: 'loading', error: '' });
       try {
         const deck = provided ?? (await fetchDeck(tokenRef.current));
         const master = parseDeck(deck.html);
-        if (!master.querySelector(EDITOR_ARTIFACT_SELECTOR)) {
+        if (!hasEditorArtifacts(master)) {
           normalizeDeck(master);
         }
 
@@ -224,6 +258,7 @@ export function useDeckController(
       if (!slide) return null;
 
       mutate(slide.element, master);
+      editVersionRef.current += 1;
       const html = serializeDeck(master);
       historyRef.current.push(html, {
         coalesceKey: mutationOptions.coalesceKey
@@ -254,29 +289,23 @@ export function useDeckController(
         const result = mutate(master, slide);
         html = typeof result === 'string' ? result : serializeDeck(master);
       } catch (cause) {
+        // The mutation threw before touching the master, so dirty is unchanged.
         update({
           status: 'error',
-          error: toMessage(cause),
-          dirty: true
+          error: toMessage(cause)
         });
         throw cause;
       }
+      editVersionRef.current += 1;
       historyRef.current.push(html);
 
       const slides = detectSlides(master);
       slidesRef.current = slides;
       update({ slides, dirty: true, status: 'saving' });
 
-      const task = saveChainRef.current.then(async () => {
-        const saved = await saveDeck(
-          tokenRef.current,
-          html,
-          revisionRef.current
-        );
-        revisionRef.current = saved.revision;
-        update({ status: 'saved', dirty: false, error: '', conflict: null });
-      });
-      saveChainRef.current = task.catch(() => undefined);
+      const task = enqueueSave((revision) =>
+        saveDeck(tokenRef.current, html, revision)
+      );
 
       try {
         await task;
@@ -285,7 +314,7 @@ export function useDeckController(
         throw cause;
       }
     },
-    [update]
+    [enqueueSave, update]
   );
 
   const restore = useCallback(
@@ -295,6 +324,7 @@ export function useDeckController(
       masterRef.current = master;
       slidesRef.current = source.slides;
       activeIndexRef.current = source.activeIndex;
+      editVersionRef.current += 1;
       update({
         master,
         slides: source.slides,
@@ -331,18 +361,13 @@ export function useDeckController(
     const html = serializeDeck(master);
     update({ status: 'saving', error: '' });
     try {
-      const saved = await saveDeck(
-        tokenRef.current,
-        html,
-        revisionRef.current,
-        { force: true }
+      await enqueueSave((revision) =>
+        saveDeck(tokenRef.current, html, revision, { force: true })
       );
-      revisionRef.current = saved.revision;
-      update({ status: 'saved', dirty: false, conflict: null, error: '' });
     } catch (cause) {
       update({ status: 'error', error: toMessage(cause), dirty: true });
     }
-  }, [update]);
+  }, [enqueueSave, update]);
 
   const actions = useMemo<DeckControllerActions>(
     () => ({

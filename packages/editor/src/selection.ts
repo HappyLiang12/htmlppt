@@ -58,6 +58,7 @@ function pathTo(element: Element, slide: Element): number[] | null {
 
 export function selectionFromEvent(
   eventTarget: EventTarget | null,
+  /** The iframe-rendered slide, in the same realm as the event target. */
   slide: Element,
   options: SelectionFromEventOptions = {}
 ): SelectionTarget | null {
@@ -66,16 +67,19 @@ export function selectionFromEvent(
 
   const slideIndex = options.slideIndex ?? 0;
   const top = topLevelAncestor(element, slide);
-  if (!top) return null;
+  if (!top || !isObjectElement(top)) return null;
 
-  const index = topLevelObjects(slide).indexOf(top);
-  if (index === -1) return null;
+  // Paths are always raw child indices from the slide. Excluded siblings
+  // (notes, scripts) still occupy an index, so filtered object indices would
+  // disagree with pathTo. See the plan interface note.
+  const topIndex = Array.from(slide.children).indexOf(top);
+  if (topIndex === -1) return null;
 
   if (options.altKey) {
     const path = pathTo(element, slide);
-    if (!path || path[0] !== index) return null;
+    if (!path || path[0] !== topIndex) return null;
     return { slideIndex, path, elementId: elementIdOf(element) };
   }
 
-  return { slideIndex, path: [index], elementId: elementIdOf(top) };
+  return { slideIndex, path: [topIndex], elementId: elementIdOf(top) };
 }

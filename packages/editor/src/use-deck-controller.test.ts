@@ -2,7 +2,9 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DeckResponse } from './api.js';
+import { parseDeck } from './slide-doc.js';
 import {
+  hasEditorArtifacts,
   useDeckController,
   type DeckController
 } from './use-deck-controller.js';
@@ -146,6 +148,43 @@ describe('useDeckController', () => {
       controller.actions.redo();
     });
     expect(controller.state.srcDoc).toContain('Changed heading');
+  });
+
+  it('keeps decks with authored data-ppt-editing markers unnormalized', async () => {
+    const authored: DeckResponse = {
+      revision: 'revision-authored',
+      filePath: 'authored.html',
+      html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Authored deck</title></head>
+<body>
+<main data-ppt-deck>
+<section class="slide"><h1 data-ppt-editing="true">First slide</h1><p class="kicker">Kicker</p></section>
+</main>
+</body>
+</html>`
+    };
+
+    expect(hasEditorArtifacts(parseDeck(authored.html))).toBe(true);
+    expect(hasEditorArtifacts(parseDeck(DECK.html))).toBe(false);
+
+    await act(async () => {
+      await controller.actions.load(authored);
+    });
+
+    expect(controller.state.status).toBe('ready');
+    const heading = controller.state.master?.querySelector('h1');
+    expect(heading?.getAttribute('data-ppt-editing')).toBe('true');
+    expect(controller.state.master?.querySelector('[data-ppt-el]')).toBeNull();
+    expect(controller.state.master?.querySelector('[data-slide-id]')).toBeNull();
+
+    // A clean deck still goes through core normalization.
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    expect(
+      controller.state.master?.querySelector('h1')?.getAttribute('data-ppt-el')
+    ).toBe('e1');
   });
 
   it('leaves decks with authored editor artifacts unnormalized for the host to reject', async () => {

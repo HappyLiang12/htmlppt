@@ -47,14 +47,16 @@ export function App() {
       const frameDocument = frame.current?.contentDocument;
       if (!frameDocument) return;
 
-      // Drop the editing marker first: removing contenteditable from the
-      // focused element can fire another focusout, which must not re-commit.
-      editable.removeAttribute(EDITING_ATTRIBUTE);
-      editable.removeAttribute('contenteditable');
       try {
-        await actions.commit((master, slide) =>
-          commitSlide(master, slide.index, frameDocument)
-        );
+        await actions.commit((master, slide) => {
+          // Drop the editing marker before commitSlide reads the frame:
+          // removing contenteditable from the focused element can fire
+          // another focusout, which must not re-commit. The controller's
+          // guard runs first, so a missing slide leaves the element editable.
+          editable.removeAttribute(EDITING_ATTRIBUTE);
+          editable.removeAttribute('contenteditable');
+          return commitSlide(master, slide.index, frameDocument);
+        });
       } catch {
         // The controller already surfaced the status and message.
         editable.setAttribute('contenteditable', 'true');
