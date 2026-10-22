@@ -28,7 +28,7 @@ describe('normalizeDeck', () => {
     // Detection lets [data-slide-id] shadow classed siblings. Normalization
     // must not silently promote those siblings into slides.
     const doc = deck(
-      '<section class="slide" data-slide-id="s2"></section><section class="slide">Ignored by detection</section>'
+      '<section class="slide" data-slide-id="s2"></section><section class="slide">Ignored by detection<span>untagged child</span></section>'
     );
 
     const result = normalizeDeck(doc);
@@ -36,6 +36,19 @@ describe('normalizeDeck', () => {
     expect(result.slides.map((slide) => slide.id)).toEqual(['s2']);
     expect(doc.querySelectorAll('[data-slide-id]')).toHaveLength(1);
     expect(doc.querySelectorAll('.slide')[1].hasAttribute('data-ppt-el')).toBe(false);
+    expect(
+      doc.querySelectorAll('.slide')[1].querySelector('span')?.hasAttribute('data-ppt-el')
+    ).toBe(false);
+  });
+
+  it('reserves the slide root id when assigning top-level ids', () => {
+    const doc = deck(
+      '<section class="slide" data-slide-id="s1" data-ppt-el="e1"><p>Body</p></section>'
+    );
+
+    normalizeDeck(doc);
+
+    expect(doc.querySelector('p')?.getAttribute('data-ppt-el')).toBe('e2');
   });
 
   it('avoids collisions with existing ids', () => {

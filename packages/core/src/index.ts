@@ -11,3 +11,14 @@ export { normalizeDeck } from './normalize.js';
 export type { NormalizeOptions, NormalizeResult, NormalizedSlide } from './normalize.js';
 export { defaultIdFactory } from './ids.js';
 export type { IdFactory } from './ids.js';
+export {
+  DeckMutationError,
+  addElement,
+  mutateDeck,
+  removeElement,
+  resolveTarget,
+  setElementHtml,
+  setStyle,
+  setText
+} from './mutations.js';
+export type { ElementTarget } from './mutations.js';

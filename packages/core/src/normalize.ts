@@ -71,11 +71,15 @@ export function normalizeDeck(
     }
 
     const objects = topLevelObjects(slide.element);
-    const usedElementIds = new Set(
-      Array.from(slide.element.querySelectorAll('[data-ppt-el]'))
-        .map(objectId)
-        .filter((id): id is string => id !== null)
-    );
+    const usedElementIds = new Set<string>();
+    const slideRootId = objectId(slide.element);
+    if (slideRootId) usedElementIds.add(slideRootId);
+    for (const element of Array.from(
+      slide.element.querySelectorAll('[data-ppt-el]')
+    )) {
+      const id = objectId(element);
+      if (id) usedElementIds.add(id);
+    }
     const elementIds: string[] = [];
     for (const element of objects) {
       let id = objectId(element);
