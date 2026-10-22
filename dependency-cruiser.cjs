@@ -5,7 +5,13 @@ module.exports = {
       name: 'core-is-pure',
       severity: 'error',
       from: { path: '^packages/core' },
-      to: { path: '^packages/(host|editor|cli|mcp)' }
+      to: { path: '^packages/(renderer|host|editor|cli|mcp)' }
+    },
+    {
+      name: 'renderer-avoids-endpoints',
+      severity: 'error',
+      from: { path: '^packages/renderer' },
+      to: { path: '^packages/(host|editor|cli|mcp|runtime)' }
     },
     {
       name: 'runtime-is-pure',
