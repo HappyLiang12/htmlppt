@@ -45,6 +45,7 @@ import {
 import {
   applyBackground,
   applyGeometryEdit,
+  applyInspectorEdit,
   applyNotes,
   applyTransition,
   clearBackground,
@@ -271,10 +272,12 @@ export function App() {
 
   /**
    * Inspector edits mutate the master directly; the resulting srcDoc reload
-   * renders them without reconciling the iframe clone over the master.
+   * renders them without reconciling the iframe clone over the master. The
+   * mutation defaults to a no-op for edits applied before commit, so a
+   * rejected edit never reaches the history or the save queue.
    */
   const commitMasterDocument = useCallback(
-    async (mutate: (master: Document) => void) => {
+    async (mutate: (master: Document) => void = () => undefined) => {
       try {
         await actionsRef.current.commitMaster(mutate);
         // A successful inspector commit proves the editor is healthy again;
@@ -330,52 +333,66 @@ export function App() {
 
   const handleTransitionChange = useCallback(
     (transition: Transition) => {
-      const slideIndex = stateRef.current.activeIndex;
-      void commitMasterDocument((master) => {
-        applyTransition(master, slideIndex, transition);
-      });
+      const current = stateRef.current;
+      const master = current.master;
+      if (!master) return;
+      const slideIndex = current.activeIndex;
+      applyInspectorEdit(
+        master,
+        (draft) => applyTransition(draft, slideIndex, transition),
+        () => void commitMasterDocument()
+      );
     },
     [commitMasterDocument]
   );
 
   const handleBackgroundChange = useCallback(
     (background: SlideBackground): boolean => {
-      const slideIndex = stateRef.current.activeIndex;
-      let applied = false;
-      void commitMasterDocument((master) => {
-        applied = applyBackground(master, slideIndex, background);
-      });
-      return applied;
+      const current = stateRef.current;
+      const master = current.master;
+      if (!master) return false;
+      const slideIndex = current.activeIndex;
+      return applyInspectorEdit(
+        master,
+        (draft) => applyBackground(draft, slideIndex, background),
+        () => void commitMasterDocument()
+      );
     },
     [commitMasterDocument]
   );
 
   const handleClearBackground = useCallback((): boolean => {
-    const slideIndex = stateRef.current.activeIndex;
-    let cleared = false;
-    void commitMasterDocument((master) => {
-      cleared = clearBackground(master, slideIndex);
-    });
-    return cleared;
+    const current = stateRef.current;
+    const master = current.master;
+    if (!master) return false;
+    const slideIndex = current.activeIndex;
+    return applyInspectorEdit(
+      master,
+      (draft) => clearBackground(draft, slideIndex),
+      () => void commitMasterDocument()
+    );
   }, [commitMasterDocument]);
 
   const handleNotesChange = useCallback(
     (notes: string) => {
       const current = stateRef.current;
+      const master = current.master;
       const slide = current.slides[current.activeIndex];
-      if (!slide || notesOf(slide.element) === notes) return;
+      if (!master || !slide || notesOf(slide.element) === notes) return;
       const slideIndex = current.activeIndex;
       const before = Array.from(slide.element.children);
-      let structureChanged = false;
-      void commitMasterDocument((master) => {
-        if (!applyNotes(master, slideIndex, notes)) return;
-        const updated = detectSlides(master)[slideIndex]?.element;
-        if (!updated) return;
-        const after = Array.from(updated.children);
-        structureChanged =
-          after.length !== before.length ||
-          after.some((child, index) => child !== before[index]);
-      });
+      const applied = applyInspectorEdit(
+        master,
+        (draft) => applyNotes(draft, slideIndex, notes),
+        () => void commitMasterDocument()
+      );
+      if (!applied) return;
+      const updated = detectSlides(master)[slideIndex]?.element;
+      if (!updated) return;
+      const after = Array.from(updated.children);
+      const structureChanged =
+        after.length !== before.length ||
+        after.some((child, index) => child !== before[index]);
       if (structureChanged) {
         // Raw child paths key the selection; adding or removing the notes
         // aside shifts sibling indices and would silently retarget the next

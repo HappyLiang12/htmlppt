@@ -327,3 +327,18 @@ export function clearBackground(
   style.removeProperty('background-image');
   return true;
 }
+
+/**
+ * Applies one inspector edit and records the commit only when the edit
+ * reports a change. A rejected edit left the master untouched, so committing
+ * it would add a history entry and a save for a no-op.
+ */
+export function applyInspectorEdit(
+  master: Document | null,
+  apply: (master: Document) => boolean,
+  commit: () => void
+): boolean {
+  if (!master || !apply(master)) return false;
+  commit();
+  return true;
+}

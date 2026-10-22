@@ -208,6 +208,27 @@ describe('inspector background controls', () => {
     expect(error?.textContent?.trim()).not.toBe('');
   });
 
+  it('clears the inline error when the value changes', async () => {
+    const onSetBackground = vi.fn(() => false);
+    await render({ onSetBackground });
+
+    await act(async () => {
+      setInputValue(inputByTestId('background-value'), 'not-a-color');
+    });
+    await click(buttonByTestId('apply-background'));
+    expect(
+      container.querySelector('[data-testid="background-error"]')
+    ).not.toBeNull();
+
+    // The stale alert must disappear as soon as the user corrects the input.
+    await act(async () => {
+      setInputValue(inputByTestId('background-value'), '#112233');
+    });
+    expect(
+      container.querySelector('[data-testid="background-error"]')
+    ).toBeNull();
+  });
+
   it('clears the background through the clear action', async () => {
     const onClearBackground = vi.fn(() => true);
     await render({ onClearBackground });

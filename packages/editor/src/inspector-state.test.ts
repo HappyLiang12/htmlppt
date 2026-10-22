@@ -1,11 +1,12 @@
 import { detectSlides } from '@htmlppt/core';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeckResponse } from './api.js';
 import {
   applyBackground,
   applyGeometryEdit,
+  applyInspectorEdit,
   applyNotes,
   applyTransition,
   backgroundOf,
@@ -386,5 +387,54 @@ describe('inspector slide settings', () => {
     expect(transitionOf(slideOf(master))).toBe('fade');
     expect(applyTransition(master, 0, 'none')).toBe(true);
     expect(slideOf(master).getAttribute('data-ppt-transition')).toBe('none');
+  });
+});
+
+describe('inspector edit commits', () => {
+  it('does not commit a rejected background edit', () => {
+    const master = parseDeck(DECK_HTML);
+    const slide = slideOf(master) as HTMLElement;
+    const before = slide.getAttribute('style');
+    const commit = vi.fn();
+
+    const applied = applyInspectorEdit(
+      master,
+      (draft) =>
+        applyBackground(draft, 0, { kind: 'color', value: 'not-a-color' }),
+      commit
+    );
+
+    expect(applied).toBe(false);
+    expect(commit).not.toHaveBeenCalled();
+    expect(slide.getAttribute('style')).toBe(before);
+  });
+
+  it('commits once after a successful background edit', () => {
+    const master = parseDeck(DECK_HTML);
+    let backgroundAtCommit: ReturnType<typeof backgroundOf> = null;
+    const commit = vi.fn(() => {
+      backgroundAtCommit = backgroundOf(slideOf(master));
+    });
+
+    const applied = applyInspectorEdit(
+      master,
+      (draft) =>
+        applyBackground(draft, 0, { kind: 'color', value: '#112233' }),
+      commit
+    );
+
+    expect(applied).toBe(true);
+    expect(commit).toHaveBeenCalledTimes(1);
+    // The edit is written before the commit callback records the snapshot.
+    expect(backgroundAtCommit).toEqual({
+      kind: 'color',
+      value: 'rgb(17, 34, 51)'
+    });
+  });
+
+  it('does not commit without a loaded master', () => {
+    const commit = vi.fn();
+    expect(applyInspectorEdit(null, () => true, commit)).toBe(false);
+    expect(commit).not.toHaveBeenCalled();
   });
 });

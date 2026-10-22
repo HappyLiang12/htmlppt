@@ -416,9 +416,11 @@ export function Inspector({
                         ? 'linear-gradient(…)'
                         : 'https://…'
                   }
-                  onChange={(event) =>
-                    setBackgroundValue(event.target.value)
-                  }
+                  onChange={(event) => {
+                    setBackgroundValue(event.target.value);
+                    // A stale rejection alert must not outlive the correction.
+                    setBackgroundError('');
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault();

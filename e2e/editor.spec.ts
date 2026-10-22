@@ -1925,6 +1925,55 @@ test(
 );
 
 test(
+  'rejected background values neither save nor record history',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const value = page.getByTestId('background-value');
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await value.fill('not-a-color');
+        await expectNoDeckSave(page, () =>
+          page.getByTestId('apply-background').click()
+        );
+        await expect(page.getByTestId('background-error')).toBeVisible();
+        expect(saveRequests).toHaveLength(0);
+        // A rejected value must not touch the deck or flip the save state.
+        await expect(page.getByTestId('save-status')).toHaveText('已載入');
+        expect(
+          (await savedSlideStyle(editor.directory, editor.file)).background
+        ).toBeNull();
+
+        // Editing the value clears the stale alert so the correction can be
+        // applied without a lingering error.
+        await value.fill('#112233');
+        await expect(page.getByTestId('background-error')).toHaveCount(0);
+
+        // With no history entry from the rejected edit, Undo is a no-op and
+        // must not restore a snapshot that drops the unrelated selection.
+        await page
+          .locator('[data-testid="object-row"][data-object-id="box1"]')
+          .click();
+        const outline = page.getByTestId('selection-outline');
+        await expect(outline).toBeVisible();
+        await expectNoDeckSave(page, () => page.getByTestId('undo').click());
+        await expect(outline).toBeVisible();
+        expect(saveRequests).toHaveLength(0);
+      } finally {
+        page.off('request', countSave);
+      }
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
   'inspector tabs support roving arrow-key navigation',
   { tag: '@feature:editor-core' },
   async ({ page }) => {
