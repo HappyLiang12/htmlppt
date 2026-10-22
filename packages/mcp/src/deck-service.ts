@@ -6,7 +6,7 @@ import {
   readDeckFile,
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
-import { listSessions } from '@htmlppt/host';
+import { findLiveSession } from './host-session.js';
 
 export interface DeckSnapshot {
   document: Document;
@@ -252,8 +252,10 @@ export class HostDeckService implements DeckService {
 }
 
 /**
- * Uses the host that owns the deck when one is available, otherwise writes the
- * file directly. Task 5 adds health verification and the direct-mode override.
+ * Uses the host that owns the deck when a registered session is alive and its
+ * authenticated health endpoint responds. HTMLPPT_MCP_MODE=direct skips the
+ * registry and writes the file directly; any other value allows host
+ * auto-selection.
  */
 export async function createDeckService(
   filePath: string,
@@ -267,9 +269,11 @@ export async function createDeckService(
     return new HostDeckService({ hostUrl, token });
   }
 
-  const resolved = path.resolve(filePath);
-  const sessions = await listSessions();
-  const session = sessions.find((entry) => entry.path === resolved);
+  if (process.env.HTMLPPT_MCP_MODE === 'direct') {
+    return new DirectDeckService();
+  }
+
+  const session = await findLiveSession(filePath);
   if (session) {
     return new HostDeckService({
       hostUrl: `http://127.0.0.1:${session.port}`,

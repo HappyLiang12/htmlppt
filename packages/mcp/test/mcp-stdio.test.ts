@@ -1,12 +1,19 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateDeck } from '@htmlppt/core';
 import { parseDeckHtml } from '@htmlppt/core/node';
+import {
+  sessionKey,
+  sessionsDirectory,
+  startHost,
+  writeSession
+} from '@htmlppt/host';
 import { RUNTIME_SOURCE } from '@htmlppt/runtime';
-import { makeTempDir } from '@htmlppt/test-utils';
+import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   getDefaultEnvironment,
@@ -54,6 +61,7 @@ const RESOURCE_URIS = [
 
 let dir: string;
 let home: string;
+let previousHome: string | undefined;
 let client: Client;
 let transport: StdioClientTransport;
 
@@ -153,11 +161,96 @@ async function callTool(
   return { result, payload: resultPayload(result) };
 }
 
+interface SseEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+/** Minimal SSE reader used to prove the editor sees the MCP revision source. */
+class EventReader {
+  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+  private readonly decoder = new TextDecoder();
+  private buffer = '';
+  private readonly queue: SseEvent[] = [];
+  private ended = false;
+
+  constructor(response: Response) {
+    if (!response.body) {
+      throw new Error('Expected an SSE response body.');
+    }
+    this.reader = response.body.getReader();
+  }
+
+  async next(): Promise<SseEvent> {
+    for (;;) {
+      const queued = this.queue.shift();
+      if (queued) {
+        return queued;
+      }
+      if (this.ended) {
+        throw new Error('The SSE stream ended before the expected event.');
+      }
+      const result = await this.reader.read();
+      if (result.done) {
+        this.ended = true;
+        continue;
+      }
+      this.buffer += this.decoder.decode(result.value, { stream: true });
+      this.drain();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.reader.cancel().catch(() => undefined);
+  }
+
+  private drain(): void {
+    for (;;) {
+      const boundary = this.buffer.indexOf('\n\n');
+      if (boundary === -1) {
+        return;
+      }
+      const block = this.buffer.slice(0, boundary);
+      this.buffer = this.buffer.slice(boundary + 2);
+      let eventName = 'message';
+      const data: string[] = [];
+      for (const rawLine of block.split('\n')) {
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        if (line.startsWith(':')) {
+          continue;
+        }
+        const colon = line.indexOf(':');
+        const field = colon === -1 ? line : line.slice(0, colon);
+        const value =
+          colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
+        if (field === 'event') {
+          eventName = value;
+        } else if (field === 'data') {
+          data.push(value);
+        }
+      }
+      if (data.length === 0) {
+        continue;
+      }
+      const parsed: unknown = JSON.parse(data.join('\n'));
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('The SSE data is not a JSON object.');
+      }
+      this.queue.push({
+        event: eventName,
+        data: parsed as Record<string, unknown>
+      });
+    }
+  }
+}
+
 beforeAll(async () => {
   await buildWorkspace();
   dir = await makeTempDir('htmlppt-mcp-stdio-');
   home = join(dir, 'home');
   await mkdir(home, { recursive: true });
+  previousHome = process.env.HTMLPPT_HOME;
+  process.env.HTMLPPT_HOME = home;
   transport = new StdioClientTransport({
     command: process.execPath,
     args: [binPath],
@@ -176,6 +269,11 @@ afterAll(async () => {
   try {
     await client?.close();
   } finally {
+    if (previousHome === undefined) {
+      delete process.env.HTMLPPT_HOME;
+    } else {
+      process.env.HTMLPPT_HOME = previousHome;
+    }
     if (dir) {
       await rm(dir, { recursive: true, force: true });
     }
@@ -396,5 +494,100 @@ describe('htmlppt MCP stdio server', () => {
       name.endsWith('.htmlppt.tmp')
     );
     expect(leftovers).toEqual([]);
+  });
+
+  it('attaches to a live host session, reports mcp revisions, then falls back', async () => {
+    const hostedDir = join(dir, 'hosted');
+    await mkdir(hostedDir, { recursive: true });
+    const deckPath = await copyFixture('basic.deck.html', hostedDir);
+    const editorDir = join(dir, 'hosted-editor');
+    await mkdir(editorDir, { recursive: true });
+    await writeFile(
+      join(editorDir, 'index.html'),
+      '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+      'utf8'
+    );
+    const token = randomUUID();
+    const host = await startHost({
+      filePath: deckPath,
+      token,
+      editorDir,
+      port: 0
+    });
+    const base = new URL(host.url).origin;
+    const authorization = { authorization: `Bearer ${token}` };
+    let events: EventReader | undefined;
+    try {
+      const health = await fetch(`${base}/api/health`, {
+        headers: authorization
+      });
+      expect(health.status).toBe(200);
+      const initial = (await health.json()) as { revision: string };
+      await writeSession({
+        path: deckPath,
+        port: host.port,
+        token,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: initial.revision
+      });
+
+      const eventsResponse = await fetch(
+        `${base}/api/events?token=${encodeURIComponent(token)}`,
+        { signal: AbortSignal.timeout(10_000) }
+      );
+      expect(eventsResponse.status).toBe(200);
+      events = new EventReader(eventsResponse);
+      expect((await events.next()).event).toBe('hello');
+
+      const relativePath = join('hosted', 'basic.deck.html');
+      const edited = await callTool('set_text', {
+        path: relativePath,
+        slideId: 's1',
+        target: { elementId: 'e1' },
+        text: 'Edited through the live host'
+      });
+      expect(edited.result.isError).toBeFalsy();
+      const revision = edited.payload.revision;
+      expect(typeof revision).toBe('string');
+      expect(revision).not.toBe(initial.revision);
+
+      expect(await readFile(deckPath, 'utf8')).toContain(
+        'Edited through the live host'
+      );
+      const deckResponse = await fetch(`${base}/api/deck`, {
+        headers: authorization
+      });
+      expect(await deckResponse.json()).toMatchObject({ revision });
+      expect(await events.next()).toEqual({
+        event: 'revision',
+        data: { revision, source: 'mcp' }
+      });
+
+      await events.close();
+      events = undefined;
+      await host.close();
+
+      const again = await callTool('set_text', {
+        path: relativePath,
+        slideId: 's2',
+        target: { elementId: 'e3' },
+        text: 'Written after the host stopped'
+      });
+      expect(again.result.isError).toBeFalsy();
+      expect(again.payload.revision).not.toBe(revision);
+      expect(await readFile(deckPath, 'utf8')).toContain(
+        'Written after the host stopped'
+      );
+      await expect(
+        readFile(
+          join(sessionsDirectory(), `${sessionKey(deckPath)}.json`),
+          'utf8'
+        )
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await events?.close();
+      await host.close();
+    }
   });
 });
