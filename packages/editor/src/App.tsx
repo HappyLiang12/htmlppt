@@ -39,16 +39,17 @@ import {
   type TransformTarget
 } from './transform';
 import { CanvasOverlay } from './components/CanvasOverlay';
-import { useDeckController, type SaveStatus } from './use-deck-controller';
-
-const STATUS_LABEL: Record<SaveStatus, string> = {
-  loading: '載入中…',
-  ready: '已載入',
-  saving: '儲存中…',
-  saved: '已儲存',
-  'load-error': '載入失敗',
-  error: '儲存失敗'
-};
+import { SorterView } from './components/SorterView';
+import { ThumbnailRail } from './components/ThumbnailRail';
+import { Toolbar, type EditorView } from './components/Toolbar';
+import {
+  addSlideAfterActive,
+  deleteSlideAt,
+  duplicateActiveSlide,
+  reorderSlides,
+  type SlideOpsContext
+} from './slide-ops';
+import { useDeckController } from './use-deck-controller';
 
 const ARROW_KEYS: Record<string, readonly [number, number] | undefined> = {
   ArrowLeft: [-1, 0],
@@ -172,11 +173,13 @@ export function App() {
     status,
     error,
     filePath,
-    selection
+    selection,
+    master
   } = state;
 
   const activeSlide = slides[activeIndex];
 
+  const [view, setView] = useState<EditorView>('normal');
   const [selectionRect, setSelectionRect] = useState<Rect | null>(null);
   const [selectionRotation, setSelectionRotation] = useState(0);
   const [guides, setGuides] = useState<Guide[]>([]);
@@ -194,6 +197,42 @@ export function App() {
   const framePointerDownRef = useRef<
     (event: PointerEvent, frameDocument: Document) => void
   >(() => undefined);
+
+  const slideOpsContext = useCallback(
+    (): SlideOpsContext => ({
+      master: stateRef.current.master,
+      slides: stateRef.current.slides,
+      activeIndex: stateRef.current.activeIndex,
+      commit: actionsRef.current.commit,
+      showSlide: actionsRef.current.showSlide
+    }),
+    []
+  );
+
+  const handleAddSlide = useCallback(() => {
+    void addSlideAfterActive(slideOpsContext());
+  }, [slideOpsContext]);
+
+  const handleDuplicateSlide = useCallback(
+    (index?: number) => {
+      void duplicateActiveSlide(slideOpsContext(), index);
+    },
+    [slideOpsContext]
+  );
+
+  const handleDeleteSlide = useCallback(
+    (index?: number) => {
+      void deleteSlideAt(slideOpsContext(), index);
+    },
+    [slideOpsContext]
+  );
+
+  const handleReorderSlides = useCallback(
+    (slideIds: string[]) => {
+      void reorderSlides(slideOpsContext(), slideIds);
+    },
+    [slideOpsContext]
+  );
 
   useEffect(() => {
     void actions.load();
@@ -213,7 +252,7 @@ export function App() {
     updateScale();
     window.addEventListener('resize', updateScale);
     return () => window.removeEventListener('resize', updateScale);
-  }, [activeSlide, actions]);
+  }, [activeSlide, actions, view]);
 
   const frameSlideNow = useCallback((): Element | null => {
     const frameDocument = frame.current?.contentDocument;
@@ -262,6 +301,18 @@ export function App() {
     setSelectionRotation(0);
     setGuides([]);
   }, []);
+
+  const changeView = useCallback(
+    (next: EditorView) => {
+      if (next === view) return;
+      // Selection geometry belongs to the canvas iframe, which unmounts in
+      // sorter view; dropping it keeps the next mount consistent.
+      actionsRef.current.clearSelection();
+      clearOverlay();
+      setView(next);
+    },
+    [clearOverlay, view]
+  );
 
   const refreshOverlay = useCallback(() => {
     const current = stateRef.current;
@@ -787,116 +838,104 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col bg-[#0f1115] text-zinc-100">
-      <header className="flex items-center justify-between border-b border-white/10 px-5 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="text-sm font-semibold tracking-wide">htmlppt</span>
-          <span className="truncate text-xs text-zinc-400">{filePath}</span>
-        </div>
-        <div className="flex items-center gap-4 text-xs">
-          <span
-            data-testid="save-status"
-            className={status === 'error' ? 'text-red-400' : 'text-zinc-400'}
-          >
-            {STATUS_LABEL[status]}
-          </span>
-          <button
-            type="button"
-            className="rounded border border-white/15 px-2 py-1 disabled:opacity-40"
-            onClick={() => goTo(activeIndex - 1)}
-            disabled={activeIndex <= 0}
-          >
-            上一頁
-          </button>
-          <span className="tabular-nums text-zinc-400">
-            {slides.length === 0 ? 0 : activeIndex + 1} / {slides.length}
-          </span>
-          <button
-            type="button"
-            className="rounded border border-white/15 px-2 py-1 disabled:opacity-40"
-            onClick={() => goTo(activeIndex + 1)}
-            disabled={activeIndex >= slides.length - 1}
-          >
-            下一頁
-          </button>
-        </div>
-      </header>
+      <Toolbar
+        filePath={filePath}
+        status={status}
+        activeIndex={activeIndex}
+        slideCount={slides.length}
+        view={view}
+        canDelete={slides.length > 1}
+        onAddSlide={handleAddSlide}
+        onDuplicateSlide={() => handleDuplicateSlide()}
+        onDeleteSlide={() => handleDeleteSlide()}
+        onUndo={actions.undo}
+        onRedo={actions.redo}
+        onViewChange={changeView}
+        onPreviousSlide={() => goTo(activeIndex - 1)}
+        onNextSlide={() => goTo(activeIndex + 1)}
+      />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-44 shrink-0 border-r border-white/10 p-3">
-          <div className="flex flex-col gap-2">
-            {slides.map((slide, index) => (
-              <button
-                key={slide.id}
-                type="button"
-                onClick={() => goTo(index)}
-                className={`rounded border px-3 py-2 text-left text-xs ${
-                  index === activeIndex
-                    ? 'border-amber-400/70 bg-amber-400/10 text-amber-200'
-                    : 'border-white/10 text-zinc-400 hover:border-white/25'
-                }`}
-              >
-                第 {index + 1} 頁
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <main
-          ref={canvas}
-          onPointerDown={(event) => {
-            if (event.target !== event.currentTarget) return;
-            actions.clearSelection();
-            clearOverlay();
-          }}
-          className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#0a0c10] p-12"
+      {error && (
+        <div
+          data-testid="editor-error"
+          className="max-h-24 overflow-auto border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200"
         >
-          {error && (
-            <div className="absolute left-4 top-4 max-w-lg rounded border border-red-500/40 bg-red-950/80 px-3 py-2 text-xs text-red-200">
-              {error}
-            </div>
-          )}
+          {error}
+        </div>
+      )}
 
-          {activeSlide ? (
-            <div
-              className="relative shadow-2xl shadow-black/60"
-              style={{
-                width: activeSlide.width * scale,
-                height: activeSlide.height * scale
-              }}
-            >
-              <iframe
-                ref={frame}
-                title="投影片預覽"
-                sandbox="allow-same-origin"
-                srcDoc={srcDoc}
-                onLoad={onFrameLoad}
-                className="absolute left-0 top-0 border-0 bg-white"
+      {view === 'sorter' ? (
+        <SorterView
+          master={master}
+          slides={slides}
+          activeIndex={activeIndex}
+          onSelect={goTo}
+          onReorder={handleReorderSlides}
+          onDuplicate={(index) => handleDuplicateSlide(index)}
+          onDelete={(index) => handleDeleteSlide(index)}
+          canDelete={slides.length > 1}
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <ThumbnailRail
+            master={master}
+            slides={slides}
+            activeIndex={activeIndex}
+            onSelect={goTo}
+          />
+
+          <main
+            ref={canvas}
+            data-testid="canvas-preview"
+            onPointerDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              actions.clearSelection();
+              clearOverlay();
+            }}
+            className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#0a0c10] p-12"
+          >
+            {activeSlide ? (
+              <div
+                className="relative shadow-2xl shadow-black/60"
                 style={{
-                  width: activeSlide.width,
-                  height: activeSlide.height,
-                  transform: `scale(${scale})`,
-                  transformOrigin: 'top left'
+                  width: activeSlide.width * scale,
+                  height: activeSlide.height * scale
                 }}
-              />
-              <CanvasOverlay
-                rect={selectionRect}
-                rotation={selectionRotation}
-                guides={guides}
-                scale={scale}
-                readOnly={selection !== null && selection.path.length > 1}
-                selectedId={selection?.elementId ?? null}
-                selectedPath={selection?.path ?? null}
-                onResizeStart={beginResizeSession}
-                onRotateStart={beginRotateSession}
-              />
-            </div>
-          ) : status === 'loading' ? (
-            <p className="text-sm text-zinc-500">載入中…</p>
-          ) : (
-            <p className="text-sm text-zinc-500">找不到投影片。</p>
-          )}
-        </main>
-      </div>
+              >
+                <iframe
+                  ref={frame}
+                  title="投影片預覽"
+                  sandbox="allow-same-origin"
+                  srcDoc={srcDoc}
+                  onLoad={onFrameLoad}
+                  className="absolute left-0 top-0 border-0 bg-white"
+                  style={{
+                    width: activeSlide.width,
+                    height: activeSlide.height,
+                    transform: `scale(${scale})`,
+                    transformOrigin: 'top left'
+                  }}
+                />
+                <CanvasOverlay
+                  rect={selectionRect}
+                  rotation={selectionRotation}
+                  guides={guides}
+                  scale={scale}
+                  readOnly={selection !== null && selection.path.length > 1}
+                  selectedId={selection?.elementId ?? null}
+                  selectedPath={selection?.path ?? null}
+                  onResizeStart={beginResizeSession}
+                  onRotateStart={beginRotateSession}
+                />
+              </div>
+            ) : status === 'loading' ? (
+              <p className="text-sm text-zinc-500">載入中…</p>
+            ) : (
+              <p className="text-sm text-zinc-500">找不到投影片。</p>
+            )}
+          </main>
+        </div>
+      )}
     </div>
   );
 }

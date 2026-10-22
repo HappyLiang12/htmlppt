@@ -71,8 +71,21 @@ export interface DeckController {
   actions: DeckControllerActions;
 }
 
+/**
+ * Save transport for the host deck endpoint. Production uses `saveDeck`; tests
+ * inject a deterministic transport so slide operations can be unit-tested
+ * without a network round trip. No host behavior is simulated.
+ */
+export type DeckSaver = (
+  token: string,
+  html: string,
+  baseRevision: string,
+  options?: { force?: boolean }
+) => Promise<{ revision: string }>;
+
 export interface DeckControllerOptions {
   token?: string;
+  save?: DeckSaver;
 }
 
 // Authored editor-only attributes are a contract error under the M1 host rules
@@ -140,6 +153,7 @@ export function useDeckController(
   const editVersionRef = useRef(0);
   const historyRef = useRef(new History<string>());
   const tokenRef = useRef(options.token ?? tokenFromLocation());
+  const saveRef = useRef<DeckSaver>(options.save ?? saveDeck);
 
   const update = useCallback((patch: Partial<DeckControllerState>) => {
     const next = { ...stateRef.current, ...patch };
@@ -304,7 +318,7 @@ export function useDeckController(
       update({ slides, dirty: true, status: 'saving' });
 
       const task = enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision)
+        saveRef.current(tokenRef.current, html, revision)
       );
 
       try {
@@ -362,7 +376,7 @@ export function useDeckController(
     update({ status: 'saving', error: '' });
     try {
       await enqueueSave((revision) =>
-        saveDeck(tokenRef.current, html, revision, { force: true })
+        saveRef.current(tokenRef.current, html, revision, { force: true })
       );
     } catch (cause) {
       update({ status: 'error', error: toMessage(cause), dirty: true });

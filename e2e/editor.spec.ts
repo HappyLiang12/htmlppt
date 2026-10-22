@@ -40,9 +40,10 @@ function isDeckSave(response: Response): boolean {
 
 async function createTemplate(
   directory: string,
-  file: string
+  file: string,
+  slideCount = 2
 ): Promise<void> {
-  await execa('node', [cliPath, 'new', file, '--slides', '2'], {
+  await execa('node', [cliPath, 'new', file, '--slides', String(slideCount)], {
     cwd: directory
   });
 }
@@ -100,6 +101,16 @@ function openTemplateDeck(page: Page): Promise<EditorHarness> {
   );
 }
 
+function openSingleSlideDeck(page: Page): Promise<EditorHarness> {
+  return openDeck(
+    page,
+    (directory, file) => createTemplate(directory, file, 1),
+    async (frame) => {
+      await expect(frame.locator('h1')).toContainText('Untitled deck');
+    }
+  );
+}
+
 function openNudgeDeck(page: Page): Promise<EditorHarness> {
   return openDeck(
     page,
@@ -132,6 +143,53 @@ async function expectNoDeckSave(
   );
   await action();
   expect(await saved, 'a deck save was issued unexpectedly').toBe(false);
+}
+
+function slideIds(page: Page): Promise<string[]> {
+  return page.getByTestId('thumbnail').evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute('data-slide-id') ?? '')
+  );
+}
+
+function slideTitles(page: Page): Promise<string[]> {
+  return page.getByTestId('thumbnail').evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute('data-slide-title') ?? '')
+  );
+}
+
+function sorterSlideIds(page: Page): Promise<string[]> {
+  return page.getByTestId('sorter-slide').evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute('data-slide-id') ?? '')
+  );
+}
+
+function savedSlideOrder(html: string): string[] {
+  return [...html.matchAll(/data-slide-id="([^"]+)"/g)].map(
+    (match) => match[1] ?? ''
+  );
+}
+
+async function savedDocument(editor: EditorHarness): Promise<string> {
+  return readFile(join(editor.directory, editor.file), 'utf8');
+}
+
+async function dragSorterTile(
+  page: Page,
+  fromIndex: number,
+  toIndex: number
+): Promise<void> {
+  const tiles = page.getByTestId('sorter-slide');
+  const source = await tiles.nth(fromIndex).boundingBox();
+  const target = await tiles.nth(toIndex).boundingBox();
+  if (!source || !target) throw new Error('Sorter tiles have no bounding box.');
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    target.x + target.width / 2,
+    target.y + target.height / 2,
+    { steps: 10 }
+  );
+  await page.mouse.up();
 }
 
 interface InlineGeometry {
@@ -1026,6 +1084,326 @@ test(
 
       await page.keyboard.press('ArrowLeft');
       await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'thumbnail rail previews every slide in sandboxed frames and navigates',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      await expect(thumbnails).toHaveCount(2);
+      await expect(thumbnails.nth(0)).toHaveAttribute('data-slide-id', 's1');
+      await expect(thumbnails.nth(1)).toHaveAttribute('data-slide-id', 's2');
+      await expect(thumbnails.nth(0)).toHaveAttribute('aria-current', 'page');
+      await expect(thumbnails.nth(1)).not.toHaveAttribute(
+        'aria-current',
+        'page'
+      );
+
+      const frames = thumbnails.locator('iframe');
+      await expect(frames).toHaveCount(2);
+      await expect(frames.nth(0)).toHaveAttribute(
+        'sandbox',
+        'allow-same-origin'
+      );
+      await expect(frames.nth(1)).toHaveAttribute(
+        'sandbox',
+        'allow-same-origin'
+      );
+      await expect(
+        frames.nth(1).contentFrame().locator('h1')
+      ).toHaveText('Untitled deck — 2');
+
+      await thumbnails.nth(1).click();
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck — 2');
+      await expect(thumbnails.nth(1)).toHaveAttribute('aria-current', 'page');
+      await expect(thumbnails.nth(0)).not.toHaveAttribute(
+        'aria-current',
+        'page'
+      );
+
+      await expect(page.getByTestId('toolbar')).toBeVisible();
+      await expect(page.getByTestId('play')).toBeDisabled();
+      await expect(page.getByTestId('export-html')).toBeDisabled();
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'adding a slide inserts after the active slide and survives reload',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      const initialIds = await slideIds(page);
+      expect(initialIds).toEqual(['s1', 's2']);
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('add-slide').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      await expect(thumbnails).toHaveCount(3);
+      const addedIds = await slideIds(page);
+      expect(addedIds).toHaveLength(3);
+      expect(addedIds[0]).toBe(initialIds[0]);
+      expect(addedIds[2]).toBe(initialIds[1]);
+      expect(addedIds[1]).not.toBe(initialIds[0]);
+      await expect(thumbnails.nth(1)).toHaveAttribute(
+        'aria-current',
+        'page'
+      );
+      await expect(editor.frame.locator('h1')).toHaveText('新投影片');
+      await expect.poll(() => slideTitles(page)).toEqual([
+        'Untitled deck',
+        '新投影片',
+        'Untitled deck — 2'
+      ]);
+      await expect
+        .poll(async () =>
+          (await savedDocument(editor)).includes(
+            `data-slide-id="${addedIds[1]}"`
+          )
+        )
+        .toBe(true);
+
+      await page.reload();
+      const frame = page.frameLocator(FRAME_SELECTOR);
+      await expect(frame.locator('h1')).toContainText('Untitled deck');
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('thumbnail')).toHaveCount(3);
+      expect(await slideIds(page)).toEqual(addedIds);
+      await expect.poll(() => slideTitles(page)).toEqual([
+        'Untitled deck',
+        '新投影片',
+        'Untitled deck — 2'
+      ]);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'duplicating copies content under a new id and deleting removes it',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      const initialIds = await slideIds(page);
+
+      const duplicateSave = waitForDeckSave(page);
+      await page.getByTestId('duplicate-slide').click();
+      expect((await duplicateSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      await expect(thumbnails).toHaveCount(3);
+      const duplicatedIds = await slideIds(page);
+      expect(duplicatedIds).toHaveLength(3);
+      expect(duplicatedIds[0]).toBe(initialIds[0]);
+      expect(duplicatedIds[2]).toBe(initialIds[1]);
+      expect(duplicatedIds[1]).not.toBe(initialIds[0]);
+      await expect(thumbnails.nth(1)).toHaveAttribute(
+        'aria-current',
+        'page'
+      );
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+      await expect.poll(() => slideTitles(page)).toEqual([
+        'Untitled deck',
+        'Untitled deck',
+        'Untitled deck — 2'
+      ]);
+      await expect
+        .poll(async () => {
+          const html = await savedDocument(editor);
+          return html.split(`data-slide-id="${duplicatedIds[1]}"`).length - 1;
+        })
+        .toBe(1);
+
+      const deleteSave = waitForDeckSave(page);
+      await page.getByTestId('delete-slide').click();
+      expect((await deleteSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      await expect(thumbnails).toHaveCount(2);
+      expect(await slideIds(page)).toEqual(initialIds);
+      await expect
+        .poll(async () =>
+          (await savedDocument(editor)).includes(
+            `data-slide-id="${duplicatedIds[1]}"`
+          )
+        )
+        .toBe(false);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'delete is disabled for the last remaining slide',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openSingleSlideDeck(page);
+    try {
+      await expect(page.getByTestId('thumbnail')).toHaveCount(1);
+      await expect(page.getByTestId('delete-slide')).toBeDisabled();
+
+      await page.getByTestId('view-sorter').click();
+      await expect(page.getByTestId('sorter-slide')).toHaveCount(1);
+      await expect(page.getByTestId('sorter-delete')).toBeDisabled();
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'sorter tiles select slides and duplicate or delete from their own actions',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const initialIds = await slideIds(page);
+      await page.getByTestId('view-sorter').click();
+      const tiles = page.getByTestId('sorter-slide');
+      await expect(tiles).toHaveCount(2);
+      await expect(tiles.nth(0)).toHaveAttribute('aria-current', 'page');
+
+      await tiles.nth(1).click();
+      await expect(tiles.nth(1)).toHaveAttribute('aria-current', 'page');
+      await expect(tiles.nth(0)).not.toHaveAttribute('aria-current', 'page');
+
+      const duplicateSave = waitForDeckSave(page);
+      await page.getByTestId('sorter-duplicate').nth(1).click();
+      expect((await duplicateSave).ok()).toBeTruthy();
+      await expect(tiles).toHaveCount(3);
+      const duplicatedIds = await sorterSlideIds(page);
+      expect(duplicatedIds[0]).toBe(initialIds[0]);
+      expect(duplicatedIds[1]).toBe(initialIds[1]);
+      expect(duplicatedIds[2]).not.toBe(initialIds[1]);
+      await expect(tiles.nth(2)).toHaveAttribute('aria-current', 'page');
+
+      const deleteSave = waitForDeckSave(page);
+      await page.getByTestId('sorter-delete').nth(2).click();
+      expect((await deleteSave).ok()).toBeTruthy();
+      await expect(tiles).toHaveCount(2);
+      expect(await sorterSlideIds(page)).toEqual(initialIds);
+      await expect(tiles.nth(1)).toHaveAttribute('aria-current', 'page');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'sorter drag reorders slides and the order survives reload',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const initialIds = await slideIds(page);
+      await page.getByTestId('view-sorter').click();
+      const tiles = page.getByTestId('sorter-slide');
+      await expect(tiles).toHaveCount(2);
+      await expect(page.getByTestId('sorter-view')).toBeVisible();
+      await expect(page.getByTestId('canvas-preview')).toHaveCount(0);
+
+      const save = waitForDeckSave(page);
+      await dragSorterTile(page, 0, 1);
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const reorderedIds = [initialIds[1], initialIds[0]];
+      expect(await sorterSlideIds(page)).toEqual(reorderedIds);
+      await expect
+        .poll(async () => savedSlideOrder(await savedDocument(editor)))
+        .toEqual(reorderedIds);
+
+      await page.reload();
+      const frame = page.frameLocator(FRAME_SELECTOR);
+      await expect(frame.locator('h1')).toHaveText('Untitled deck — 2');
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      expect(await slideIds(page)).toEqual(reorderedIds);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'undo and redo restore add, delete, and reorder exactly',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      const initialIds = await slideIds(page);
+      const initialTitles = ['Untitled deck', 'Untitled deck — 2'];
+
+      const addSave = waitForDeckSave(page);
+      await page.getByTestId('add-slide').click();
+      expect((await addSave).ok()).toBeTruthy();
+      await expect(thumbnails).toHaveCount(3);
+      const addedIds = await slideIds(page);
+      const addedTitles = ['Untitled deck', '新投影片', 'Untitled deck — 2'];
+      await expect.poll(() => slideTitles(page)).toEqual(addedTitles);
+
+      // Undo restores the two original slides; redo restores the insertion.
+      await page.getByTestId('undo').click();
+      await expect(thumbnails).toHaveCount(2);
+      await expect.poll(() => slideIds(page)).toEqual(initialIds);
+      await expect.poll(() => slideTitles(page)).toEqual(initialTitles);
+
+      await page.getByTestId('redo').click();
+      await expect(thumbnails).toHaveCount(3);
+      await expect.poll(() => slideIds(page)).toEqual(addedIds);
+      await expect.poll(() => slideTitles(page)).toEqual(addedTitles);
+      await expect(thumbnails.nth(1)).toHaveAttribute(
+        'aria-current',
+        'page'
+      );
+
+      const deleteSave = waitForDeckSave(page);
+      await page.getByTestId('delete-slide').click();
+      expect((await deleteSave).ok()).toBeTruthy();
+      await expect(thumbnails).toHaveCount(2);
+      await expect.poll(() => slideIds(page)).toEqual(initialIds);
+
+      // Undo restores the deleted slide exactly; redo removes it again.
+      await page.getByTestId('undo').click();
+      await expect(thumbnails).toHaveCount(3);
+      await expect.poll(() => slideIds(page)).toEqual(addedIds);
+      await expect.poll(() => slideTitles(page)).toEqual(addedTitles);
+
+      await page.getByTestId('redo').click();
+      await expect(thumbnails).toHaveCount(2);
+      await expect.poll(() => slideIds(page)).toEqual(initialIds);
+      await expect.poll(() => slideTitles(page)).toEqual(initialTitles);
+
+      // Reorder in the sorter.
+      await page.getByTestId('view-sorter').click();
+      const reorderedIds = [initialIds[1], initialIds[0]];
+      const reorderSave = waitForDeckSave(page);
+      await dragSorterTile(page, 0, 1);
+      expect((await reorderSave).ok()).toBeTruthy();
+      await expect.poll(() => sorterSlideIds(page)).toEqual(reorderedIds);
+
+      await page.getByTestId('undo').click();
+      await expect.poll(() => sorterSlideIds(page)).toEqual(initialIds);
+
+      await page.getByTestId('redo').click();
+      await expect.poll(() => sorterSlideIds(page)).toEqual(reorderedIds);
     } finally {
       await closeEditor(editor);
     }
