@@ -35,6 +35,29 @@ Missing, ambiguous, and invalid targets produce errors with stable codes. Add
 new objects with `add_element` and a `data-ppt-el` attribute when you need a
 predictable handle.
 
+## Images, tables, and charts
+
+- `add_image` inserts an `<img>` object. `source` may be a supported image data
+  URL, an absolute `http:`/`https:` URL, or a local path. Local paths resolve
+  against the server working directory and are read and embedded as data URLs;
+  remote URLs are validated but never fetched. Local files must be PNG, JPEG,
+  GIF, WebP, AVIF, or SVG and at most 8 MB. The default box is 480x270
+  (16:9); an explicit `width` scales the height from that ratio.
+- `add_table` inserts a real `<table>` with a header row. `rows` includes the
+  header, and the core limits are 50 rows and 20 columns. The default box starts
+  at (100, 100) with a width of 960.
+- `update_chart` edits an existing chart figure: a `<figure>` carrying
+  `data-ppt-chart`. `chart` is a JSON string or object with
+  `type` (`bar`, `line`, or `pie`), `labels`, and `series` (`{ name, values }`
+  entries). Optional fields are `title`, `colors`, `legend`, and `valueLabels`.
+  Labels and each series' values must have the same length, and pie charts need
+  one non-negative series with a positive total. The tool stores normalized JSON
+  and regenerates the SVG at the figure's persisted size, so do not edit the
+  SVG by hand.
+- `add_image` and `add_table` accept the same optional `target` insertion
+  anchor as `add_element`: the anchor must be a direct child of the slide, and
+  the new object is inserted after it; without a target the object is appended.
+
 ## Styling
 
 - Inline styles keep authoring local and editable. Use `set_style` for individual

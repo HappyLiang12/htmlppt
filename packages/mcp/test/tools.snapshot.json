@@ -76,6 +76,89 @@
     }
   },
   {
+    "name": "add_image",
+    "description": "Insert one image as a top-level object. Accepts a data URL, an absolute http(s) URL (never fetched), or a local path embedded as a validated data URL. Local files must be a supported type and at most 8 MB. Optionally inserts after a direct-child target.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A supported image data URL, an absolute http(s) URL (validated, never fetched), or a local image path resolved against the server working directory. Local files are embedded as data URLs."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Optional width in pixels. Height follows the 16:9 default ratio. Defaults to 480."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "source"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "add_slide",
     "description": "Add one slide after the last slide or after a given slide id, and return the new slide id.",
     "inputSchema": {
@@ -108,6 +191,88 @@
       },
       "required": [
         "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "add_table",
+    "description": "Insert one table object with a header row as a top-level object. Rows and columns are positive integers within the core limits (50 rows, 20 columns). Optionally inserts after a direct-child target.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "rows": {
+          "type": "integer",
+          "description": "Row count including the header row; 1-50."
+        },
+        "columns": {
+          "type": "integer",
+          "description": "Column count; 1-20."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "rows",
+        "columns"
       ],
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
@@ -859,6 +1024,92 @@
         "path",
         "slideId",
         "transition"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "update_chart",
+    "description": "Replace the data of an existing chart figure (figure[data-ppt-chart]), normalize the JSON, and regenerate its SVG at the persisted size.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        },
+        "chart": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          ],
+          "description": "Chart JSON string or object: { type: \"bar\"|\"line\"|\"pie\", title?, labels: string[], series: [{ name, values: number[] }], colors?, legend?, valueLabels? }."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target",
+        "chart"
       ],
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
