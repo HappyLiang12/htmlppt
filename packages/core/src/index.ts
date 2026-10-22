@@ -44,3 +44,15 @@ export type {
   SlideBackground,
   Transition
 } from './mutations.js';
+export {
+  alignElements,
+  bringForward,
+  bringToFront,
+  distributeElements,
+  groupElements,
+  sendBackward,
+  sendToBack,
+  setHidden,
+  setLocked,
+  ungroupElement
+} from './objects.js';
