@@ -263,7 +263,7 @@ test(
 );
 
 test(
-  'editor reports an external writer and reloads its content',
+  'editor applies an external writer without reloading or saving',
   { tag: '@feature:skeleton' },
   async ({ page }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
@@ -295,26 +295,32 @@ test(
       const frame = page.frameLocator('iframe[title="投影片預覽"]');
       await expect(frame.locator('h1')).toContainText('Original heading');
 
+      const puts: string[] = [];
+      page.on('request', (request) => {
+        if (
+          request.method() === 'PUT' &&
+          new URL(request.url()).pathname === '/api/deck'
+        ) {
+          puts.push(request.url());
+        }
+      });
+
       await writeFile(join(directory, 'contested.html'), external, 'utf8');
 
-      const saveResponse = page.waitForResponse(
-        (response) =>
-          response.request().method() === 'PUT' &&
-          new URL(response.url()).pathname === '/api/deck'
-      );
-      await frame.locator('h1').dblclick();
-      await frame.locator('h1').fill('Editor tries to save');
-      await frame.locator('h1').press('Escape');
-      expect((await saveResponse).status()).toBe(409);
-      await expect(page.getByTestId('save-status')).toHaveText('儲存失敗');
+      // A clean editor adopts the external revision live; no local save is
+      // issued for the incoming content.
+      await expect(frame.locator('h1')).toContainText('External writer wins', {
+        timeout: 2000
+      });
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      expect(puts).toEqual([]);
 
       const onDisk = await readFile(join(directory, 'contested.html'), 'utf8');
       expect(onDisk).toContain('External writer wins');
-      expect(onDisk).not.toContain('Editor tries to save');
 
       await page.reload();
       await expect(frame.locator('h1')).toContainText('External writer wins');
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
     } finally {
       await host?.stop();
       await rm(directory, { recursive: true, force: true });
@@ -520,7 +526,7 @@ test(
 );
 
 test(
-  'queues burst commits so both edits reach the file',
+  'coalesces burst commits into one save that carries both edits',
   { tag: '@feature:skeleton' },
   async ({ page }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-e2e-'));
@@ -545,8 +551,8 @@ test(
       });
 
       // Dispatch the same events the app's own handlers listen for: two
-      // complete edit-and-blur cycles in one task, before the first save can
-      // resolve.
+      // complete edit-and-blur cycles in one task. The 800 ms debounce folds
+      // them into one save carrying the latest master.
       await frame.locator('body').evaluate((body) => {
         const scope = body as unknown as {
           querySelector(selector: string): {
@@ -580,12 +586,12 @@ test(
         edit('.kicker', 'Burst second edit');
       });
 
-      await expect.poll(() => putStatuses.length).toBe(2);
+      await expect.poll(() => putStatuses.length).toBe(1);
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
-      // The second status may arrive after the first saved label; require the
-      // captured PUT count to stay unchanged for 500 ms before pinning it.
-      await waitForStablePutCount(putStatuses, 2);
-      expect(putStatuses).toEqual([200, 200]);
+      // Hold the count stable to prove the debounce did not issue a second
+      // write after the first save.
+      await waitForStablePutCount(putStatuses, 1);
+      expect(putStatuses).toEqual([200]);
 
       const saved = await readFile(join(directory, 'burst.html'), 'utf8');
       expect(saved).toContain('Burst first edit');
@@ -694,7 +700,7 @@ test(
       await page.waitForTimeout(500);
 
       expect(puts).toEqual([]);
-      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
       const saved = await readFile(join(directory, 'authored.html'), 'utf8');
       expect(saved).toMatch(/<div id="authored"[^>]*contenteditable="true"/);
       expect(saved).toMatch(/<div id="locked"[^>]*contenteditable="false"/);

@@ -109,7 +109,7 @@ git commit -m "feat(editor): add geometry and snapping core"
 **Interfaces:**
 - `SelectionTarget { slideIndex: number; path: number[]; elementId: string | null }`.
 - `topLevelObjects(slide: Element): Element[]` — direct children excluding notes/script/style/template/link/meta.
-- `selectionFromEvent(eventTarget, slide): SelectionTarget | null` — nearest top-level ancestor; Alt-click returns the deepest element for drill mode (drill state kept separately).
+- `selectionFromEvent(eventTarget, slide): SelectionTarget | null` — `slide` is the iframe-rendered slide (same realm as the event target); nearest top-level ancestor; Alt-click returns the deepest element for drill mode (drill state kept separately). `path` is always raw child indices from the slide, not filtered-object indices.
 - `History<T> { push(entry: T, options?): void; undo(): T | null; redo(): T | null; canUndo; canRedo; clear() }` — capacity 100; `push` coalesces when `coalesceKey` matches and the previous push is within 500 ms.
 - `useDeckController(): { state, actions }` where state includes `master`, `slides`, `activeIndex`, `selection`, `scale`, `status`, `dirty`, `conflict`, and actions include `load`, `showSlide`, `select`, `clearSelection`, `applySlideMutation`, `commit`, `undo`, `redo`, `reload`, `overwrite`.
 - History entries are serialized deck strings (whole master). Undo/redo parses into a new master and re-renders the active slide.
@@ -120,6 +120,7 @@ git commit -m "feat(editor): add geometry and snapping core"
 - `selectionFromEvent` on a nested `<span>` returns its top-level ancestor path/id.
 - history capacity, undo/redo ordering, clear-on-new-branch after undo+push, coalescing within 500 ms for the same key and not across keys.
 - controller load normalizes via core and sets the first slide; `showSlide` clamps.
+- Exception (M1 contract): when the loaded deck already contains authored editor-only attributes (`data-ppt-editing`, `data-ppt-frame-slide`), load skips normalization so the host still rejects the invalid deck with 400; normalization must not launder it.
 
 - [ ] **Step 2: RED/GREEN**
 
@@ -157,10 +158,10 @@ git commit -m "feat(editor): add selection controller and history"
 - [ ] **Step 2: Write the E2E RED**
 
 `e2e/editor.spec.ts` (tag `@feature:editor-core`):
-- Open the template deck; click the `h1`; the overlay shows 8 handles and a selection outline.
-- Drag the `h1` by (100, 50); the inline style has absolute left/top; the file contains the new position after autosave.
+- Open the template deck; click inside the `h1`; the nearest top-level object is selected and the overlay shows 8 handles and a selection outline.
+- Drag the selected top-level object by (100, 50); the inline style has absolute left/top; the file contains the new position after autosave.
 - Resize from the east handle; width changes, height does not.
-- ArrowRight (not editing text) nudges 1 px; Shift+ArrowRight nudges 10 px.
+- On a fixture deck whose slide has a movable top-level object, ArrowRight (not editing text) nudges 1 px; Shift+ArrowRight nudges 10 px. Nested selections are read-only: they get no handles and resize/rotate/nudge do nothing.
 - Reload preserves the transform.
 - With no object selected, arrow keys change slides (existing behavior).
 
