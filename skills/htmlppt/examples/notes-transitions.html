@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes and transitions deck</title>
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; background: #0b0d12; }
+  .slide {
+    width: 1600px;
+    height: 900px;
+    position: relative;
+    overflow: hidden;
+    background: #f7f5ef;
+    color: #17181c;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+  @media screen {
+    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }
+  }
+  @media print {
+    [data-ppt-deck] > [data-slide-id] { break-after: page; }
+  }
+  .kicker { margin: 0 0 18px; font-size: 22px; letter-spacing: .18em; text-transform: uppercase; color: #9a6b1f; }
+  .title { margin: 0; font-size: 72px; line-height: 1.1; }
+  .body { margin: 28px 0 0; font-size: 32px; line-height: 1.5; color: #4a4f59; }
+  .lab { display: inline-block; margin-top: 32px; padding: 12px 20px; border: 2px solid #9a6b1f; color: #9a6b1f; font-size: 24px; letter-spacing: .08em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<main data-ppt-deck>
+  <section class="slide" data-slide-id="s1" data-width="1600" data-height="900" data-ppt-transition="fade">
+    <div data-ppt-el="e1" style="position: absolute; left: 140px; top: 180px; width: 1200px;">
+      <p class="kicker" data-ppt-el="e1-kicker">Speaker support</p>
+      <h1 class="title" data-ppt-el="e1-title">Notes and transitions travel with the deck</h1>
+      <p class="body" data-ppt-el="e1-body">Notes stay hidden during presentation. Transitions are limited to none, fade, and slide.</p>
+      <span class="lab" data-ppt-el="e2">fade</span>
+    </div>
+    <aside data-ppt-notes hidden>This slide uses the fade transition. Read the note before advancing with the arrow keys.</aside>
+  </section>
+
+  <section class="slide" data-slide-id="s2" data-width="1600" data-height="900" data-ppt-transition="slide">
+    <h2 data-ppt-el="e3" style="position: absolute; left: 140px; top: 160px; margin: 0; font-size: 64px;">A slide transition</h2>
+    <p data-ppt-el="e4" style="position: absolute; left: 140px; top: 300px; width: 1180px; margin: 0; font-size: 32px; line-height: 1.5; color: #4a4f59;">Use <code>set_transition</code> or edit <code>data-ppt-transition</code>. An unknown value fails validation.</p>
+    <aside data-ppt-notes hidden>Demo the slide transition here. The note is stored in a direct-child aside with the hidden attribute.</aside>
+  </section>
+
+  <section class="slide" data-slide-id="s3" data-width="1600" data-height="900" data-ppt-transition="none">
+    <h2 data-ppt-el="e5" style="position: absolute; left: 140px; top: 160px; margin: 0; font-size: 64px;">No transition</h2>
+    <p data-ppt-el="e6" style="position: absolute; left: 140px; top: 300px; width: 1180px; margin: 0; font-size: 32px; line-height: 1.5; color: #4a4f59;">Use the Home and End keys to jump to the first and last slide. The URL hash tracks the position.</p>
+    <aside data-ppt-notes hidden>Close with a reminder: notes and transitions are ordinary attributes, so a round trip never loses them.</aside>
+  </section>
+</main>
+<script data-ppt-runtime="1">
+(() => {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('[data-slide-id]'));
+  if (!slides.length) return;
+  var index = 0;
+  var runtimeStyle = 'data-ppt-runtime-style';
+  var originalDisplay = slides.map(function (slide) { return slide.style.display; });
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
+    deck.setAttribute('data-ppt-ready', '1');
+  });
+
+  function isEditing(target) {
+    var element = target;
+    while (element) {
+      var tag = element.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      if (element === document.body) return false;
+      element = element.parentElement;
+    }
+    return false;
+  }
+
+  function show(next) {
+    index = Math.max(0, Math.min(slides.length - 1, next));
+    slides.forEach(function (slide, i) {
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
+    });
+    history.replaceState(null, '', '#/' + (index + 1));
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
+    if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
+      event.preventDefault();
+      show(index + 1);
+    } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+      event.preventDefault();
+      show(index - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      show(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      show(slides.length - 1);
+    }
+  });
+
+  window.addEventListener('hashchange', function () {
+    var match = /#\/(\d+)/.exec(location.hash);
+    if (match) show(Number(match[1]) - 1);
+  });
+
+  if (!document.querySelector('[' + runtimeStyle + ']')) {
+    var style = document.createElement('style');
+    style.setAttribute(runtimeStyle, '1');
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
+    document.head.appendChild(style);
+  }
+
+  var printState = null;
+  window.addEventListener('beforeprint', function () {
+    if (printState) return;
+    printState = slides.map(function (slide) { return slide.style.display; });
+    slides.forEach(function (slide, i) { slide.style.display = originalDisplay[i]; });
+  });
+  window.addEventListener('afterprint', function () {
+    printState = null;
+    show(index);
+  });
+
+  var initial = /#\/(\d+)/.exec(location.hash);
+  show(initial ? Number(initial[1]) - 1 : 0);
+})();
+</script>
+</body>
+</html>

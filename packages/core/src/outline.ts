@@ -1,4 +1,11 @@
 import { detectSlides, type SlideInfo } from './detect.js';
+import { findSlide } from './slides.js';
+import { resolveTarget, type ElementTarget } from './target.js';
+
+export interface ElementReadModel {
+  html: string;
+  style: string | null;
+}
 
 export interface OutlineElement {
   id: string | null;
@@ -112,6 +119,19 @@ export function getOutline(doc: Document): DeckOutline {
       notes: notesOf(slide.element),
       elements: elementsOf(slide)
     }))
+  };
+}
+
+export function getElement(
+  doc: Document,
+  slideId: string,
+  target: ElementTarget
+): ElementReadModel {
+  const slide = findSlide(doc, slideId);
+  const element = resolveTarget(slide.element, target);
+  return {
+    html: element.outerHTML,
+    style: element.getAttribute('style')
   };
 }
 

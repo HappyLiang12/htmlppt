@@ -6,17 +6,18 @@
   "engines": { "node": ">=20" },
   "overrides": { "vite": "^6.0.0" },
   "scripts": {
-    "build": "npm run build -w @htmlppt/runtime && npm run build -w @htmlppt/core && npm run build -w @htmlppt/host && npm run build -w @htmlppt/cli && npm run build -w @htmlppt/editor",
+    "build": "npm run build -w @htmlppt/runtime && npm run build -w @htmlppt/core && npm run build -w @htmlppt/host && npm run build -w @htmlppt/mcp && npm run build -w @htmlppt/cli && npm run build -w @htmlppt/editor && npm run build -w htmlppt",
     "lint": "eslint .",
     "lint:deps": "depcruise packages --config dependency-cruiser.cjs",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json --noEmit",
     "test:unit": "npm run test -w @htmlppt/core && npm run test -w @htmlppt/editor",
-    "test:integration": "npm run build && npm run test -w @htmlppt/host && npm run test -w @htmlppt/cli",
+    "test:integration": "npm run build && npm run test -w @htmlppt/host && npm run test -w @htmlppt/mcp && npm run test -w @htmlppt/cli",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
     "test:matrix": "node scripts/check-feature-coverage.mjs",
     "verify:fast": "npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:matrix",
-    "verify": "npm run verify:fast && npm run test:e2e"
+    "verify": "npm run verify:fast && npm run test:e2e && npm run test:package"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",

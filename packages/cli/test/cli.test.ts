@@ -1,8 +1,27 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams
+} from 'node:child_process';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
-import { makeTempDir } from '@htmlppt/test-utils';
-import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { sessionKey } from '@htmlppt/host';
+import {
+  copyFixture,
+  fixturesDir,
+  makeTempDir
+} from '@htmlppt/test-utils';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { formatHostStartError, runCli } from '../src/index.js';
 
 function capture() {
@@ -83,6 +102,36 @@ describe('htmlppt cli', () => {
     expect(html).toContain('data-slide-id="s1"');
   });
 
+  it('creates and force-overwrites decks without temporary files', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    const output = capture();
+
+    expect(await runCli(['new', 'deck.html'], { cwd, ...output.io })).toBe(0);
+    expect(
+      await runCli(['new', 'deck.html', '--force'], { cwd, ...output.io })
+    ).toBe(0);
+
+    expect(await readdir(cwd)).toEqual(['deck.html']);
+    expect((await readFile(join(cwd, 'deck.html'), 'utf8'))).toContain(
+      'data-slide-id="s1"'
+    );
+  });
+
+  it('leaves no partial destination when new fails', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await mkdir(join(cwd, 'taken.html'));
+    const output = capture();
+
+    const code = await runCli(['new', 'taken.html'], { cwd, ...output.io });
+
+    expect(code).toBe(1);
+    expect(output.stderr.join('\n')).toContain(
+      'Refusing to overwrite taken.html.'
+    );
+    expect((await stat(join(cwd, 'taken.html'))).isDirectory()).toBe(true);
+    expect(await readdir(cwd)).toEqual(['taken.html']);
+  });
+
   it('validates a generated deck as JSON', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
     await runCli(['new', 'deck.html'], { cwd, ...capture().io });
@@ -134,6 +183,39 @@ describe('htmlppt cli', () => {
     const exported = await readFile(join(cwd, 'out.html'), 'utf8');
     expect(exported).toContain('<!-- Edited with htmlppt. Format: htmldeck/v1. -->');
     expect(exported).not.toContain('contenteditable');
+  });
+
+  it('exports without leaving temporary files', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const output = capture();
+
+    const code = await runCli(
+      ['export', 'deck.html', '--format', 'html'],
+      { cwd, ...output.io }
+    );
+
+    expect(code).toBe(0);
+    expect((await readdir(cwd)).sort()).toEqual([
+      'deck.export.html',
+      'deck.html'
+    ]);
+  });
+
+  it('leaves no partial export when the destination cannot be replaced', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    await mkdir(join(cwd, 'out.html'));
+    const output = capture();
+
+    const code = await runCli(
+      ['export', 'deck.html', '--format', 'html', '--out', 'out.html'],
+      { cwd, ...output.io }
+    );
+
+    expect(code).toBe(1);
+    expect((await stat(join(cwd, 'out.html'))).isDirectory()).toBe(true);
+    expect((await readdir(cwd)).sort()).toEqual(['deck.html', 'out.html']);
   });
 
   it('rejects unsupported export formats with a clear error', async () => {
@@ -393,6 +475,889 @@ describe('htmlppt cli', () => {
       } else {
         process.env.HTMLPPT_EDITOR_DIR = previous;
       }
+    }
+  });
+});
+
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const cliBin = join(repoRoot, 'packages', 'cli', 'dist', 'bin.js');
+const tsupCli = createRequire(import.meta.url).resolve(
+  'tsup/dist/cli-default.js'
+);
+
+interface BuildStep {
+  workspace: string;
+  args: string[];
+}
+
+const BUILD_STEPS: BuildStep[] = [
+  {
+    workspace: 'runtime',
+    args: ['src/index.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  {
+    workspace: 'core',
+    args: ['src/index.ts', 'src/node.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  {
+    workspace: 'host',
+    args: ['src/index.ts', '--format', 'esm', '--dts', '--clean']
+  },
+  // The mcp package's tsup.config.ts supplies its entries and raw-resource plugin.
+  { workspace: 'mcp', args: [] },
+  { workspace: 'cli', args: [] }
+];
+
+function runBuild(step: BuildStep): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [tsupCli, ...step.args], {
+      cwd: join(repoRoot, 'packages', step.workspace),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let output = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `tsup ${step.workspace} build failed with exit code ${code}:\n${output}`
+        )
+      );
+    });
+  });
+}
+
+async function buildWorkspace(): Promise<void> {
+  for (const step of BUILD_STEPS) {
+    await runBuild(step);
+  }
+}
+
+interface CliWorkspace {
+  cwd: string;
+  home: string;
+  editorDir: string;
+}
+
+async function createCliWorkspace(): Promise<CliWorkspace> {
+  const cwd = await makeTempDir('htmlppt-cli-process-');
+  const home = join(cwd, 'home');
+  await mkdir(home, { recursive: true });
+  const editorDir = join(cwd, 'editor');
+  await mkdir(editorDir, { recursive: true });
+  await writeFile(
+    join(editorDir, 'index.html'),
+    '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+    'utf8'
+  );
+  return { cwd, home, editorDir };
+}
+
+function cliEnvironment(workspace: CliWorkspace): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HTMLPPT_HOME: workspace.home,
+    HTMLPPT_EDITOR_DIR: workspace.editorDir
+  };
+}
+
+function sessionFilePath(workspace: CliWorkspace, deckPath: string): string {
+  return join(
+    workspace.home,
+    'sessions',
+    `${sessionKey(deckPath)}.json`
+  );
+}
+
+async function sessionCount(workspace: CliWorkspace): Promise<number> {
+  try {
+    const names = await readdir(join(workspace.home, 'sessions'));
+    return names.filter((name) => name.endsWith('.json')).length;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 0;
+    }
+    throw error;
+  }
+}
+
+interface CliProcessOptions {
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+class CliProcess {
+  readonly child: ChildProcessWithoutNullStreams;
+  private stdoutBuffer = '';
+  private stderrBuffer = '';
+  private exitCodeValue: number | null = null;
+  private readonly waiters = new Set<() => void>();
+
+  constructor(args: string[], options: CliProcessOptions) {
+    this.child = spawn(process.execPath, [cliBin, ...args], {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    this.child.stdout.setEncoding('utf8');
+    this.child.stderr.setEncoding('utf8');
+    this.child.stdout.on('data', (chunk: string) => {
+      this.stdoutBuffer += chunk;
+      this.notify();
+    });
+    this.child.stderr.on('data', (chunk: string) => {
+      this.stderrBuffer += chunk;
+      this.notify();
+    });
+    this.child.once('close', (code) => {
+      this.exitCodeValue = code;
+      this.notify();
+    });
+  }
+
+  get stdout(): string {
+    return this.stdoutBuffer;
+  }
+
+  get stderr(): string {
+    return this.stderrBuffer;
+  }
+
+  waitForOutput(
+    pattern: RegExp,
+    timeoutMs = 15_000
+  ): Promise<RegExpExecArray> {
+    return this.waitUntil(
+      () => pattern.exec(this.stdout) ?? undefined,
+      timeoutMs,
+      `stdout to match ${pattern}`
+    );
+  }
+
+  waitForJsonRpc(
+    id: number,
+    timeoutMs = 15_000
+  ): Promise<Record<string, unknown>> {
+    return this.waitUntil(
+      () => {
+        for (const line of this.stdout.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('{')) {
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            if (parsed.id === id) {
+              return parsed;
+            }
+          } catch {
+            // The line is still being written.
+          }
+        }
+        return undefined;
+      },
+      timeoutMs,
+      `a JSON-RPC response with id ${id}`
+    );
+  }
+
+  waitForExit(timeoutMs = 15_000): Promise<number | null> {
+    return this.waitUntil(
+      () => (this.exitCodeValue === null ? undefined : this.exitCodeValue),
+      timeoutMs,
+      'the process to exit'
+    );
+  }
+
+  kill(): void {
+    if (this.exitCodeValue === null) {
+      this.child.kill('SIGKILL');
+    }
+  }
+
+  private notify(): void {
+    for (const waiter of [...this.waiters]) {
+      waiter();
+    }
+  }
+
+  private waitUntil<T>(
+    check: () => T | null | undefined | false,
+    timeoutMs: number,
+    description: string
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(run);
+        reject(
+          new Error(
+            `Timed out after ${timeoutMs} ms waiting for ${description}.\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`
+          )
+        );
+      }, timeoutMs);
+      const run = (): void => {
+        const value = check();
+        if (value !== undefined && value !== null && value !== false) {
+          clearTimeout(timer);
+          this.waiters.delete(run);
+          resolve(value);
+        }
+      };
+      this.waiters.add(run);
+      run();
+    });
+  }
+}
+
+async function runCliProcess(
+  args: string[],
+  options: CliProcessOptions,
+  timeoutMs = 15_000
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const cli = new CliProcess(args, options);
+  cli.child.stdin.end();
+  try {
+    const code = await cli.waitForExit(timeoutMs);
+    return { code, stdout: cli.stdout, stderr: cli.stderr };
+  } finally {
+    cli.kill();
+  }
+}
+
+async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The probe server did not expose a TCP port.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return address.port;
+}
+
+function spawnKeepalive(): Promise<ChildProcess> {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore'
+  });
+  return new Promise((resolve, reject) => {
+    child.once('spawn', () => resolve(child));
+    child.once('error', reject);
+  });
+}
+
+async function exitedPid(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('The short-lived process did not expose a pid.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', () => resolve());
+  });
+  return pid;
+}
+
+interface SilentHost {
+  port: number;
+  close: () => Promise<void>;
+}
+
+/** Accepts TCP connections but never answers, so health checks time out. */
+async function silentHost(): Promise<SilentHost> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The silent server did not expose a TCP port.');
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+}
+
+interface StaleSessionOptions {
+  pid: number;
+  port: number;
+}
+
+async function writeStaleSession(
+  workspace: CliWorkspace,
+  deckPath: string,
+  options: StaleSessionOptions
+): Promise<string> {
+  await mkdir(join(workspace.home, 'sessions'), { recursive: true });
+  const raw = `${JSON.stringify(
+    {
+      path: deckPath,
+      port: options.port,
+      token: 'stale-token',
+      pid: options.pid,
+      startedAt: new Date().toISOString(),
+      revision: 'a'.repeat(64)
+    },
+    null,
+    2
+  )}\n`;
+  await writeFile(sessionFilePath(workspace, deckPath), raw, 'utf8');
+  return raw;
+}
+
+describe('htmlppt cli as a real process', () => {
+  beforeAll(async () => {
+    await buildWorkspace();
+  }, 180_000);
+
+  it('writes a session entry and reuses a live editor for a second open', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const processes: CliProcess[] = [];
+
+    try {
+      const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      processes.push(first);
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(firstMatch[1]);
+      expect(url.protocol).toBe('http:');
+      expect(url.hostname).toBe('127.0.0.1');
+      const token = url.searchParams.get('token');
+      expect(token).toBeTruthy();
+      const pid = first.child.pid;
+      if (pid === undefined) {
+        throw new Error('The CLI process did not expose a pid.');
+      }
+
+      const entry = JSON.parse(
+        await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ) as Record<string, unknown>;
+      expect(entry).toMatchObject({
+        path: deckPath,
+        port: Number(url.port),
+        token,
+        pid
+      });
+      expect(entry.revision).toMatch(/^[a-f0-9]{64}$/);
+      expect(new Date(String(entry.startedAt)).toISOString()).toBe(
+        entry.startedAt
+      );
+
+      const second = new CliProcess(
+        ['open', 'basic.deck.html', '--no-browser'],
+        { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+      );
+      processes.push(second);
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      expect(secondMatch[1]).toBe(url.href);
+      expect(await second.waitForExit(10_000)).toBe(0);
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(
+        JSON.parse(
+          await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+        )
+      ).toEqual(entry);
+    } finally {
+      for (const cli of processes) {
+        cli.kill();
+      }
+    }
+  });
+
+  it('stops a host, removes the entry, and fails a second stop', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let stopProcess: CliProcess | undefined;
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const entry = JSON.parse(
+        await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ) as { pid: number };
+
+      stopProcess = new CliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      stopProcess.child.stdin.end();
+      const [, stopCode] = await Promise.all([
+        open.waitForExit(5_000),
+        stopProcess.waitForExit(15_000)
+      ]);
+
+      expect(stopCode).toBe(0);
+      expect(stopProcess.stdout).toContain('Stopped editor');
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => process.kill(entry.pid, 0)).toThrow();
+
+      const second = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(second.code).toBe(1);
+      expect(second.stderr).toContain('No live editor session');
+      expect(second.stderr).toContain('htmlppt open');
+    } finally {
+      open.kill();
+      stopProcess?.kill();
+    }
+  });
+
+  it('stops a host after its deck file is deleted', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      await rm(deckPath);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      await open.waitForExit(10_000);
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      open.kill();
+    }
+  });
+
+  it('stops every live editor with --all', async () => {
+    const workspace = await createCliWorkspace();
+    const directories = ['one', 'two'];
+    const opens: CliProcess[] = [];
+    const deckPaths: string[] = [];
+    for (const name of directories) {
+      const directory = join(workspace.cwd, name);
+      await mkdir(directory, { recursive: true });
+      const deckPath = await copyFixture('basic.deck.html', directory);
+      deckPaths.push(deckPath);
+      opens.push(
+        new CliProcess(
+          ['open', join(name, 'basic.deck.html'), '--no-browser'],
+          { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+        )
+      );
+    }
+
+    try {
+      for (const open of opens) {
+        await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      }
+      expect(await sessionCount(workspace)).toBe(2);
+
+      const stop = new CliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      stop.child.stdin.end();
+      const [stopCode] = await Promise.all([
+        stop.waitForExit(15_000),
+        ...opens.map((open) => open.waitForExit(5_000))
+      ]);
+
+      expect(stopCode).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(await sessionCount(workspace)).toBe(0);
+      for (const deckPath of deckPaths) {
+        await expect(
+          readFile(sessionFilePath(workspace, deckPath), 'utf8')
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    } finally {
+      for (const open of opens) {
+        open.kill();
+      }
+    }
+  });
+
+  it('requires a deck file or --all for stop', async () => {
+    const workspace = await createCliWorkspace();
+
+    const result = await runCliProcess(['stop'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Specify a deck file to stop or pass --all.');
+  });
+
+  it('rejects stop with both a deck file and --all', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+
+    const result = await runCliProcess(
+      ['stop', 'basic.deck.html', '--all'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      'Pass either a deck file or --all, not both.'
+    );
+  });
+
+  it('starts a new host after removing a stale dead entry', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port: await closedPort()
+    });
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+      expect(url.hostname).toBe('127.0.0.1');
+      const pid = open.child.pid;
+      if (pid === undefined) {
+        throw new Error('The CLI process did not expose a pid.');
+      }
+      const entry = JSON.parse(
+        await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ) as { pid: number; port: number; token: string };
+      expect(entry.pid).toBe(pid);
+      expect(entry.port).toBe(Number(url.port));
+      expect(entry.token).toBe(url.searchParams.get('token'));
+      expect(await sessionCount(workspace)).toBe(1);
+    } finally {
+      open.kill();
+    }
+  });
+
+  it('refuses to orphan a busy host that fails the health check', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+    const silent = await silentHost();
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid,
+        port: silent.port
+      });
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stderr).toContain('htmlppt stop');
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      open?.kill();
+      await silent.close();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('treats a definitively stale --all entry as success', async () => {
+    const workspace = await createCliWorkspace();
+    const liveDir = join(workspace.cwd, 'live');
+    const staleDir = join(workspace.cwd, 'stale');
+    await mkdir(liveDir, { recursive: true });
+    await mkdir(staleDir, { recursive: true });
+    const liveDeck = await copyFixture('basic.deck.html', liveDir);
+    const staleDeck = await copyFixture('basic.deck.html', staleDir);
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+    const open = new CliProcess(['open', 'live/basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let stop: CliProcess | undefined;
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      await writeStaleSession(workspace, staleDeck, {
+        pid,
+        port: await closedPort()
+      });
+
+      stop = new CliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      stop.child.stdin.end();
+      const [stopCode] = await Promise.all([
+        stop.waitForExit(15_000),
+        open.waitForExit(5_000)
+      ]);
+
+      expect(stopCode).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stdout).toContain('Removed stale editor session');
+      await expect(
+        readFile(sessionFilePath(workspace, liveDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(
+        readFile(sessionFilePath(workspace, staleDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      open.kill();
+      stop?.kill();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('treats a stale-only --all as success', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid,
+        port: await closedPort()
+      });
+
+      const result = await runCliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('Removed stale editor session');
+      expect(await sessionCount(workspace)).toBe(0);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('cleans a dead-pid registry entry with --all and exits 0', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port: await closedPort()
+    });
+
+    const result = await runCliProcess(['stop', '--all'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Removed 1 stale editor session(s).');
+    expect(result.stderr).not.toContain('No live editor sessions.');
+    await expect(
+      readFile(sessionFilePath(workspace, deckPath), 'utf8')
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await sessionCount(workspace)).toBe(0);
+  });
+
+  it('never kills a registered pid when the host fails the health check', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const unrelated = await spawnKeepalive();
+    const pid = unrelated.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+
+    try {
+      const sessionsDirectory = join(workspace.home, 'sessions');
+      await mkdir(sessionsDirectory, { recursive: true });
+      await writeFile(
+        sessionFilePath(workspace, deckPath),
+        `${JSON.stringify(
+          {
+            path: deckPath,
+            port: await closedPort(),
+            token: 'stale-token',
+            pid,
+            startedAt: new Date().toISOString(),
+            revision: 'a'.repeat(64)
+          },
+          null,
+          2
+        )}\n`,
+        'utf8'
+      );
+
+      const result = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('No live editor session');
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      if (unrelated.exitCode === null && unrelated.signalCode === null) {
+        unrelated.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('prints a JSON outline that matches the fixture golden', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+
+    const result = await runCliProcess(
+      ['outline', 'basic.deck.html', '--json'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    expect(result.code).toBe(0);
+    const expected = JSON.parse(
+      await readFile(join(fixturesDir, 'basic.outline.expected.json'), 'utf8')
+    );
+    expect(JSON.parse(result.stdout.trim())).toEqual(expected);
+  });
+
+  it('prints a human-readable outline', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+
+    const result = await runCliProcess(['outline', 'basic.deck.html'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Basic deck (1600x900, 2 slides)');
+    expect(result.stdout).toContain('s1: 2 elements');
+    expect(result.stdout).toContain('e1 <h1> Basic deck');
+    expect(result.stdout).toContain('s2: 1 element');
+  });
+
+  it('reports a missing outline deck with an actionable error', async () => {
+    const workspace = await createCliWorkspace();
+
+    const result = await runCliProcess(
+      ['outline', 'missing.deck.html', '--json'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      'Deck file not found: missing.deck.html.'
+    );
+  });
+
+  it('shows mcp help and serves the stdio handshake', async () => {
+    const workspace = await createCliWorkspace();
+
+    const help = await runCliProcess(['mcp', '--help'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain('Usage: htmlppt mcp');
+    expect(help.stdout).toContain('MCP');
+
+    const server = new CliProcess(['mcp'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    try {
+      server.child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'htmlppt-cli-test', version: '0.0.0' }
+          }
+        })}\n`
+      );
+      const response = await server.waitForJsonRpc(1);
+      expect(response.result).toMatchObject({
+        serverInfo: { name: 'htmlppt', version: '0.0.0' }
+      });
+      server.child.stdin.end();
+      expect(await server.waitForExit(10_000)).toBe(0);
+    } finally {
+      server.kill();
     }
   });
 });

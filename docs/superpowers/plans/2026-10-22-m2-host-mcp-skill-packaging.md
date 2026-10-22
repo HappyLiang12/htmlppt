@@ -339,7 +339,7 @@ git commit -m "feat(mcp): add direct and host deck services"
 - `initialize` handshake; `tools/list` includes every tool above; `resources/list` includes the three URIs.
 - `create_deck` in a temp dir → `validate_deck` valid → `add_slide` → `set_text` → `read_slide` reflects it; disk HTML has no editor artifacts.
 - External write then `set_text` → conflict error; file unchanged.
-- `open_editor` with a temp deck starts a host, returns a tokenized 127.0.0.1 URL, and `stop` (or SIGTERM) cleans up.
+- `open_editor` and `export_deck` are registered; their end-to-end behavior is asserted in Task 6, because `open` does not write a session entry until then.
 - Use real files and real processes; no mocks; one worker.
 
 - [ ] **Step 4: RED**
@@ -395,6 +395,7 @@ git commit -m "feat(mcp): attach to live host sessions"
 - Modify: `packages/cli/src/index.ts`
 - Modify: `packages/cli/test/cli.test.ts`
 - Modify: `packages/cli/package.json` (dependency on `@htmlppt/mcp`)
+- Modify: `packages/mcp/test/mcp-stdio.test.ts` (deferred `open_editor` end-to-end case)
 
 **Interfaces:**
 - `htmlppt outline <file> [--json]` — human summary or `JSON.stringify(getOutline(...))`.
@@ -411,6 +412,7 @@ Real CLI processes with a temp `HTMLPPT_HOME` and temp deck:
 - `stop --all` with two hosts stops both.
 - `outline --json` on the basic fixture returns title/slide ids/elements.
 - `mcp --help` and a one-shot stdio handshake (spawn, send initialize, receive serverInfo, close).
+- MCP `open_editor` on a temp deck starts a host through the CLI, returns a tokenized 127.0.0.1 URL, and the process is cleanly stopped (deferred from Task 4 because `open` writes sessions here).
 
 - [ ] **Step 2: RED/GREEN**
 

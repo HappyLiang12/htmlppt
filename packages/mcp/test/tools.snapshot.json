@@ -1,0 +1,915 @@
+[
+  {
+    "name": "add_element",
+    "description": "Insert one raw HTML element as a top-level object in a slide, optionally after a target. Returns the element id when one was assigned.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "html": {
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "html"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "add_slide",
+    "description": "Add one slide after the last slide or after a given slide id, and return the new slide id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "html": {
+          "type": "string"
+        },
+        "afterSlideId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        },
+        "transition": {
+          "type": "string",
+          "enum": [
+            "none",
+            "fade",
+            "slide"
+          ],
+          "description": "Slide transition."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "create_deck",
+    "description": "Create a new deck file. Refuses to overwrite an existing file. Custom HTML is normalized and validated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "title": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "slides": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "html": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "boolean",
+          "description": "Include the presentation runtime. Defaults to true."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "delete_slide",
+    "description": "Delete one slide. The last remaining slide cannot be deleted.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        }
+      },
+      "required": [
+        "path",
+        "slideId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "duplicate_slide",
+    "description": "Duplicate one slide and return the new slide id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        }
+      },
+      "required": [
+        "path",
+        "slideId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "export_deck",
+    "description": "Export a deck to a self-contained HTML file. Additional formats arrive in a later milestone.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "format": {
+          "type": "string",
+          "const": "html",
+          "default": "html"
+        },
+        "outDir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Output directory. Defaults to the deck directory."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "get_deck_contract",
+    "description": "Return the deck contract and authoring guidance for htmlppt documents.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "get_element",
+    "description": "Return one element as outerHTML and its raw inline style attribute. No layout is computed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "get_outline",
+    "description": "Return deck metadata, slide ids, element ids/paths/tags/text summaries, notes, and transitions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "move_slide",
+    "description": "Move one slide to a zero-based index.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "toIndex": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "toIndex"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "open_editor",
+    "description": "Start a detached local editor host for a deck and return its tokenized loopback URL.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "open": {
+          "type": "boolean",
+          "description": "Open a browser. Defaults to false."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "read_slide",
+    "description": "Return one slide as HTML together with its notes, transition, and canvas size.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        }
+      },
+      "required": [
+        "path",
+        "slideId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "remove_element",
+    "description": "Remove one element from a slide.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_element_html",
+    "description": "Replace the inner HTML of one element.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        },
+        "html": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target",
+        "html"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_notes",
+    "description": "Set or clear the speaker notes for one slide.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "notes"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_slide_background",
+    "description": "Replace a slide background with exactly one color, gradient, or image.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "background": {
+          "type": "object",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "gradient": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Exactly one of color, gradient, or image."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "background"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_slide_order",
+    "description": "Reorder all slides. The list must contain every slide id exactly once.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "path",
+        "slideIds"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_style",
+    "description": "Set or remove inline CSS properties on one element. Use null to remove a property.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        },
+        "styles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "CSS property names mapped to values; null removes a property."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target",
+        "styles"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_text",
+    "description": "Replace the text content of one element. The text is escaped, not interpreted as HTML.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "elementId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "elementId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of: elementId (data-ppt-el), selector (matches one element), or path (child indices from the slide)."
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "target",
+        "text"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "set_transition",
+    "description": "Set the transition for one slide.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "transition": {
+          "type": "string",
+          "enum": [
+            "none",
+            "fade",
+            "slide"
+          ],
+          "description": "Slide transition."
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "transition"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "update_slide_html",
+    "description": "Replace the inner HTML of one slide.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        },
+        "slideId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slide id such as \"s1\" or \"body\"."
+        },
+        "html": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "slideId",
+        "html"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "validate_deck",
+    "description": "Validate a deck against the contract and return errors, warnings, and info with locations.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deck HTML path. Relative paths resolve against the server working directory."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  }
+]
