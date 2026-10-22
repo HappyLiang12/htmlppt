@@ -108,13 +108,212 @@ describe('useDeckController', () => {
       path: [0],
       elementId: 'e1'
     });
+    expect(controller.state.selections).toEqual([
+      { slideIndex: 0, path: [0], elementId: 'e1' }
+    ]);
 
     act(() => {
       controller.actions.clearSelection();
       controller.actions.setScale(0.5);
     });
     expect(controller.state.selection).toBeNull();
+    expect(controller.state.selections).toEqual([]);
     expect(controller.state.scale).toBe(0.5);
+  });
+
+  it('toggles Shift multi-select and clears it when the last target leaves', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    expect(controller.state.selections.map((target) => target.path)).toEqual([
+      [0],
+      [1]
+    ]);
+    expect(controller.state.selection?.path).toEqual([0]);
+
+    act(() => {
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [0],
+        elementId: 'e1'
+      });
+    });
+    expect(controller.state.selections.map((target) => target.path)).toEqual([
+      [1]
+    ]);
+    expect(controller.state.selection?.path).toEqual([1]);
+
+    act(() => {
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    expect(controller.state.selections).toEqual([]);
+    expect(controller.state.selection).toBeNull();
+  });
+
+  it('replaces a multi selection when toggling a nested or cross-slide target', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [0, 0],
+        elementId: null
+      });
+    });
+    expect(controller.state.selections).toEqual([
+      { slideIndex: 0, path: [0, 0], elementId: null }
+    ]);
+
+    act(() => {
+      controller.actions.toggleSelect({
+        slideIndex: 1,
+        path: [0],
+        elementId: 'e1'
+      });
+    });
+    expect(controller.state.selections).toEqual([
+      { slideIndex: 1, path: [0], elementId: 'e1' }
+    ]);
+  });
+
+  it('selects every top-level object on the active slide', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.selectAll();
+    });
+
+    expect(controller.state.selections.map((target) => target.path)).toEqual([
+      [0],
+      [1]
+    ]);
+    expect(controller.state.selection?.path).toEqual([0]);
+  });
+
+  it('restores the active slide index with undo and redo after an add', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    expect(controller.state.activeIndex).toBe(0);
+
+    await act(async () => {
+      await expect(
+        controller.actions.commitMaster((master) => {
+          const deck = master.querySelector('[data-ppt-deck]');
+          const first = master.querySelector('section');
+          if (!deck || !first) throw new Error('Missing deck fixture nodes.');
+          const added = first.cloneNode(true) as Element;
+          added.setAttribute('data-slide-id', 's3');
+          deck.appendChild(added);
+        })
+      ).rejects.toThrow();
+    });
+    act(() => {
+      controller.actions.showSlide(1);
+    });
+    expect(controller.state.activeIndex).toBe(1);
+    expect(controller.state.slides).toHaveLength(3);
+
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(controller.state.activeIndex).toBe(0);
+    expect(controller.state.slides).toHaveLength(2);
+
+    await act(async () => {
+      controller.actions.redo();
+    });
+    expect(controller.state.activeIndex).toBe(1);
+    expect(controller.state.slides).toHaveLength(3);
+  });
+
+  it('deletes every selected object as one history entry', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+
+    await act(async () => {
+      await expect(controller.actions.deleteSelection()).rejects.toThrow();
+    });
+    const slide = () => controller.state.slides[0]?.element;
+    expect(slide()?.querySelector('h1')).toBeNull();
+    expect(slide()?.querySelector('p')).toBeNull();
+    expect(controller.state.selections).toEqual([]);
+
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(slide()?.querySelector('h1')?.textContent).toBe('First slide');
+    expect(slide()?.querySelector('p')?.textContent).toBe('Kicker');
+
+    await act(async () => {
+      controller.actions.redo();
+    });
+    expect(slide()?.querySelector('h1')).toBeNull();
+    expect(slide()?.querySelector('p')).toBeNull();
+  });
+
+  it('pastes copied objects with fresh ids and one history entry', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.copySelection();
+    });
+
+    await act(async () => {
+      await expect(controller.actions.pasteObjects()).rejects.toThrow();
+    });
+    const slide = () => controller.state.slides[0]?.element;
+    const headings = slide() ? Array.from(slide()!.querySelectorAll('h1')) : [];
+    expect(headings).toHaveLength(2);
+    expect(headings[1]?.textContent).toBe('First slide');
+    expect(headings[1]?.getAttribute('data-ppt-el')).not.toBe('e1');
+    expect(controller.state.selection?.path).toEqual([2]);
+
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+
+    await act(async () => {
+      controller.actions.redo();
+    });
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(2);
   });
 
   it('applies slide mutations and restores them through undo and redo', async () => {

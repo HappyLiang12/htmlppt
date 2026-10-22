@@ -24,6 +24,8 @@ export type InspectorTab = 'design' | 'text' | 'notes';
 export interface InspectorProps {
   slide: SlideInfo | undefined;
   selection: SelectionTarget | null;
+  /** Number of selected objects; more than one disables geometry fields. */
+  selectionCount?: number;
   geometry: GeometryValues | null;
   onSelectObject: (path: number[]) => void;
   onCommitGeometry: (field: GeometryField, value: number) => boolean;
@@ -125,6 +127,7 @@ function NumberField({
 export function Inspector({
   slide,
   selection,
+  selectionCount = selection ? 1 : 0,
   geometry,
   onSelectObject,
   onCommitGeometry,
@@ -171,7 +174,8 @@ export function Inspector({
   }, [background?.kind, background?.value, slide?.id]);
 
   const objects = slide ? summarizeObjects(slide.element) : [];
-  const readOnly = selection !== null && selection.path.length > 1;
+  const multi = selectionCount > 1;
+  const readOnly = multi || (selection !== null && selection.path.length > 1);
   const selectedTopPath = selection?.path[0];
 
   const selectTab = (next: InspectorTab, focus: boolean) => {
@@ -317,10 +321,16 @@ export function Inspector({
             className={SECTION_CLASS}
           >
             <h3 className={HEADING_CLASS}>位置與大小</h3>
-            {readOnly && (
+            {multi ? (
               <p className="text-[11px] text-zinc-500">
-                巢狀選取為唯讀，請先選取最上層物件。
+                已選取 {selectionCount} 個物件，僅支援移動、複製與刪除。
               </p>
+            ) : (
+              readOnly && (
+                <p className="text-[11px] text-zinc-500">
+                  巢狀選取為唯讀，請先選取最上層物件。
+                </p>
+              )
             )}
             <div className="grid grid-cols-2 gap-2">
               <NumberField

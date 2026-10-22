@@ -11,8 +11,13 @@ import {
   tokenFromLocation,
   type DeckResponse
 } from './api';
-import { History } from './history';
-import type { SelectionTarget } from './selection';
+import { History, type HistoryEntry } from './history';
+import { topLevelObjects, type SelectionTarget } from './selection';
+import {
+  collectObjectHtml,
+  deleteObjectPaths,
+  pasteObjectHtml
+} from './object-ops';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
 import { clampSlideIndex } from './slide-index';
 
@@ -33,7 +38,10 @@ export interface DeckControllerState {
   master: Document | null;
   slides: SlideInfo[];
   activeIndex: number;
+  /** Primary (first) selected target, kept for single-object panels. */
   selection: SelectionTarget | null;
+  /** Every selected target, in selection order (all on the active slide). */
+  selections: SelectionTarget[];
   scale: number;
   status: SaveStatus;
   dirty: boolean;
@@ -54,6 +62,8 @@ export interface DeckControllerActions {
   load(deck?: DeckResponse): Promise<void>;
   showSlide(index: number): void;
   select(target: SelectionTarget | null): void;
+  toggleSelect(target: SelectionTarget): void;
+  selectAll(): void;
   clearSelection(): void;
   setScale(scale: number): void;
   applySlideMutation(
@@ -68,6 +78,11 @@ export interface DeckControllerActions {
    * iframe reconciliation would overwrite master-side inline styles.
    */
   commitMaster(mutate: MasterCommit): Promise<void>;
+  saveNow(): Promise<void>;
+  copySelection(): void;
+  pasteObjects(): Promise<void>;
+  duplicateSelection(): Promise<void>;
+  deleteSelection(): Promise<void>;
   undo(): void;
   redo(): void;
   reload(deck?: DeckResponse): Promise<void>;
@@ -100,6 +115,7 @@ function createInitialState(): DeckControllerState {
     slides: [],
     activeIndex: 0,
     selection: null,
+    selections: [],
     scale: 1,
     status: 'loading',
     dirty: false,
@@ -108,6 +124,14 @@ function createInitialState(): DeckControllerState {
     filePath: '',
     error: ''
   };
+}
+
+function sameTarget(a: SelectionTarget, b: SelectionTarget): boolean {
+  return (
+    a.slideIndex === b.slideIndex &&
+    a.path.length === b.path.length &&
+    a.path.every((index, position) => index === b.path[position])
+  );
 }
 
 function toMessage(cause: unknown): string {
@@ -141,7 +165,8 @@ export function useDeckController(
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const saveGenerationRef = useRef(0);
   const editVersionRef = useRef(0);
-  const historyRef = useRef(new History<string>());
+  const historyRef = useRef(new History<string, number>());
+  const clipboardRef = useRef<string[]>([]);
   const tokenRef = useRef(options.token ?? tokenFromLocation());
 
   const update = useCallback((patch: Partial<DeckControllerState>) => {
@@ -192,7 +217,9 @@ export function useDeckController(
         slidesRef.current = source.slides;
         activeIndexRef.current = source.activeIndex;
         historyRef.current.clear();
-        historyRef.current.push(serializeDeck(master));
+        historyRef.current.push(serializeDeck(master), {
+          meta: source.activeIndex
+        });
 
         update({
           master,
@@ -200,6 +227,7 @@ export function useDeckController(
           activeIndex: source.activeIndex,
           srcDoc: source.srcDoc,
           selection: null,
+          selections: [],
           status: 'ready',
           dirty: false,
           conflict: null,
@@ -220,25 +248,78 @@ export function useDeckController(
       const source = sourceDocFor(master, index);
       slidesRef.current = source.slides;
       activeIndexRef.current = source.activeIndex;
+      // Navigating after an operation (for example showing a freshly added
+      // slide) makes that the active context redo should return to.
+      historyRef.current.updateCurrentMeta(source.activeIndex);
       update({
         slides: source.slides,
         activeIndex: source.activeIndex,
         srcDoc: source.srcDoc,
-        selection: null
+        selection: null,
+        selections: []
       });
+    },
+    [update]
+  );
+
+  const applySelections = useCallback(
+    (targets: SelectionTarget[]) => {
+      const unique: SelectionTarget[] = [];
+      for (const target of targets) {
+        if (!unique.some((candidate) => sameTarget(candidate, target))) {
+          unique.push(target);
+        }
+      }
+      update({ selection: unique[0] ?? null, selections: unique });
     },
     [update]
   );
 
   const select = useCallback(
     (target: SelectionTarget | null) => {
-      update({ selection: target });
+      applySelections(target ? [target] : []);
     },
-    [update]
+    [applySelections]
   );
 
+  const toggleSelect = useCallback(
+    (target: SelectionTarget) => {
+      const current = stateRef.current;
+      const base = current.selections;
+      const sameSlide = base[0]?.slideIndex === target.slideIndex;
+      if (
+        target.path.length !== 1 ||
+        base.length === 0 ||
+        !sameSlide
+      ) {
+        // Nested selections stay single and read-only; a target on another
+        // slide starts a fresh selection rather than mixing slides.
+        applySelections([target]);
+        return;
+      }
+      const existing = base.some((candidate) => sameTarget(candidate, target));
+      applySelections(
+        existing
+          ? base.filter((candidate) => !sameTarget(candidate, target))
+          : [...base, target]
+      );
+    },
+    [applySelections]
+  );
+
+  const selectAll = useCallback(() => {
+    const slide = slidesRef.current[activeIndexRef.current];
+    if (!slide) return;
+    const targets = topLevelObjects(slide.element).map((element) => ({
+      slideIndex: activeIndexRef.current,
+      path: [Array.from(slide.element.children).indexOf(element)],
+      elementId: element.getAttribute('data-ppt-el')?.trim() || null
+    }));
+    applySelections(targets);
+  }, [applySelections]);
+
   const clearSelection = useCallback(() => {
-    update({ selection: null });
+    update({ selection: null, selections: [] });
   }, [update]);
 
   const setScale = useCallback(
@@ -264,7 +345,8 @@ export function useDeckController(
       editVersionRef.current += 1;
       const html = serializeDeck(master);
       historyRef.current.push(html, {
-        coalesceKey: mutationOptions.coalesceKey
+        coalesceKey: mutationOptions.coalesceKey,
+        meta: activeIndexRef.current
       });
 
       const source = sourceDocFor(master, activeIndexRef.current);
@@ -300,7 +382,7 @@ export function useDeckController(
         throw cause;
       }
       editVersionRef.current += 1;
-      historyRef.current.push(html);
+      historyRef.current.push(html, { meta: activeIndexRef.current });
 
       const slides = detectSlides(master);
       slidesRef.current = slides;
@@ -336,7 +418,7 @@ export function useDeckController(
         throw cause;
       }
       editVersionRef.current += 1;
-      historyRef.current.push(html);
+      historyRef.current.push(html, { meta: activeIndexRef.current });
 
       const source = sourceDocFor(master, activeIndexRef.current);
       slidesRef.current = source.slides;
@@ -363,10 +445,98 @@ export function useDeckController(
     [enqueueSave, update]
   );
 
+  const copySelection = useCallback(() => {
+    const slide = slidesRef.current[activeIndexRef.current];
+    if (!slide) return;
+    const html = collectObjectHtml(
+      slide.element,
+      stateRef.current.selections
+        .filter((target) => target.slideIndex === activeIndexRef.current)
+        .map((target) => target.path)
+    );
+    if (html.length > 0) clipboardRef.current = html;
+  }, []);
+
+  const pasteHtml = useCallback(
+    async (html: readonly string[]) => {
+      const slideIndex = activeIndexRef.current;
+      if (html.length === 0 || !masterRef.current) return;
+      if (!slidesRef.current[slideIndex]) return;
+
+      let pasted: SelectionTarget[] = [];
+      try {
+        await commitMaster((master) => {
+          pasted = pasteObjectHtml(master, slideIndex, html);
+        });
+      } finally {
+        if (pasted.length > 0) applySelections(pasted);
+      }
+    },
+    [applySelections, commitMaster]
+  );
+
+  const pasteObjects = useCallback(
+    () => pasteHtml(clipboardRef.current),
+    [pasteHtml]
+  );
+
+  const duplicateSelection = useCallback(async () => {
+    const slide = slidesRef.current[activeIndexRef.current];
+    if (!slide) return;
+    const html = collectObjectHtml(
+      slide.element,
+      stateRef.current.selections
+        .filter((target) => target.slideIndex === activeIndexRef.current)
+        .map((target) => target.path)
+    );
+    if (html.length > 0) await pasteHtml(html);
+  }, [pasteHtml]);
+
+  const deleteSelection = useCallback(async () => {
+    const current = stateRef.current;
+    const slideIndex = activeIndexRef.current;
+    const slide = slidesRef.current[slideIndex];
+    if (!slide) return;
+    const objects = new Set(topLevelObjects(slide.element));
+    const paths = current.selections
+      .filter(
+        (target) =>
+          target.slideIndex === slideIndex &&
+          target.path.length === 1 &&
+          objects.has(slide.element.children[target.path[0] ?? -1] as Element)
+      )
+      .map((target) => target.path);
+    if (paths.length === 0) return;
+
+    let removed = 0;
+    try {
+      await commitMaster((master) => {
+        removed = deleteObjectPaths(master, slideIndex, paths);
+      });
+    } finally {
+      if (removed > 0) applySelections([]);
+    }
+  }, [applySelections, commitMaster]);
+
+  const saveNow = useCallback(async () => {
+    const master = masterRef.current;
+    if (!master) return;
+    const html = serializeDeck(master);
+    update({ status: 'saving', error: '' });
+    try {
+      await enqueueSave((revision) =>
+        saveDeck(tokenRef.current, html, revision)
+      );
+    } catch (cause) {
+      update({ status: 'error', error: toMessage(cause), dirty: true });
+      throw cause;
+    }
+  }, [enqueueSave, update]);
+
   const restore = useCallback(
-    (html: string) => {
-      const master = parseDeck(html);
-      const source = sourceDocFor(master, activeIndexRef.current);
+    (entry: HistoryEntry<string, number>) => {
+      const master = parseDeck(entry.value);
+      const source = sourceDocFor(master, entry.meta);
       masterRef.current = master;
       slidesRef.current = source.slides;
       activeIndexRef.current = source.activeIndex;
@@ -377,11 +547,22 @@ export function useDeckController(
         activeIndex: source.activeIndex,
         srcDoc: source.srcDoc,
         dirty: true,
+        status: 'saving',
         selection: null,
+        selections: [],
         error: ''
       });
+
+      // Undo and redo are content operations; persist them like a commit so a
+      // reload cannot resurrect the undone state.
+      const task = enqueueSave((revision) =>
+        saveDeck(tokenRef.current, entry.value, revision)
+      );
+      void task.catch((cause) => {
+        update({ status: 'error', error: toMessage(cause), dirty: true });
+      });
     },
-    [update]
+    [enqueueSave, update]
   );
 
   const undo = useCallback(() => {
@@ -420,11 +601,18 @@ export function useDeckController(
       load,
       showSlide,
       select,
+      toggleSelect,
+      selectAll,
       clearSelection,
       setScale,
       applySlideMutation,
       commit,
       commitMaster,
+      saveNow,
+      copySelection,
+      pasteObjects,
+      duplicateSelection,
+      deleteSelection,
       undo,
       redo,
       reload,
@@ -434,11 +622,18 @@ export function useDeckController(
       load,
       showSlide,
       select,
+      toggleSelect,
+      selectAll,
       clearSelection,
       setScale,
       applySlideMutation,
       commit,
       commitMaster,
+      saveNow,
+      copySelection,
+      pasteObjects,
+      duplicateSelection,
+      deleteSelection,
       undo,
       redo,
       reload,

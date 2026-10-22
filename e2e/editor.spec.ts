@@ -111,6 +111,27 @@ async function createNotesFirstFixture(
   );
 }
 
+async function createTwoBoxFixture(
+  directory: string,
+  file: string
+): Promise<void> {
+  await createTemplate(directory, file);
+  const path = join(directory, file);
+  const html = await readFile(path, 'utf8');
+  const closing = html.indexOf('</section>');
+  if (closing === -1) {
+    throw new Error('Template slide closing tag was not found.');
+  }
+  const objects =
+    '    <div data-ppt-el="box-a" style="position:absolute;left:120px;top:160px;width:100px;height:60px;background:#d8c08a">A</div>\n' +
+    '    <div data-ppt-el="box-b" style="position:absolute;left:400px;top:160px;width:100px;height:60px;background:#9ac0d8">B</div>\n';
+  await writeFile(
+    path,
+    `${html.slice(0, closing)}${objects}${html.slice(closing)}`,
+    'utf8'
+  );
+}
+
 async function openDeck(
   page: Page,
   prepare: (directory: string, file: string) => Promise<void>,
@@ -175,6 +196,13 @@ function openFractionalFlowDeck(page: Page): Promise<EditorHarness> {
 
 function openNotesFirstDeck(page: Page): Promise<EditorHarness> {
   return openDeck(page, createNotesFirstFixture, async (frame) => {
+    await expect(frame.locator('[data-ppt-el="box-a"]')).toBeVisible();
+    await expect(frame.locator('[data-ppt-el="box-b"]')).toBeVisible();
+  });
+}
+
+function openTwoBoxDeck(page: Page): Promise<EditorHarness> {
+  return openDeck(page, createTwoBoxFixture, async (frame) => {
     await expect(frame.locator('[data-ppt-el="box-a"]')).toBeVisible();
     await expect(frame.locator('[data-ppt-el="box-b"]')).toBeVisible();
   });
@@ -2016,6 +2044,335 @@ test(
       await text.click();
       await expect(text).toHaveAttribute('aria-selected', 'true');
       await expect(page.getByTestId('text-placeholder')).toBeVisible();
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'keyboard undo and redo restore text edits and transforms',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('Changed heading');
+
+      const textSave = waitForDeckSave(page);
+      await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
+      expect((await textSave).ok()).toBeTruthy();
+      await expect(editor.frame.locator('h1')).toHaveText('Changed heading');
+
+      // A second click keeps focus in the editor document before shortcuts.
+      await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
+      const undoTextSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoTextSave).ok()).toBeTruthy();
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+
+      const redoTextSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+Shift+z');
+      expect((await redoTextSave).ok()).toBeTruthy();
+      await expect(editor.frame.locator('h1')).toHaveText('Changed heading');
+
+      const wrapper = editor.frame.locator('.slide-inner');
+      const box = await wrapper.boundingBox();
+      if (!box) throw new Error('Slide wrapper has no bounding box.');
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
+
+      const dragSave = waitForDeckSave(page);
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+      await page.mouse.up();
+      expect((await dragSave).ok()).toBeTruthy();
+      await expect
+        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+        .toBe('absolute');
+      const moved = await slideInnerGeometry(editor.frame);
+      expect(moved.left!).toBeGreaterThan(0);
+      expect(moved.top!).toBeGreaterThan(0);
+
+      const undoDragSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoDragSave).ok()).toBeTruthy();
+      await expect
+        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+        .toBe('');
+      await expect(editor.frame.locator('h1')).toHaveText('Changed heading');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'one Ctrl+Z after a drag restores the original position',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const object = editor.frame.locator('[data-ppt-el="box1"]');
+      await object.click();
+      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+        'data-selected-id',
+        'box1'
+      );
+      const box = await object.boundingBox();
+      if (!box) throw new Error('Nudge object has no bounding box.');
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
+      const before = await inlineGeometryOf(object);
+      expect(before.left).toBe(120);
+      expect(before.top).toBe(160);
+
+      const dragSave = waitForDeckSave(page);
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      // Alt disables snapping so the assertion is about the gesture offset.
+      await page.keyboard.down('Alt');
+      await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+      await page.mouse.up();
+      await page.keyboard.up('Alt');
+      expect((await dragSave).ok()).toBeTruthy();
+      const moved = await inlineGeometryOf(object);
+      expect(moved.left).toBeGreaterThan(before.left!);
+      expect(moved.top).toBeGreaterThan(before.top!);
+
+      const undoSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoSave).ok()).toBeTruthy();
+      await expect.poll(async () => (await inlineGeometryOf(object)).left).toBe(
+        before.left
+      );
+      await expect.poll(async () => (await inlineGeometryOf(object)).top).toBe(
+        before.top
+      );
+      const undone = await inlineGeometryOf(object);
+      expect(undone.position).toBe('absolute');
+      // A single undo was enough: no second entry holds a mid-gesture state.
+      await expectNoDeckSave(page, () => page.keyboard.press('Control+z'));
+      expect((await inlineGeometryOf(object)).left).toBe(before.left);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'copy and paste duplicates an object with fresh ids and survives reload',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const copies = editor.frame
+        .locator('[data-ppt-el]')
+        .filter({ hasText: 'Nudge me' });
+      await editor.frame.locator('[data-ppt-el="box1"]').click();
+      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+        'data-selected-id',
+        'box1'
+      );
+
+      await page.keyboard.press('Control+c');
+      const pasteSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+v');
+      expect((await pasteSave).ok()).toBeTruthy();
+      await expect(copies).toHaveCount(2);
+
+      const pasted = copies.nth(1);
+      const pastedId = await pasted.getAttribute('data-ppt-el');
+      expect(pastedId).not.toBe('box1');
+      expect(pastedId).not.toBeNull();
+      const geometry = await inlineGeometryOf(pasted);
+      expect(geometry.position).toBe('absolute');
+      expect(geometry.left).toBe(140);
+      expect(geometry.top).toBe(180);
+      await expect(pasted).toHaveText('Nudge me');
+      await expect
+        .poll(async () => (await savedDocument(editor)).split('Nudge me').length - 1)
+        .toBe(2);
+
+      await page.reload();
+      const frame = page.frameLocator(FRAME_SELECTOR);
+      await expect(page.getByTestId('save-status')).toHaveText('已載入');
+      const reloadedCopies = frame
+        .locator('[data-ppt-el]')
+        .filter({ hasText: 'Nudge me' });
+      await expect(reloadedCopies).toHaveCount(2);
+      expect(await reloadedCopies.nth(0).getAttribute('data-ppt-el')).toBe(
+        'box1'
+      );
+      expect(await reloadedCopies.nth(1).getAttribute('data-ppt-el')).toBe(
+        pastedId
+      );
+      const reloadedGeometry = await inlineGeometryOf(reloadedCopies.nth(1));
+      expect(reloadedGeometry.left).toBe(140);
+      expect(reloadedGeometry.top).toBe(180);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'Shift multi-select toggles and Delete removes every selected object',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTwoBoxDeck(page);
+    try {
+      await editor.frame.locator('[data-ppt-el="box-a"]').click();
+      await editor.frame
+        .locator('[data-ppt-el="box-b"]')
+        .click({ modifiers: ['Shift'] });
+
+      const outlines = page.getByTestId('selection-outline');
+      await expect(outlines).toHaveCount(2);
+      await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
+      await expect(page.getByTestId('rotate-handle')).toHaveCount(0);
+      expect(
+        await outlines.evaluateAll((elements) =>
+          elements.map((element) =>
+            element.getAttribute('data-selected-id')
+          )
+        )
+      ).toEqual(['box-a', 'box-b']);
+
+      const boxA = editor.frame.locator('[data-ppt-el="box-a"]');
+      const boxB = editor.frame.locator('[data-ppt-el="box-b"]');
+      const nudgeSave = waitForDeckSave(page);
+      await page.keyboard.press('ArrowRight');
+      expect((await nudgeSave).ok()).toBeTruthy();
+      await expect.poll(async () => (await inlineGeometryOf(boxA)).left).toBe(
+        121
+      );
+      await expect.poll(async () => (await inlineGeometryOf(boxB)).left).toBe(
+        401
+      );
+      await expect(outlines).toHaveCount(2);
+
+      // One undo reverts both nudged objects and clears the selection.
+      const undoNudgeSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoNudgeSave).ok()).toBeTruthy();
+      await expect.poll(async () => (await inlineGeometryOf(boxA)).left).toBe(
+        120
+      );
+      await expect.poll(async () => (await inlineGeometryOf(boxB)).left).toBe(
+        400
+      );
+      await expect(outlines).toHaveCount(0);
+
+      await boxA.click();
+      await boxB.click({ modifiers: ['Shift'] });
+      await expect(outlines).toHaveCount(2);
+
+      const deleteSave = waitForDeckSave(page);
+      await page.keyboard.press('Delete');
+      expect((await deleteSave).ok()).toBeTruthy();
+      await expect(
+        editor.frame.locator('[data-ppt-el="box-a"]')
+      ).toHaveCount(0);
+      await expect(
+        editor.frame.locator('[data-ppt-el="box-b"]')
+      ).toHaveCount(0);
+      await expect
+        .poll(async () => (await savedDocument(editor)).includes('box-a'))
+        .toBe(false);
+
+      const undoDeleteSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoDeleteSave).ok()).toBeTruthy();
+      await expect(
+        editor.frame.locator('[data-ppt-el="box-a"]')
+      ).toBeVisible();
+      await expect(
+        editor.frame.locator('[data-ppt-el="box-b"]')
+      ).toBeVisible();
+      await expect
+        .poll(async () => {
+          const html = await savedDocument(editor);
+          return html.includes('box-a') && html.includes('box-b');
+        })
+        .toBe(true);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'keyboard undo restores the pre-add active slide and redo restores the add',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      await expect(thumbnails).toHaveCount(2);
+      await expect(thumbnails.nth(0)).toHaveAttribute('aria-current', 'page');
+
+      const addSave = waitForDeckSave(page);
+      await page.getByTestId('add-slide').click();
+      expect((await addSave).ok()).toBeTruthy();
+      await expect(thumbnails).toHaveCount(3);
+      await expect(thumbnails.nth(1)).toHaveAttribute('aria-current', 'page');
+
+      const undoAddSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+z');
+      expect((await undoAddSave).ok()).toBeTruthy();
+      await expect(thumbnails).toHaveCount(2);
+      await expect(thumbnails.nth(0)).toHaveAttribute('aria-current', 'page');
+      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
+
+      const redoAddSave = waitForDeckSave(page);
+      await page.keyboard.press('Control+Shift+z');
+      expect((await redoAddSave).ok()).toBeTruthy();
+      await expect(thumbnails).toHaveCount(3);
+      await expect(thumbnails.nth(1)).toHaveAttribute('aria-current', 'page');
+      await expect(editor.frame.locator('h1')).toHaveText('新投影片');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'shortcuts are ignored while inspector form fields have focus',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const object = editor.frame.locator('[data-ppt-el="box1"]');
+      await page
+        .locator('[data-testid="object-row"][data-object-id="box1"]')
+        .click();
+      const fieldX = page.getByTestId('field-x');
+      await expect(fieldX).toHaveValue('120');
+      await fieldX.focus();
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await expectNoDeckSave(page, () => page.keyboard.press('Delete'));
+        await expectNoDeckSave(page, () => page.keyboard.press('Control+z'));
+        await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
+        expect(saveRequests).toHaveLength(0);
+        expect((await inlineGeometryOf(object)).left).toBe(120);
+        await expect(fieldX).toBeVisible();
+        await expect(
+          page.locator('[data-testid="object-row"][data-object-id="box1"]')
+        ).toHaveCount(1);
+      } finally {
+        page.off('request', countSave);
+      }
     } finally {
       await closeEditor(editor);
     }

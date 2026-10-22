@@ -1,20 +1,28 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { Guide, Handle, Rect } from '../geometry';
 
-export interface CanvasOverlayProps {
-  /** Selected object rect in design pixels. */
-  rect: Rect | null;
-  /** Selection rotation in degrees. */
+export interface SelectionBox {
+  /** Selection rect in design pixels, relative to the slide origin. */
+  rect: Rect;
+  /** Inline rotation of the selected object in degrees. */
   rotation: number;
+  /** Raw child-index path from the slide. */
+  path: readonly number[];
+  /** `data-ppt-el` id of the selected element, when authored. */
+  elementId: string | null;
+}
+
+export interface CanvasOverlayProps {
+  /** Selected object outlines in design pixels. */
+  boxes: readonly SelectionBox[];
   /** Active snap guides in design pixels. */
   guides: Guide[];
   scale: number;
-  /** Nested selections expose an outline only; transforms stay disabled. */
+  /**
+   * Nested and multi selections expose outlines only; resize, rotate, and
+   * numeric geometry stay single-object operations.
+   */
   readOnly: boolean;
-  /** `data-ppt-el` id of the selected element, when authored. */
-  selectedId: string | null;
-  /** Child-index path from the slide to the selected element. */
-  selectedPath: readonly number[] | null;
   onResizeStart: (
     handle: Handle,
     event: ReactPointerEvent<HTMLDivElement>
@@ -36,18 +44,15 @@ const HANDLE_POSITIONS: Record<Handle, { left: string; top: string }> = {
 };
 
 /**
- * Renders the selection outline, resize/rotate handles, and snap guides in the
+ * Renders selection outlines, resize/rotate handles, and snap guides in the
  * editor document. It must stay outside the deck iframe so no editor markup
  * can reach the saved HTML.
  */
 export function CanvasOverlay({
-  rect,
-  rotation,
+  boxes,
   guides,
   scale,
   readOnly,
-  selectedId,
-  selectedPath,
   onResizeStart,
   onRotateStart
 }: CanvasOverlayProps) {
@@ -74,48 +79,54 @@ export function CanvasOverlay({
         )
       )}
 
-      {rect && (
-        <div
-          data-testid="selection-outline"
-          data-readonly={readOnly ? 'true' : undefined}
-          data-selected-id={selectedId ?? undefined}
-          data-selected-path={selectedPath?.join('.')}
-          className="pointer-events-none absolute border border-amber-400"
-          style={{
-            left: rect.x * scale,
-            top: rect.y * scale,
-            width: rect.width * scale,
-            height: rect.height * scale,
-            transform: rotation === 0 ? undefined : `rotate(${rotation}deg)`
-          }}
-        >
-          {!readOnly && (
-            <>
-              {HANDLES.map((handle) => (
+      {boxes.map((box, index) => {
+        const interactive = index === 0 && !readOnly;
+        return (
+          <div
+            key={box.path.join('.') || index}
+            data-testid="selection-outline"
+            data-readonly={!interactive ? 'true' : undefined}
+            data-primary={index === 0 ? 'true' : undefined}
+            data-selected-id={box.elementId ?? undefined}
+            data-selected-path={box.path.join('.')}
+            className="pointer-events-none absolute border border-amber-400"
+            style={{
+              left: box.rect.x * scale,
+              top: box.rect.y * scale,
+              width: box.rect.width * scale,
+              height: box.rect.height * scale,
+              transform:
+                box.rotation === 0 ? undefined : `rotate(${box.rotation}deg)`
+            }}
+          >
+            {interactive && (
+              <>
+                {HANDLES.map((handle) => (
+                  <div
+                    key={handle}
+                    data-testid={`handle-${handle}`}
+                    className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-amber-200 bg-amber-400"
+                    style={{
+                      ...HANDLE_POSITIONS[handle],
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                    onPointerDown={(event) => onResizeStart(handle, event)}
+                  />
+                ))}
                 <div
-                  key={handle}
-                  data-testid={`handle-${handle}`}
-                  className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-amber-200 bg-amber-400"
+                  data-testid="rotate-handle"
+                  className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-amber-200 bg-amber-400"
                   style={{
-                    ...HANDLE_POSITIONS[handle],
-                    transform: 'translate(-50%, -50%)'
+                    top: 0,
+                    transform: 'translate(-50%, calc(-100% - 16px))'
                   }}
-                  onPointerDown={(event) => onResizeStart(handle, event)}
+                  onPointerDown={onRotateStart}
                 />
-              ))}
-              <div
-                data-testid="rotate-handle"
-                className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-amber-200 bg-amber-400"
-                style={{
-                  top: 0,
-                  transform: 'translate(-50%, calc(-100% - 16px))'
-                }}
-                onPointerDown={onRotateStart}
-              />
-            </>
-          )}
-        </div>
-      )}
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

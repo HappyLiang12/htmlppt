@@ -20,7 +20,8 @@ import {
 import {
   elementAtPath,
   selectionFromEvent,
-  topLevelObjects
+  topLevelObjects,
+  type SelectionTarget
 } from './selection';
 import {
   buildSlideSrcDoc,
@@ -56,7 +57,10 @@ import {
   type GeometryValues,
   type SlideBackground
 } from './inspector-state';
-import { CanvasOverlay } from './components/CanvasOverlay';
+import {
+  CanvasOverlay,
+  type SelectionBox
+} from './components/CanvasOverlay';
 import { Inspector } from './components/Inspector';
 import { SorterView } from './components/SorterView';
 import { ThumbnailRail } from './components/ThumbnailRail';
@@ -68,18 +72,26 @@ import {
   reorderSlides,
   type SlideOpsContext
 } from './slide-ops';
+import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
 import { useDeckController } from './use-deck-controller';
 
-const ARROW_KEYS: Record<string, readonly [number, number] | undefined> = {
-  ArrowLeft: [-1, 0],
-  ArrowRight: [1, 0],
-  ArrowUp: [0, -1],
-  ArrowDown: [0, 1]
-};
+const TEXT_EDITABLE_SELECTOR =
+  'h1, h2, h3, p, li, span, td, th, blockquote, figcaption';
 
 const SNAP_THRESHOLD_SCREEN_PX = 6;
 const MIN_RESIZE_DESIGN_PX = 4;
 const DRAG_THRESHOLD_SCREEN_PX = 2;
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 3;
+const ZOOM_STEP = 1.2;
+
+function sameSelection(a: SelectionTarget, b: SelectionTarget): boolean {
+  return (
+    a.slideIndex === b.slideIndex &&
+    a.path.length === b.path.length &&
+    a.path.every((index, position) => index === b.path[position])
+  );
+}
 
 interface GestureBase {
   pointerId: number;
@@ -90,11 +102,17 @@ interface GestureBase {
   slide: Element;
 }
 
+interface DragTarget extends TransformTarget {
+  path: number[];
+  elementId: string | null;
+  rotation: number;
+}
+
 interface DragSession extends GestureBase {
   kind: 'drag';
   /** Slide origin inside the iframe, for iframe-space overlay coordinates. */
   slideOffset: Point;
-  targets: TransformTarget[];
+  targets: DragTarget[];
   siblingRects: Rect[];
   bounds: Rect;
 }
@@ -104,6 +122,8 @@ interface ResizeSession extends GestureBase {
   /** Slide origin inside the iframe, for iframe-space overlay coordinates. */
   slideOffset: Point;
   target: TransformTarget;
+  path: number[];
+  elementId: string | null;
   handle: Handle;
   siblingRects: Rect[];
   bounds: Rect;
@@ -112,6 +132,8 @@ interface ResizeSession extends GestureBase {
 interface RotateSession extends GestureBase {
   kind: 'rotate';
   target: TransformTarget;
+  path: number[];
+  elementId: string | null;
   center: Point;
   startPointerAngle: number;
   startRotation: number;
@@ -145,9 +167,9 @@ function designPointInsideFrame(
   return { x: clientX - slideRect.left, y: clientY - slideRect.top };
 }
 
-function siblingRectsOf(slide: Element, element: Element): Rect[] {
+function siblingRectsOf(slide: Element, elements: readonly Element[]): Rect[] {
   return topLevelObjects(slide)
-    .filter((other) => other !== element)
+    .filter((other) => !elements.includes(other))
     .map((other) => rectOf(other, slide));
 }
 
@@ -185,14 +207,14 @@ export function App() {
     error,
     filePath,
     selection,
+    selections,
     master
   } = state;
 
   const activeSlide = slides[activeIndex];
 
   const [view, setView] = useState<EditorView>('normal');
-  const [selectionRect, setSelectionRect] = useState<Rect | null>(null);
-  const [selectionRotation, setSelectionRotation] = useState(0);
+  const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
@@ -291,8 +313,7 @@ export function App() {
   );
 
   const clearOverlay = useCallback(() => {
-    setSelectionRect(null);
-    setSelectionRotation(0);
+    setSelectionBoxes([]);
     setSelectionGeometry(null);
     setGuides([]);
   }, []);
@@ -316,17 +337,24 @@ export function App() {
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const frameDocument = frame.current?.contentDocument;
-      if (!selected || !slideInfo || !frameDocument) return false;
+      if (
+        !selected ||
+        current.selections.length !== 1 ||
+        !slideInfo ||
+        !frameDocument
+      ) {
+        return false;
+      }
       const slide = frameSlideElement(slideInfo, frameDocument);
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
       const snapshot = snapshotGeometry(element, slide);
-      let applied = false;
-      void commitMasterDocument((master) => {
-        applied = applyGeometryEdit(master, selected, snapshot, field, value);
-      });
-      return applied;
+      return applyInspectorEdit(
+        current.master,
+        (master) => applyGeometryEdit(master, selected, snapshot, field, value),
+        () => void commitMasterDocument()
+      );
     },
     [commitMasterDocument]
   );
@@ -408,21 +436,22 @@ export function App() {
     void actions.load();
   }, [actions]);
 
+  const computeFitScale = useCallback(() => {
+    if (!canvas.current) return;
+    const current = stateRef.current;
+    const slide = current.slides[current.activeIndex];
+    if (!slide) return;
+    const bounds = canvas.current.getBoundingClientRect();
+    const widthScale = Math.max(0.1, (bounds.width - 96) / slide.width);
+    const heightScale = Math.max(0.1, (bounds.height - 96) / slide.height);
+    actionsRef.current.setScale(Math.min(widthScale, heightScale, 1));
+  }, []);
+
   useEffect(() => {
-    const updateScale = () => {
-      if (!canvas.current || !activeSlide) return;
-      const bounds = canvas.current.getBoundingClientRect();
-      const widthScale = Math.max(0.1, (bounds.width - 96) / activeSlide.width);
-      const heightScale = Math.max(
-        0.1,
-        (bounds.height - 96) / activeSlide.height
-      );
-      actions.setScale(Math.min(widthScale, heightScale, 1));
-    };
-    updateScale();
-    window.addEventListener('resize', updateScale);
-    return () => window.removeEventListener('resize', updateScale);
-  }, [activeSlide, actions, view]);
+    computeFitScale();
+    window.addEventListener('resize', computeFitScale);
+    return () => window.removeEventListener('resize', computeFitScale);
+  }, [activeSlide, computeFitScale, view]);
 
   const frameSlideNow = useCallback((): Element | null => {
     const frameDocument = frame.current?.contentDocument;
@@ -480,8 +509,7 @@ export function App() {
 
   const refreshOverlay = useCallback(() => {
     const current = stateRef.current;
-    const selected = current.selection;
-    if (!selected) {
+    if (current.selections.length === 0) {
       clearOverlay();
       return;
     }
@@ -492,19 +520,38 @@ export function App() {
       return;
     }
     const slide = frameSlideElement(slideInfo, frameDocument);
-    const element = slide ? elementAtPath(slide, selected.path) : null;
-    if (!slide || !element) {
+    if (!slide) {
       clearOverlay();
       return;
     }
-    setSelectionRect(frameRectOf(rectOf(element, slide), slideOffsetOf(slide)));
-    setSelectionRotation(rotationOf(element));
-    setSelectionGeometry(readGeometry(element, slide));
+
+    const offset = slideOffsetOf(slide);
+    const boxes: SelectionBox[] = [];
+    let geometry: GeometryValues | null = null;
+    for (const target of current.selections) {
+      if (target.slideIndex !== current.activeIndex) continue;
+      const element = elementAtPath(slide, target.path);
+      if (!element) continue;
+      boxes.push({
+        rect: frameRectOf(rectOf(element, slide), offset),
+        rotation: rotationOf(element),
+        path: target.path,
+        elementId: target.elementId
+      });
+      if (!geometry) geometry = readGeometry(element, slide);
+    }
+
+    if (boxes.length === 0) {
+      clearOverlay();
+      return;
+    }
+    setSelectionBoxes(boxes);
+    setSelectionGeometry(geometry);
   }, [clearOverlay]);
 
   useEffect(() => {
     refreshOverlay();
-  }, [refreshOverlay, selection, activeIndex, srcDoc, slides, frameEpoch]);
+  }, [refreshOverlay, selections, activeIndex, srcDoc, slides, frameEpoch]);
 
   /**
    * Reloads the preview iframe from the current master document, discarding
@@ -591,8 +638,13 @@ export function App() {
         const target = session.targets[index];
         if (target) applyRect(target.element, rect, session.slide);
       });
-      setSelectionRect(
-        rects[0] ? frameRectOf(rects[0], session.slideOffset) : null
+      setSelectionBoxes(
+        session.targets.map((target, index) => ({
+          rect: frameRectOf(rects[index] ?? target.start, session.slideOffset),
+          rotation: target.rotation,
+          path: target.path,
+          elementId: target.elementId
+        }))
       );
       setGuides(frameGuidesOf(nextGuides, session.slideOffset));
       return;
@@ -622,7 +674,14 @@ export function App() {
         nextGuides = snapped.guides;
       }
       applyRect(session.target.element, rect, session.slide);
-      setSelectionRect(frameRectOf(rect, session.slideOffset));
+      setSelectionBoxes([
+        {
+          rect: frameRectOf(rect, session.slideOffset),
+          rotation: rotationOf(session.target.element),
+          path: session.path,
+          elementId: session.elementId
+        }
+      ]);
       setGuides(frameGuidesOf(nextGuides, session.slideOffset));
       return;
     }
@@ -636,7 +695,14 @@ export function App() {
       nextRotation = snapAngle(nextRotation, 15);
     }
     applyRotation(session.target.element, nextRotation);
-    setSelectionRotation(nextRotation);
+    setSelectionBoxes([
+      {
+        rect: frameRectOf(session.target.start, slideOffsetOf(session.slide)),
+        rotation: nextRotation,
+        path: session.path,
+        elementId: session.elementId
+      }
+    ]);
     setGuides([]);
   }, []);
 
@@ -702,7 +768,7 @@ export function App() {
 
   const beginDragSession = useCallback(
     (
-      element: Element,
+      items: readonly { element: Element; selection: SelectionTarget }[],
       slide: Element,
       start: Point,
       pointerId: number,
@@ -710,7 +776,7 @@ export function App() {
     ) => {
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
-      if (!slideInfo) return;
+      if (!slideInfo || items.length === 0) return;
       sessionRef.current = {
         kind: 'drag',
         pointerId,
@@ -719,8 +785,17 @@ export function App() {
         moved: false,
         slide,
         slideOffset: slideOffsetOf(slide),
-        targets: [{ element, start: rectOf(element, slide) }],
-        siblingRects: siblingRectsOf(slide, element),
+        targets: items.map((item) => ({
+          element: item.element,
+          start: rectOf(item.element, slide),
+          rotation: rotationOf(item.element),
+          path: item.selection.path,
+          elementId: item.selection.elementId
+        })),
+        siblingRects: siblingRectsOf(
+          slide,
+          items.map((item) => item.element)
+        ),
         bounds: boundsOf(slideInfo.width, slideInfo.height)
       };
       attachSession(slide);
@@ -735,7 +810,13 @@ export function App() {
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const slide = frameSlideNow();
-      if (!selected || selected.path.length !== 1 || !slideInfo || !slide) {
+      if (
+        !selected ||
+        current.selections.length !== 1 ||
+        selected.path.length !== 1 ||
+        !slideInfo ||
+        !slide
+      ) {
         return;
       }
       const element = elementAtPath(slide, selected.path);
@@ -754,8 +835,10 @@ export function App() {
         slide,
         slideOffset: slideOffsetOf(slide),
         target: { element, start: rectOf(element, slide) },
+        path: selected.path,
+        elementId: selected.elementId,
         handle,
-        siblingRects: siblingRectsOf(slide, element),
+        siblingRects: siblingRectsOf(slide, [element]),
         bounds: boundsOf(slideInfo.width, slideInfo.height)
       };
       attachSession(slide);
@@ -769,7 +852,14 @@ export function App() {
       const current = stateRef.current;
       const selected = current.selection;
       const slide = frameSlideNow();
-      if (!selected || selected.path.length !== 1 || !slide) return;
+      if (
+        !selected ||
+        current.selections.length !== 1 ||
+        selected.path.length !== 1 ||
+        !slide
+      ) {
+        return;
+      }
       const element = elementAtPath(slide, selected.path);
       if (!element) return;
       event.preventDefault();
@@ -790,6 +880,8 @@ export function App() {
         moved: false,
         slide,
         target: { element, start: startRect },
+        path: selected.path,
+        elementId: selected.elementId,
         center,
         startPointerAngle: rotationFromPointer(center, startPoint),
         startRotation: rotationOf(element)
@@ -802,24 +894,49 @@ export function App() {
   const nudgeSelection = useCallback(
     (dx: number, dy: number): boolean => {
       const current = stateRef.current;
-      const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const slide = frameSlideNow();
-      if (!selected || selected.path.length !== 1 || !slideInfo || !slide) {
-        return false;
-      }
-      const element = elementAtPath(slide, selected.path);
-      if (!element) return false;
-      const rect = rectOf(element, slide);
-      const next = nudge(
-        rect,
-        dx,
-        dy,
-        boundsOf(slideInfo.width, slideInfo.height)
+      if (!slideInfo || !slide) return false;
+      const targets = current.selections.filter(
+        (target) =>
+          target.slideIndex === current.activeIndex &&
+          target.path.length === 1
       );
-      if (next.x === rect.x && next.y === rect.y) return false;
-      pinToAbsolute(element, next, slide);
-      setSelectionRect(frameRectOf(next, slideOffsetOf(slide)));
+      if (targets.length === 0) return false;
+
+      const offset = slideOffsetOf(slide);
+      const boxes: SelectionBox[] = [];
+      let changed = false;
+      for (const target of targets) {
+        const element = elementAtPath(slide, target.path);
+        if (!element) continue;
+        const rect = rectOf(element, slide);
+        const next = nudge(
+          rect,
+          dx,
+          dy,
+          boundsOf(slideInfo.width, slideInfo.height)
+        );
+        if (next.x === rect.x && next.y === rect.y) {
+          boxes.push({
+            rect: frameRectOf(rect, offset),
+            rotation: rotationOf(element),
+            path: target.path,
+            elementId: target.elementId
+          });
+          continue;
+        }
+        pinToAbsolute(element, next, slide);
+        changed = true;
+        boxes.push({
+          rect: frameRectOf(next, offset),
+          rotation: rotationOf(element),
+          path: target.path,
+          elementId: target.elementId
+        });
+      }
+      if (!changed) return false;
+      setSelectionBoxes(boxes);
       setGuides([]);
       void commitFrame();
       return true;
@@ -827,14 +944,53 @@ export function App() {
     [commitFrame, frameSlideNow]
   );
 
+  const startTextEditing = useCallback((): boolean => {
+    const current = stateRef.current;
+    if (current.selections.length !== 1 || !current.selection) return false;
+    if (current.selection.path.length < 1) return false;
+    const slideInfo = current.slides[current.activeIndex];
+    const frameDocument = frame.current?.contentDocument;
+    if (!slideInfo || !frameDocument) return false;
+    const slide = frameSlideElement(slideInfo, frameDocument);
+    if (!slide) return false;
+    const selected = elementAtPath(slide, current.selection.path);
+    if (!selected) return false;
+
+    const textElement = selected.matches(TEXT_EDITABLE_SELECTOR)
+      ? selected
+      : selected.querySelector(TEXT_EDITABLE_SELECTOR);
+    const editable = textElement as HTMLElement | null;
+    if (!editable || !editable.textContent?.trim()) return false;
+
+    editable.setAttribute('contenteditable', 'true');
+    editable.setAttribute(EDITING_ATTRIBUTE, 'true');
+    editable.focus();
+    return true;
+  }, []);
+
+  const zoomBy = useCallback((factor: number) => {
+    const next = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, stateRef.current.scale * factor)
+    );
+    actionsRef.current.setScale(next);
+  }, []);
+
   const handleKeyDown = useCallback(
     (event: KeyboardEvent, activeDocument: Document | null) => {
       if (event.defaultPrevented) return;
       const active = activeDocument ?? document;
-      if (isEditableTarget(active.activeElement)) return;
+      if (
+        isEditableTarget(active.activeElement) ||
+        isEditableShortcutTarget(event.target)
+      ) {
+        return;
+      }
+      const action = mapShortcut(event);
+      if (!action) return;
       const current = stateRef.current;
 
-      if (event.key === 'Escape') {
+      if (action.type === 'escape') {
         if (cancelSession()) {
           event.preventDefault();
           return;
@@ -847,31 +1003,114 @@ export function App() {
         return;
       }
 
-      const direction = ARROW_KEYS[event.key];
-      if (!direction) return;
-
-      // A pointer gesture owns the transform until pointerup; keyboard nudges
-      // during it would add a second history entry and extra offset.
+      // A pointer gesture owns the transform until pointerup; shortcuts during
+      // it would add extra history entries or mutate the deck mid-drag.
       if (sessionRef.current) {
         event.preventDefault();
         return;
       }
 
-      if (current.selection) {
-        event.preventDefault();
-        const step = event.shiftKey ? 10 : 1;
-        nudgeSelection(direction[0] * step, direction[1] * step);
-        return;
-      }
-
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        event.preventDefault();
-        actionsRef.current.showSlide(
-          current.activeIndex + (event.key === 'ArrowRight' ? 1 : -1)
-        );
+      switch (action.type) {
+        case 'undo':
+          event.preventDefault();
+          actionsRef.current.undo();
+          return;
+        case 'redo':
+          event.preventDefault();
+          actionsRef.current.redo();
+          return;
+        case 'save':
+          event.preventDefault();
+          void actionsRef.current.saveNow().catch(() => undefined);
+          return;
+        case 'export':
+        case 'group':
+        case 'ungroup':
+        case 'help':
+          // Export is M5; group/ungroup are M4; help is not part of the shell.
+          event.preventDefault();
+          return;
+        case 'select-all':
+          event.preventDefault();
+          actionsRef.current.selectAll();
+          return;
+        case 'copy':
+          if (current.selections.length === 0) return;
+          event.preventDefault();
+          actionsRef.current.copySelection();
+          return;
+        case 'paste':
+          event.preventDefault();
+          void actionsRef.current.pasteObjects().catch(() => undefined);
+          return;
+        case 'duplicate':
+          if (current.selections.length === 0) return;
+          event.preventDefault();
+          void actionsRef.current.duplicateSelection().catch(() => undefined);
+          return;
+        case 'delete':
+          if (current.selections.length === 0) return;
+          event.preventDefault();
+          void actionsRef.current.deleteSelection().catch(() => undefined);
+          return;
+        case 'zoom-in':
+          event.preventDefault();
+          zoomBy(ZOOM_STEP);
+          return;
+        case 'zoom-out':
+          event.preventDefault();
+          zoomBy(1 / ZOOM_STEP);
+          return;
+        case 'zoom-fit':
+          event.preventDefault();
+          computeFitScale();
+          return;
+        case 'edit': {
+          // Enter belongs to a focused button/link before it means "edit".
+          const targetElement = eventElement(event.target);
+          if (
+            targetElement?.closest(
+              'button, a, [role="button"], [role="tab"]'
+            )
+          ) {
+            return;
+          }
+          if (startTextEditing()) event.preventDefault();
+          return;
+        }
+        case 'play':
+        case 'play-from-current':
+          // Play mode shell is Task 7; keep the browser default suppressed.
+          event.preventDefault();
+          return;
+        case 'nudge': {
+          if (current.selections.length > 0) {
+            event.preventDefault();
+            // Nested selections are read-only: no nudge and no slide change.
+            if (current.selections.some((target) => target.path.length !== 1)) {
+              return;
+            }
+            nudgeSelection(action.dx, action.dy);
+            return;
+          }
+          if (action.dx !== 0) {
+            event.preventDefault();
+            actionsRef.current.showSlide(
+              current.activeIndex + (action.dx > 0 ? 1 : -1)
+            );
+          }
+          return;
+        }
       }
     },
-    [cancelSession, clearOverlay, nudgeSelection]
+    [
+      cancelSession,
+      clearOverlay,
+      computeFitScale,
+      nudgeSelection,
+      startTextEditing,
+      zoomBy
+    ]
   );
 
   const handleFramePointerDown = useCallback(
@@ -896,14 +1135,44 @@ export function App() {
         return;
       }
 
-      actionsRef.current.select(selected);
+      if (event.shiftKey) {
+        // Shift toggles membership without starting a transform gesture.
+        event.preventDefault();
+        actionsRef.current.toggleSelect(selected);
+        return;
+      }
+
+      const existing = current.selections.some((candidate) =>
+        sameSelection(candidate, selected)
+      );
+      if (!existing) actionsRef.current.select(selected);
       // Drilled nested selections show read-only geometry for now.
       if (selected.path.length !== 1) return;
-      const element = elementAtPath(frameSlide, selected.path);
-      if (!element) return;
+
+      const dragSelections = existing ? current.selections : [selected];
+      const items = dragSelections
+        .filter(
+          (candidate) =>
+            candidate.slideIndex === current.activeIndex &&
+            candidate.path.length === 1
+        )
+        .map((candidate) => ({
+          selection: candidate,
+          element: elementAtPath(frameSlide, candidate.path)
+        }))
+        .filter(
+          (item): item is { element: Element; selection: SelectionTarget } =>
+            item.element !== null
+        )
+        .sort((a, b) => {
+          if (sameSelection(a.selection, selected)) return -1;
+          if (sameSelection(b.selection, selected)) return 1;
+          return 0;
+        });
+      if (items.length === 0) return;
       event.preventDefault();
       beginDragSession(
-        element,
+        items,
         frameSlide,
         designPointInsideFrame(event.clientX, event.clientY, frameSlide),
         event.pointerId,
@@ -956,9 +1225,7 @@ export function App() {
     frameDocument.addEventListener('dblclick', (event) => {
       const target = event.target as HTMLElement | null;
       if (!target || !frameDocument.body.contains(target)) return;
-      const editable = target.closest(
-        'h1, h2, h3, p, li, span, td, th, blockquote, figcaption'
-      ) as HTMLElement | null;
+      const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
       if (!editable || !editable.textContent?.trim()) return;
       event.preventDefault();
       editable.setAttribute('contenteditable', 'true');
@@ -1082,13 +1349,13 @@ export function App() {
                   }}
                 />
                 <CanvasOverlay
-                  rect={selectionRect}
-                  rotation={selectionRotation}
+                  boxes={selectionBoxes}
                   guides={guides}
                   scale={scale}
-                  readOnly={selection !== null && selection.path.length > 1}
-                  selectedId={selection?.elementId ?? null}
-                  selectedPath={selection?.path ?? null}
+                  readOnly={
+                    selectionBoxes.length > 1 ||
+                    (selection !== null && selection.path.length > 1)
+                  }
                   onResizeStart={beginResizeSession}
                   onRotateStart={beginRotateSession}
                 />
@@ -1103,6 +1370,7 @@ export function App() {
           <Inspector
             slide={activeSlide}
             selection={selection}
+            selectionCount={selections.length}
             geometry={selectionGeometry}
             onSelectObject={handleSelectObject}
             onCommitGeometry={handleGeometryCommit}
