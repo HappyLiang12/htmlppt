@@ -48,6 +48,41 @@ body {
   animation: htmlppt-preview-slide 600ms ease-in forwards;
 }
 
+@keyframes htmlppt-play-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes htmlppt-play-slide {
+  from {
+    opacity: 0.4;
+    transform: translateX(6%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.play-slide--fade {
+  animation: htmlppt-play-fade 450ms ease-out;
+}
+
+.play-slide--slide {
+  animation: htmlppt-play-slide 450ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .play-slide--fade,
+  .play-slide--slide {
+    animation: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .htmlppt-transition-preview {
     display: none;

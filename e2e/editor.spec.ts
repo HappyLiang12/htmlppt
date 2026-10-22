@@ -13,6 +13,7 @@ import {
   type Response
 } from '@playwright/test';
 import { execa } from 'execa';
+import { parseDeckHtml } from '../packages/core/dist/node.js';
 import { startCliHost } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -427,6 +428,17 @@ async function savedDocument(editor: EditorHarness): Promise<string> {
 }
 
 /**
+ * Checks real attributes in the saved document. Raw substring checks would
+ * also match the bundled runtime source, whose selectors mention these names.
+ */
+async function savedHas(
+  editor: EditorHarness,
+  selector: string
+): Promise<boolean> {
+  return parseDeckHtml(await savedDocument(editor)).querySelector(selector) !== null;
+}
+
+/**
  * Replaces the first slide heading in the deck file behind the host's back.
  * The host watcher turns that write into an external revision.
  */
@@ -833,9 +845,10 @@ test(
       expect(Number.parseFloat(saved.top ?? '')).toBeCloseTo(50 / scale, 0);
 
       const html = await readFile(join(editor.directory, editor.file), 'utf8');
-      expect(html).not.toContain('data-testid');
-      expect(html).not.toContain('data-ppt-frame-slide');
-      expect(html).not.toContain('contenteditable');
+      const savedDoc = parseDeckHtml(html);
+      expect(savedDoc.querySelector('[data-testid]')).toBeNull();
+      expect(savedDoc.querySelector('[data-ppt-frame-slide]')).toBeNull();
+      expect(savedDoc.querySelector('[contenteditable]')).toBeNull();
     } finally {
       await closeEditor(editor);
     }
@@ -1925,7 +1938,7 @@ test(
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(true);
       const savedWithNotes = await savedDocument(editor);
       expect(savedWithNotes).toMatch(
@@ -1939,7 +1952,7 @@ test(
       await page.getByTestId('inspector-tab-design').click();
       expect((await removeSave).ok()).toBeTruthy();
       await expect
-        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(false);
       expect(await savedDocument(editor)).not.toMatch(
         /<aside[^>]*data-ppt-notes/
@@ -1964,7 +1977,7 @@ test(
       await select.selectOption('fade');
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
       expect(
-        (await savedDocument(editor)).includes('data-ppt-transition="fade"')
+        await savedHas(editor, '[data-ppt-transition="fade"]')
       ).toBe(false);
 
       const save = waitForDeckSave(page);
@@ -1972,9 +1985,7 @@ test(
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () =>
-          (await savedDocument(editor)).includes('data-ppt-transition="fade"')
-        )
+        .poll(async () => savedHas(editor, '[data-ppt-transition="fade"]'))
         .toBe(true);
 
       await page.reload();
@@ -2015,9 +2026,7 @@ test(
         await expect(select).toHaveValue('none');
         await expect(page.getByTestId('transition-preview')).toBeDisabled();
         expect(saveRequests).toHaveLength(0);
-        expect(
-          (await savedDocument(editor)).includes('data-ppt-transition')
-        ).toBe(false);
+        expect(await savedHas(editor, '[data-ppt-transition]')).toBe(false);
       } finally {
         page.off('request', countSave);
       }
@@ -2027,9 +2036,7 @@ test(
       await page.getByTestId('transition-apply').click();
       expect((await save).ok()).toBeTruthy();
       await expect
-        .poll(async () =>
-          (await savedDocument(editor)).includes('data-ppt-transition="fade"')
-        )
+        .poll(async () => savedHas(editor, '[data-ppt-transition="fade"]'))
         .toBe(true);
     } finally {
       await closeEditor(editor);
@@ -2132,9 +2139,7 @@ test(
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () =>
-          (await savedDocument(editor)).includes('data-ppt-notes')
-        )
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(false);
 
       // The notes aside was the first child, so the old path 1 now resolves to
@@ -2759,8 +2764,13 @@ test(
         await page.keyboard.press('Control+ArrowRight');
         await expect(play.locator('h1')).toHaveText('Untitled deck');
 
-        // Keys work while the deck iframe owns focus.
-        await play.locator('h1').click();
+        // Keys work while the deck iframe owns focus. Focus without a click,
+        // because a noninteractive click now advances the presentation.
+        await play.locator('body').evaluate((body) => {
+          body.tabIndex = 0;
+          body.focus();
+        });
+        await expect(play.locator('body')).toBeFocused();
         await page.keyboard.press('ArrowRight');
         await expect(play.locator('h1')).toHaveText('Untitled deck — 2');
 
@@ -2803,10 +2813,10 @@ test(
 
         // Presenting never writes the deck.
         expect(saveRequests).toHaveLength(0);
-        const saved = await savedDocument(editor);
-        expect(saved).not.toContain('data-testid');
-        expect(saved).not.toContain('contenteditable');
-        expect(saved).not.toContain('data-ppt-frame-slide');
+        const saved = parseDeckHtml(await savedDocument(editor));
+        expect(saved.querySelector('[data-testid]')).toBeNull();
+        expect(saved.querySelector('[contenteditable]')).toBeNull();
+        expect(saved.querySelector('[data-ppt-frame-slide]')).toBeNull();
       } finally {
         page.off('request', countSave);
       }

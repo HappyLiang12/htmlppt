@@ -14,6 +14,7 @@ let frameSlideToken: string | null = null;
 const BASE_STYLE = `
 html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
 [data-slide-id] { margin: 0 !important; }
+[data-ppt-notes] { display: none !important; }
 `;
 
 export function parseDeck(html: string): Document {

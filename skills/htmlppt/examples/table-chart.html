@@ -77,10 +77,22 @@
   var index = 0;
   var runtimeStyle = 'data-ppt-runtime-style';
   var originalDisplay = slides.map(function (slide) { return slide.style.display; });
+  var sessionId = createSessionId();
+  var presentation = null;
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
     deck.setAttribute('data-ppt-ready', '1');
   });
+
+  function createSessionId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    var values = new Uint8Array(16);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(values);
+    else for (var i = 0; i < 16; i += 1) values[i] = Math.floor(Math.random() * 256);
+    var text = '';
+    for (var j = 0; j < values.length; j += 1) text += ('0' + values[j].toString(16)).slice(-2);
+    return text;
+  }
 
   function isEditing(target) {
     var element = target;
@@ -93,40 +105,422 @@
     return false;
   }
 
-  function show(next) {
-    index = Math.max(0, Math.min(slides.length - 1, next));
+  function isInteractive(target) {
+    var element = target;
+    while (element && element !== document.body) {
+      var tag = element.tagName;
+      if (tag === 'A' || tag === 'a' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'LABEL' || tag === 'SUMMARY' || tag === 'DETAILS') return true;
+      if ((tag === 'VIDEO' || tag === 'AUDIO') && element.hasAttribute('controls')) return true;
+      var role = element.getAttribute('role');
+      if (role === 'button' || role === 'link') return true;
+      if (element.isContentEditable) return true;
+      element = element.parentElement;
+    }
+    return false;
+  }
+
+  function transitionOf(slide) {
+    var value = slide.getAttribute('data-ppt-transition');
+    return value === 'fade' || value === 'slide' ? value : 'none';
+  }
+
+  function animateSlide(slide) {
+    if (!window.matchMedia || !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      var kind = transitionOf(slide);
+      if (kind !== 'none') {
+        slide.classList.remove('htmlppt-runtime-fade', 'htmlppt-runtime-slide');
+        void slide.offsetWidth;
+        slide.classList.add('htmlppt-runtime-' + kind);
+        window.setTimeout(function () {
+          slide.classList.remove('htmlppt-runtime-' + kind);
+        }, 500);
+      }
+    }
+  }
+
+  function postState() {
+    if (!presentation) return;
+    presentation.channel.postMessage({
+      sessionId: presentation.sessionId,
+      type: 'state',
+      index: index,
+      total: slides.length
+    });
+  }
+
+  function show(next, animate) {
+    var clamped = Math.max(0, Math.min(slides.length - 1, next));
+    var changed = clamped !== index;
+    index = clamped;
     slides.forEach(function (slide, i) {
       slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
+    if (changed && animate !== false) animateSlide(slides[index]);
     history.replaceState(null, '', '#/' + (index + 1));
+    postState();
+  }
+
+  function notice(message) {
+    var previous = document.querySelector('[data-ppt-runtime-notice]');
+    if (previous) previous.remove();
+    var element = document.createElement('div');
+    element.setAttribute('data-ppt-runtime-notice', '1');
+    element.setAttribute('data-testid', 'runtime-notice');
+    element.setAttribute('role', 'status');
+    element.textContent = message;
+    element.style.cssText = 'position:fixed;left:16px;top:16px;z-index:2147483647;max-width:380px;padding:8px 12px;border:1px solid rgba(245,158,11,.5);background:rgba(69,26,3,.92);color:#fef3c7;font:12px/1.5 system-ui,sans-serif;border-radius:6px';
+    document.body.appendChild(element);
+    window.setTimeout(function () {
+      element.remove();
+    }, 4000);
+  }
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      var exit = document.exitFullscreen();
+      if (exit && exit.catch) exit.catch(function () {});
+      return;
+    }
+    var request = document.documentElement.requestFullscreen;
+    if (!request) {
+      notice('此瀏覽器不支援全螢幕；請按 F11 手動全螢幕。');
+      return;
+    }
+    var result;
+    try {
+      result = request.call(document.documentElement);
+    } catch (error) {
+      notice('瀏覽器未允許全螢幕；請按 F11 手動全螢幕。');
+      return;
+    }
+    if (result && result.catch) {
+      result.catch(function () {
+        notice('瀏覽器未允許全螢幕；請按 F11 手動全螢幕。');
+      });
+    }
+  }
+
+  var PRESENTER_CSS = 'html,body{margin:0;background:#0b0d12;color:#e4e4e7;font:14px/1.5 system-ui,sans-serif}' +
+    'body{padding:20px;display:flex;flex-direction:column;gap:16px;min-height:100vh;box-sizing:border-box}' +
+    'header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid #27272a;padding-bottom:12px}' +
+    'h1{font-size:14px;margin:0;letter-spacing:.05em}' +
+    'h2{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:#71717a;margin:0 0 6px}' +
+    '.presenter-meta{display:flex;gap:16px;font-size:12px;color:#a1a1aa;margin:4px 0 0}' +
+    '[data-testid="presenter-status"]{color:#fcd34d}' +
+    '[data-testid="presenter-notes"]{min-height:96px;white-space:pre-wrap;border:1px solid #27272a;background:#18181b;padding:12px;border-radius:6px;margin:0}' +
+    '[data-testid="presenter-next-preview"]{display:flex;gap:16px;align-items:center;border:1px solid #27272a;background:#18181b;padding:12px;border-radius:6px;min-height:204px;box-sizing:border-box}' +
+    '.preview-holder{width:320px;height:180px;overflow:hidden;border-radius:4px;background:#fff;flex:none}' +
+    '.preview-holder iframe{width:1600px;height:900px;border:0;transform:scale(.2);transform-origin:top left;pointer-events:none;background:#fff}' +
+    '.presenter-actions{display:flex;gap:8px}' +
+    '.presenter-actions button{border:1px solid #3f3f46;background:transparent;color:#e4e4e7;border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer}' +
+    '.presenter-actions button:disabled{opacity:.4;cursor:default}';
+
+  function element(doc, tag, attributes, text) {
+    var node = doc.createElement(tag);
+    if (attributes) {
+      Object.keys(attributes).forEach(function (name) {
+        node.setAttribute(name, attributes[name]);
+      });
+    }
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function buildPresenterWindow(win) {
+    var doc = win.document;
+    doc.title = '簡報者檢視';
+    while (doc.body.firstChild) doc.body.removeChild(doc.body.firstChild);
+    doc.head.appendChild(element(doc, 'style', null, PRESENTER_CSS));
+    var root = element(doc, 'div', { 'data-testid': 'presenter-view' });
+    var header = element(doc, 'header');
+    var titleBlock = element(doc, 'div');
+    titleBlock.appendChild(element(doc, 'h1', null, '簡報者檢視'));
+    var pageMeta = element(doc, 'p', { class: 'presenter-meta' });
+    pageMeta.appendChild(element(doc, 'span', { 'data-testid': 'presenter-page' }, '第 0 / 0 頁'));
+    titleBlock.appendChild(pageMeta);
+    header.appendChild(titleBlock);
+    var meta = element(doc, 'div', { class: 'presenter-meta' });
+    meta.appendChild(element(doc, 'span', { 'data-testid': 'presenter-status' }, '等待主視窗…'));
+    meta.appendChild(element(doc, 'span', { 'data-testid': 'presenter-timer' }, '00:00'));
+    header.appendChild(meta);
+
+    var notesSection = element(doc, 'section');
+    notesSection.appendChild(element(doc, 'h2', null, '備註'));
+    notesSection.appendChild(element(doc, 'p', { 'data-testid': 'presenter-notes' }, '尚未連線。'));
+
+    var nextSection = element(doc, 'section');
+    nextSection.appendChild(element(doc, 'h2', null, '下一頁'));
+    var nextPreview = element(doc, 'div', { 'data-testid': 'presenter-next-preview' });
+    nextPreview.appendChild(element(doc, 'span', null, '（最後一頁）'));
+    nextSection.appendChild(nextPreview);
+
+    var actions = element(doc, 'div', { class: 'presenter-actions' });
+    var previous = element(doc, 'button', { type: 'button', 'data-testid': 'presenter-prev' }, '上一頁');
+    previous.disabled = true;
+    var next = element(doc, 'button', { type: 'button', 'data-testid': 'presenter-next' }, '下一頁');
+    next.disabled = true;
+    actions.appendChild(previous);
+    actions.appendChild(next);
+
+    root.appendChild(header);
+    root.appendChild(notesSection);
+    root.appendChild(nextSection);
+    root.appendChild(actions);
+    doc.body.appendChild(root);
+  }
+
+  function PRESENTER_CLIENT() {
+    var session = document.body.getAttribute('data-session-id');
+    if (!session) return;
+    var status = document.querySelector('[data-testid="presenter-status"]');
+    var timer = document.querySelector('[data-testid="presenter-timer"]');
+    var page = document.querySelector('[data-testid="presenter-page"]');
+    var notes = document.querySelector('[data-testid="presenter-notes"]');
+    var preview = document.querySelector('[data-testid="presenter-next-preview"]');
+    var prevButton = document.querySelector('[data-testid="presenter-prev"]');
+    var nextButton = document.querySelector('[data-testid="presenter-next"]');
+    var slides = [];
+    var headHtml = '';
+    var bodyFallback = false;
+    var index = 0;
+    var total = 0;
+    var lastState = 0;
+    var started = Date.now();
+    var channel = new BroadcastChannel('htmlppt-presenter-' + session);
+
+    function setStatus(text) {
+      if (status) status.textContent = text;
+    }
+    function request() {
+      channel.postMessage({ sessionId: session, type: 'request' });
+    }
+    function notesOf(slide) {
+      if (!slide) return '';
+      var aside = slide.querySelector('[data-ppt-notes]');
+      return aside ? (aside.textContent || '').trim() : '';
+    }
+    function titleOf(slide) {
+      if (!slide) return '';
+      var heading = slide.querySelector('h1, h2, h3, [data-ppt-title]');
+      return heading ? (heading.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    }
+    function renderPreview() {
+      if (!preview) return;
+      while (preview.firstChild) preview.removeChild(preview.firstChild);
+      var next = slides[index + 1];
+      if (!next) {
+        preview.appendChild(document.createTextNode('（最後一頁）'));
+        return;
+      }
+      var holder = document.createElement('div');
+      holder.className = 'preview-holder';
+      var width = Number(next.getAttribute('data-width')) || 1600;
+      var height = Number(next.getAttribute('data-height')) || 900;
+      var scale = 320 / width;
+      holder.style.height = Math.round(height * scale) + 'px';
+      var frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', '');
+      frame.setAttribute('title', '下一頁預覽');
+      frame.style.width = width + 'px';
+      frame.style.height = height + 'px';
+      frame.style.transform = 'scale(' + scale + ')';
+      frame.srcdoc = bodyFallback
+        ? '<!doctype html><html><head>' + headHtml + '</head><body>' + next.innerHTML + '</body></html>'
+        : '<!doctype html><html><head>' + headHtml + '</head><body><main data-ppt-deck>' + next.outerHTML + '</main></body></html>';
+      holder.appendChild(frame);
+      var label = document.createElement('span');
+      label.textContent = (index + 2) + '. ' + titleOf(next);
+      preview.appendChild(holder);
+      preview.appendChild(label);
+    }
+    function render() {
+      if (notes) notes.textContent = notesOf(slides[index]) || '此頁沒有備註。';
+      if (page) page.textContent = '第 ' + (total === 0 ? 0 : index + 1) + ' / ' + total + ' 頁';
+      renderPreview();
+      if (prevButton) prevButton.disabled = index <= 0;
+      if (nextButton) nextButton.disabled = total === 0 || index >= total - 1;
+    }
+    channel.onmessage = function (event) {
+      var message = event.data;
+      if (!message || message.sessionId !== session) return;
+      if (message.type === 'snapshot') {
+        var parsed = new DOMParser().parseFromString(message.html, 'text/html');
+        var found = parsed.querySelectorAll('[data-slide-id]');
+        slides = Array.prototype.slice.call(found.length ? found : [parsed.body]);
+        bodyFallback = found.length === 0;
+        headHtml = parsed.head ? parsed.head.innerHTML : '';
+        index = message.index;
+        total = message.total;
+        lastState = Date.now();
+        setStatus('已連線');
+        render();
+      } else if (message.type === 'state') {
+        index = message.index;
+        total = message.total;
+        lastState = Date.now();
+        setStatus('已連線');
+        render();
+      } else if (message.type === 'bye') {
+        setStatus('已中斷');
+      }
+    };
+    function sendSlide(next) {
+      if (next < 0 || next >= total) return;
+      channel.postMessage({ sessionId: session, type: 'slide', index: next });
+    }
+    if (prevButton) prevButton.onclick = function () { sendSlide(index - 1); };
+    if (nextButton) nextButton.onclick = function () { sendSlide(index + 1); };
+    var poll = window.setInterval(request, 2000);
+    var clock = window.setInterval(function () {
+      var elapsed = Math.floor((Date.now() - started) / 1000);
+      var minutes = Math.floor(elapsed / 60);
+      var seconds = elapsed % 60;
+      if (timer) timer.textContent = ('0' + minutes).slice(-2) + ':' + ('0' + seconds).slice(-2);
+      if (lastState !== 0 && Date.now() - lastState > 6000) setStatus('已中斷');
+    }, 1000);
+    window.addEventListener('pagehide', function () {
+      try {
+        channel.postMessage({ sessionId: session, type: 'bye' });
+      } catch (error) {}
+      channel.close();
+      window.clearInterval(poll);
+      window.clearInterval(clock);
+    });
+    request();
+  }
+
+  function snapshotHtml() {
+    var clone = document.documentElement.cloneNode(true);
+    var copied = clone.querySelectorAll('[data-slide-id]');
+    for (var i = 0; i < copied.length && i < originalDisplay.length; i += 1) {
+      copied[i].style.display = originalDisplay[i];
+    }
+    return '<!doctype html>' + clone.outerHTML;
+  }
+
+  function sendSnapshot() {
+    if (!presentation) return;
+    presentation.channel.postMessage({
+      sessionId: presentation.sessionId,
+      type: 'snapshot',
+      html: snapshotHtml(),
+      index: index,
+      total: slides.length
+    });
+  }
+
+  function closePresenter(notify) {
+    if (!presentation) return;
+    var current = presentation;
+    presentation = null;
+    window.clearInterval(current.closedTimer);
+    try {
+      if (notify) current.channel.postMessage({ sessionId: current.sessionId, type: 'bye' });
+    } catch (error) {}
+    try {
+      current.channel.close();
+    } catch (error) {}
+    if (notify && current.win && !current.win.closed) {
+      try {
+        current.win.close();
+      } catch (error) {}
+    }
+  }
+
+  function openPresenter() {
+    if (presentation && presentation.win && !presentation.win.closed) {
+      presentation.win.focus();
+      return;
+    }
+    if (presentation) closePresenter(false);
+    var win = window.open('', 'htmlppt-presenter-' + sessionId, 'popup=yes,width=960,height=720');
+    if (!win) {
+      notice('瀏覽器封鎖了簡報視窗。請允許此網站開啟彈出視窗，再按 P 重試。');
+      return;
+    }
+    var channel;
+    try {
+      channel = new BroadcastChannel('htmlppt-presenter-' + sessionId);
+    } catch (error) {
+      win.close();
+      notice('此瀏覽器不支援簡報者檢視。');
+      return;
+    }
+    presentation = { sessionId: sessionId, channel: channel, win: win, closedTimer: null };
+    buildPresenterWindow(win);
+    win.document.body.setAttribute('data-session-id', sessionId);
+    var client = win.document.createElement('script');
+    client.textContent = '(' + PRESENTER_CLIENT.toString() + ')();';
+    win.document.body.appendChild(client);
+    channel.onmessage = function (event) {
+      var message = event.data;
+      if (!message || message.sessionId !== sessionId) return;
+      if (message.type === 'request') {
+        sendSnapshot();
+        postState();
+      } else if (message.type === 'slide') {
+        var requested = message.index;
+        if (typeof requested === 'number' && Math.floor(requested) === requested && requested >= 0 && requested < slides.length) {
+          show(requested, true);
+        }
+      } else if (message.type === 'bye') {
+        closePresenter(true);
+      }
+    };
+    presentation.closedTimer = window.setInterval(function () {
+      if (win.closed) closePresenter(false);
+    }, 1000);
+    sendSnapshot();
+    postState();
   }
 
   document.addEventListener('keydown', function (event) {
     if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
+    if (event.key === ' ' && isInteractive(event.target)) return;
     if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
       event.preventDefault();
-      show(index + 1);
+      show(index + 1, true);
     } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
       event.preventDefault();
-      show(index - 1);
+      show(index - 1, true);
     } else if (event.key === 'Home') {
       event.preventDefault();
-      show(0);
+      show(0, true);
     } else if (event.key === 'End') {
       event.preventDefault();
-      show(slides.length - 1);
+      show(slides.length - 1, true);
+    } else if (event.key === 'f' || event.key === 'F') {
+      event.preventDefault();
+      toggleFullscreen();
+    } else if (event.key === 'p' || event.key === 'P') {
+      event.preventDefault();
+      openPresenter();
+    } else if (event.key === 'Escape' && document.fullscreenElement) {
+      var exit = document.exitFullscreen();
+      if (exit && exit.catch) exit.catch(function () {});
     }
+  });
+
+  document.addEventListener('click', function (event) {
+    if (event.defaultPrevented || isInteractive(event.target)) return;
+    show(index + 1, true);
   });
 
   window.addEventListener('hashchange', function () {
     var match = /#\/(\d+)/.exec(location.hash);
-    if (match) show(Number(match[1]) - 1);
+    if (match) show(Number(match[1]) - 1, true);
   });
 
   if (!document.querySelector('[' + runtimeStyle + ']')) {
     var style = document.createElement('style');
     style.setAttribute(runtimeStyle, '1');
-    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}' +
+      '[data-ppt-notes]{display:none!important}' +
+      '@keyframes htmlppt-runtime-fade{from{opacity:0}to{opacity:1}}' +
+      '@keyframes htmlppt-runtime-slide{from{opacity:.4;transform:translateX(6%)}to{opacity:1;transform:translateX(0)}}' +
+      '.htmlppt-runtime-fade{animation:htmlppt-runtime-fade 450ms ease-out}' +
+      '.htmlppt-runtime-slide{animation:htmlppt-runtime-slide 450ms ease-out}' +
+      '@media (prefers-reduced-motion: reduce){.htmlppt-runtime-fade,.htmlppt-runtime-slide{animation:none}}';
     document.head.appendChild(style);
   }
 
@@ -138,11 +532,15 @@
   });
   window.addEventListener('afterprint', function () {
     printState = null;
-    show(index);
+    show(index, false);
+  });
+
+  window.addEventListener('pagehide', function () {
+    closePresenter(true);
   });
 
   var initial = /#\/(\d+)/.exec(location.hash);
-  show(initial ? Number(initial[1]) - 1 : 0);
+  show(initial ? Number(initial[1]) - 1 : 0, false);
 })();
 </script>
 </body>

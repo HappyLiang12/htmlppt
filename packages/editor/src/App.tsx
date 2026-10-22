@@ -19,6 +19,7 @@ import {
   readShapeAppearance,
   replaceImageSource,
   sanitizePastedText,
+  serializeDeck,
   setImageAlt,
   setImageCrop,
   setShapeAppearance,
@@ -119,6 +120,7 @@ import {
   notesOf,
   readGeometry,
   snapshotGeometry,
+  transitionOf,
   type GeometryField,
   type GeometryValues,
   type SlideBackground
@@ -133,7 +135,16 @@ import {
   type InspectorStyleState,
   type ObjectActionState
 } from './components/Inspector';
-import { PlayView } from './components/PlayView';
+import {
+  PlayView,
+  isInteractiveDeckTarget,
+  type FullscreenState
+} from './components/PlayView';
+import {
+  parsePresenterMessage,
+  presenterChannelName,
+  presenterSlideIndex
+} from './presenter-protocol';
 import { SorterView } from './components/SorterView';
 import { ThumbnailRail } from './components/ThumbnailRail';
 import { Toolbar, type EditorView } from './components/Toolbar';
@@ -382,6 +393,17 @@ export function App() {
 
   const [view, setView] = useState<EditorView>('normal');
   const [playing, setPlaying] = useState(false);
+  const [fullscreen, setFullscreen] = useState<FullscreenState>('off');
+  const [fullscreenNotice, setFullscreenNotice] = useState('');
+  const [presenterError, setPresenterError] = useState('');
+  const playingRef = useRef(false);
+  const presentationIdRef = useRef<string | null>(null);
+  const presentationRef = useRef<{
+    sessionId: string;
+    channel: BroadcastChannel;
+    window: Window;
+    closeTimer: number;
+  } | null>(null);
   const [transitionPreview, setTransitionPreview] = useState<{
     transition: Transition;
     id: number;
@@ -508,6 +530,137 @@ export function App() {
     setGuides([]);
   }, []);
 
+  const requestPlayFullscreen = useCallback(async () => {
+    const root = document.documentElement;
+    if (
+      !document.fullscreenEnabled ||
+      typeof root.requestFullscreen !== 'function'
+    ) {
+      setFullscreen('unavailable');
+      setFullscreenNotice(
+        '此瀏覽器或環境不支援全螢幕。按 F11 可手動全螢幕；Escape 返回編輯器。'
+      );
+      return;
+    }
+    try {
+      await root.requestFullscreen();
+      setFullscreen('active');
+      setFullscreenNotice('');
+    } catch {
+      setFullscreen('unavailable');
+      setFullscreenNotice(
+        '瀏覽器未允許全螢幕。按 F11 可手動全螢幕；Escape 返回編輯器。'
+      );
+    }
+  }, []);
+
+  const closePresenter = useCallback((notify: boolean) => {
+    const presenter = presentationRef.current;
+    if (!presenter) return;
+    presentationRef.current = null;
+    window.clearInterval(presenter.closeTimer);
+    try {
+      if (notify) {
+        presenter.channel.postMessage({
+          sessionId: presenter.sessionId,
+          type: 'bye'
+        });
+      }
+    } catch {
+      // The presenter window may already be gone.
+    }
+    try {
+      presenter.channel.close();
+    } catch {
+      // Closing an already-closed channel is harmless.
+    }
+    if (notify && !presenter.window.closed) {
+      presenter.window.close();
+    }
+  }, []);
+
+  const stopPlay = useCallback(() => {
+    playingRef.current = false;
+    closePresenter(true);
+    setPlaying(false);
+    setPresenterError('');
+    setFullscreenNotice('');
+    setFullscreen('off');
+    presentationIdRef.current = null;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, [closePresenter]);
+
+  const openPresenter = useCallback(() => {
+    if (!playing) return;
+    const existing = presentationRef.current;
+    if (existing && !existing.window.closed) {
+      existing.window.focus();
+      return;
+    }
+    if (existing) closePresenter(false);
+
+    const sessionId =
+      presentationIdRef.current ?? crypto.randomUUID();
+    presentationIdRef.current = sessionId;
+    const popup = window.open(
+      `/?presenter=1&session=${encodeURIComponent(sessionId)}`,
+      presenterChannelName(sessionId),
+      'popup=yes,width=960,height=720'
+    );
+    if (!popup) {
+      setPresenterError(
+        '瀏覽器封鎖了簡報者視窗。請允許此網站開啟彈出視窗，再按 P 或「簡報者」重試。'
+      );
+      return;
+    }
+
+    const channel = new BroadcastChannel(presenterChannelName(sessionId));
+    const presenter = { sessionId, channel, window: popup, closeTimer: 0 };
+    presentationRef.current = presenter;
+
+    const sendSnapshot = () => {
+      const current = stateRef.current;
+      if (!current.master) return;
+      channel.postMessage({
+        sessionId,
+        type: 'snapshot',
+        html: serializeDeck(current.master),
+        index: current.activeIndex,
+        total: current.slides.length
+      });
+      channel.postMessage({
+        sessionId,
+        type: 'state',
+        index: current.activeIndex,
+        total: current.slides.length
+      });
+    };
+
+    channel.onmessage = (event) => {
+      const message = parsePresenterMessage(event.data, sessionId);
+      if (!message) return;
+      if (message.type === 'request') {
+        sendSnapshot();
+      } else if (message.type === 'slide') {
+        const current = stateRef.current;
+        const target = presenterSlideIndex(
+          message.index,
+          current.slides.length
+        );
+        if (target !== null) actionsRef.current.showSlide(target);
+      } else if (message.type === 'bye') {
+        closePresenter(false);
+      }
+    };
+    presenter.closeTimer = window.setInterval(() => {
+      if (popup.closed) closePresenter(false);
+    }, 1_000);
+    sendSnapshot();
+    setPresenterError('');
+  }, [closePresenter, playing]);
+
   const startPlay = useCallback(
     (fromCurrent: boolean) => {
       if (!actionsRef.current.settlePendingEdits()) return;
@@ -516,10 +669,51 @@ export function App() {
       actionsRef.current.clearSelection();
       clearOverlay();
       if (!fromCurrent) actionsRef.current.showSlide(0);
+      presentationIdRef.current = crypto.randomUUID();
+      playingRef.current = true;
+      setPresenterError('');
+      setFullscreenNotice('');
+      setFullscreen('off');
+      void requestPlayFullscreen();
       setPlaying(true);
     },
-    [clearOverlay]
+    [clearOverlay, requestPlayFullscreen]
   );
+
+  useEffect(() => {
+    const onChange = () => {
+      const active = document.fullscreenElement !== null;
+      setFullscreen(active ? 'active' : 'off');
+      if (active) {
+        setFullscreenNotice('');
+      }
+      if (!active && playingRef.current) {
+        // Fullscreen can end without leaving play (for example when the
+        // presenter popup opens). Keep presenting and explain how to return.
+        setFullscreenNotice(
+          '已離開全螢幕。按 F 重新進入，Escape 返回編輯器。'
+        );
+      }
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!playing) return;
+    const presenter = presentationRef.current;
+    if (!presenter) return;
+    if (presenter.window.closed) {
+      closePresenter(false);
+      return;
+    }
+    presenter.channel.postMessage({
+      sessionId: presenter.sessionId,
+      type: 'state',
+      index: activeIndex,
+      total: slides.length
+    });
+  }, [playing, activeIndex, slides.length, closePresenter]);
 
   const resolveConflict = useCallback((choice: ConflictResolution) => {
     const plan = planConflictResolution(choice);
@@ -955,6 +1149,12 @@ export function App() {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
+
+  useEffect(() => {
+    const onPageHide = () => closePresenter(true);
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [closePresenter]);
 
   const computeFitScale = useCallback(() => {
     if (!canvas.current) return;
@@ -1711,10 +1911,18 @@ export function App() {
         // Escape is the exit hatch even when a deck control owns focus.
         if (event.key === 'Escape') {
           event.preventDefault();
-          setPlaying(false);
+          stopPlay();
           return;
         }
         if (editable) return;
+        // Space activates a focused deck control natively instead of
+        // advancing the presentation.
+        if (
+          (event.key === ' ' || event.key === 'Spacebar') &&
+          isInteractiveDeckTarget(event.target)
+        ) {
+          return;
+        }
         if (
           event.altKey ||
           event.ctrlKey ||
@@ -1724,6 +1932,20 @@ export function App() {
           return;
         }
         switch (event.key) {
+          case 'p':
+          case 'P':
+            event.preventDefault();
+            openPresenter();
+            return;
+          case 'f':
+          case 'F':
+            event.preventDefault();
+            if (document.fullscreenElement) {
+              void document.exitFullscreen().catch(() => undefined);
+            } else {
+              void requestPlayFullscreen();
+            }
+            return;
           case 'ArrowLeft':
           case 'PageUp':
             event.preventDefault();
@@ -1883,6 +2105,9 @@ export function App() {
       playing,
       startPlay,
       startTextEditing,
+      stopPlay,
+      openPresenter,
+      requestPlayFullscreen,
       zoomBy
     ]
   );
@@ -2438,9 +2663,20 @@ export function App() {
             ? buildSlideSrcDoc(master, activeSlide, { markFrame: false })
             : srcDoc
         }
+        transition={transitionOf(activeSlide.element)}
+        fullscreen={fullscreen}
+        fullscreenNotice={fullscreenNotice || undefined}
+        presenterError={presenterError || undefined}
         onKeyDown={(event, playDocument) =>
           keyDownRef.current(event, playDocument)
         }
+        onAdvance={() => {
+          const current = stateRef.current;
+          actionsRef.current.showSlide(
+            Math.min(current.slides.length - 1, current.activeIndex + 1)
+          );
+        }}
+        onOpenPresenter={openPresenter}
       />
     );
   }
