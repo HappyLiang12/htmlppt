@@ -120,6 +120,7 @@ test(
       expect(savedAfterSecondEdit).not.toContain('contenteditable');
 
       await page.getByRole('button', { name: '下一頁' }).click();
+      await expect(frame.locator('h1')).toBeVisible();
       await expect(frame.locator('h1')).toContainText('Untitled deck — 2');
       await page.getByRole('button', { name: '上一頁' }).click();
       await expect(frame.locator('h1')).toContainText('Final deck title');
@@ -389,22 +390,43 @@ test(
       const frame = page.frameLocator('iframe[title="投影片預覽"]');
       await expect(frame.locator('h1')).toContainText('First heading');
 
+      const saveResponse = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === '/api/deck'
+      );
       await frame.locator('h1').dblclick();
       await frame.locator('h1').fill('Spoofed heading updated');
       await frame.locator('h1').press('Escape');
-      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      const response = await saveResponse;
+
+      // A broken preview lookup would throw before any PUT; the request body
+      // proves the authored marker did not redirect the commit away from s1.
+      const payload = response.request().postDataJSON() as { html: string };
+      const firstSlideTag =
+        /<section[^>]*data-slide-id="s1"[^>]*>/.exec(payload.html)?.[0] ?? '';
+      expect(firstSlideTag).not.toBe('');
+      expect(firstSlideTag).not.toContain('data-ppt-frame-slide');
+      expect(payload.html).toMatch(
+        /data-slide-id="s1"[\s\S]*Spoofed heading updated[\s\S]*data-slide-id="s2"/
+      );
+
+      // M1 makes authored editor-only attributes a contract error, so the
+      // host refuses the write and leaves the invalid deck untouched.
+      expect(response.status()).toBe(400);
+      expect(await response.json()).toEqual(
+        expect.objectContaining({ error: 'invalid deck' })
+      );
+      await expect(page.getByTestId('save-status')).toHaveText('儲存失敗');
 
       const saved = await readFile(join(directory, 'spoofed.html'), 'utf8');
-      expect(saved).toContain('Spoofed heading updated');
+      expect(saved).toContain('First heading');
+      expect(saved).not.toContain('Spoofed heading updated');
       expect(saved).toContain('Second heading');
       expect(saved).toContain('data-slide-id="s1"');
       expect(saved).toContain('data-slide-id="s2"');
       expect(saved).toMatch(/<meta[^>]*data-ppt-frame-slide="1"/);
       expect(saved).not.toContain('contenteditable');
-      const firstSlideTag =
-        /<section[^>]*data-slide-id="s1"[^>]*>/.exec(saved)?.[0] ?? '';
-      expect(firstSlideTag).not.toBe('');
-      expect(firstSlideTag).not.toContain('data-ppt-frame-slide');
       expect(saved.match(/data-ppt-frame-slide/g)).toHaveLength(2);
     } finally {
       await host?.stop();

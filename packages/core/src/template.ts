@@ -59,6 +59,10 @@ export function createDeckHtml(options: CreateDeckOptions = {}): string {
   :root { color-scheme: light; }
   html, body { margin: 0; padding: 0; background: #0b0d12; }
   .slide { width: ${width}px; height: ${height}px; position: relative; overflow: hidden; background: #f7f5ef; color: #17181c; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+  [data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }
+  @media print {
+    [data-ppt-deck] > [data-slide-id] { display: block !important; break-after: page; }
+  }
   .slide-inner { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding: 96px; }
   .kicker { margin: 0 0 18px; font-size: 22px; letter-spacing: .18em; text-transform: uppercase; color: #9a6b1f; }
   h1 { margin: 0; font-size: 96px; line-height: 1.05; max-width: 1200px; }

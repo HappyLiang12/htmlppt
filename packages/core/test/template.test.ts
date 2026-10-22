@@ -122,4 +122,14 @@ describe('createDeckHtml', () => {
     expect(subPixelSlide?.getAttribute('data-width')).toBe('1');
     expect(subPixelSlide?.getAttribute('data-height')).toBe('1');
   });
+
+  it('hides every slide after the first until the runtime runs', () => {
+    const html = createDeckHtml({ slides: 2 });
+
+    expect(html).toContain(
+      '[data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }'
+    );
+    expect(html).toContain('@media print');
+    expect(html).toContain('break-after: page');
+  });
 });

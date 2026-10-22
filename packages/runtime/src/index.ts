@@ -3,19 +3,29 @@ export const RUNTIME_SOURCE = String.raw`
   var slides = Array.prototype.slice.call(document.querySelectorAll('[data-slide-id]'));
   if (!slides.length) return;
   var index = 0;
-  var originalDisplay = slides.map(function (slide) {
-    return slide.style.display;
-  });
+  var runtimeStyle = 'data-ppt-runtime-style';
+  var originalDisplay = slides.map(function (slide) { return slide.style.display; });
+
+  function isEditing(target) {
+    var element = target;
+    while (element && element !== document.body) {
+      var tag = element.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      element = element.parentElement;
+    }
+    return false;
+  }
 
   function show(next) {
     index = Math.max(0, Math.min(slides.length - 1, next));
     slides.forEach(function (slide, i) {
-      slide.style.display = i === index ? originalDisplay[i] : 'none';
+      slide.style.display = i === index ? (originalDisplay[i] || 'block') : 'none';
     });
     history.replaceState(null, '', '#/' + (index + 1));
   }
 
   document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target)) return;
     if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
       event.preventDefault();
       show(index + 1);
@@ -34,6 +44,25 @@ export const RUNTIME_SOURCE = String.raw`
   window.addEventListener('hashchange', function () {
     var match = /#\/(\d+)/.exec(location.hash);
     if (match) show(Number(match[1]) - 1);
+  });
+
+  if (!document.querySelector('[' + runtimeStyle + ']')) {
+    var style = document.createElement('style');
+    style.setAttribute(runtimeStyle, '1');
+    style.textContent = '@media print{[data-slide-id]{display:block !important;break-after:page;page-break-after:always}}';
+    document.head.appendChild(style);
+  }
+
+  var printState = null;
+  window.addEventListener('beforeprint', function () {
+    if (printState) return;
+    printState = slides.map(function (slide) { return slide.style.display; });
+    slides.forEach(function (slide) { slide.style.removeProperty('display'); });
+  });
+  window.addEventListener('afterprint', function () {
+    if (!printState) return;
+    slides.forEach(function (slide, i) { slide.style.display = printState[i]; });
+    printState = null;
   });
 
   var initial = /#\/(\d+)/.exec(location.hash);
