@@ -2551,9 +2551,28 @@ git commit -m "test(core): add golden contract fixtures"
 
 ---
 
+### Task 9: Final hardening (follow-up batch)
+
+Scope: clear the Minors parked by the Task 2, 4, 6, 7, and 8 reviews. No new features.
+
+- **Core outline:** runtime presence uses the same trimmed `[data-ppt-runtime]` script check as validation; absent or whitespace-only notes return `null`; summaries exclude nested `script`, `style`, and `template` text; tag exclusion normalizes with `.toUpperCase()`.
+- **Core mutations:** `setNotes` and `addSlide` collapse duplicate direct notes asides; `addSlide`, `duplicateSlide`, and `setTransition` document that option values are validated only through `mutateDeck`.
+- **Runtime:** `afterprint` clears the print snapshot and calls `show(index)`, so a missed or duplicate event cannot leave every slide visible.
+- **Tests:** direct CRLF read-helper proof, active-slide `flex` and visible-count assertions after print restore, a second runtime execution proving the stylesheet is injected once, spacing-tolerant print CSS assertions, and validation negative rules (`application/ld+json`, `tel:`/`//` URLs, top-level script location, warnings keep `valid === true`).
+- **Docs and line endings:** root `.gitattributes` forces LF under `test-utils/fixtures/**` and `e2e/**`; the `basic` fixture is documented as 2 slides.
+
+Deferred beyond M1:
+
+- Partial-deck detection: partially annotated decks normalize only the detected slides.
+- Editor-artifact UX: artifacts are rejected by validation but have no guided repair flow.
+- beforeprint reliance for PDF export: export assumes browser print events fire reliably.
+
+---
+
 ## Self-Review
 
 - **Spec coverage:** §4 contract attributes are validated and preserved; §11 normalization (ids, position injectable, artifact cleanup), validation errors/warnings, diagnostics with slide id and location; §6 read models `getOutline`/`readSlide`; MCP mutation list minus assets/tables/charts/groups (M4) and background (editor settings, M3/M4), all slide ops, notes, transitions, and element ops covered; runtime §Runtime initial state, print, navigation guards; test framework §5 fixtures and golden files.
+- **Fixture counts:** `basic` is 2 slides (matches the M0 fixture); host tests depend on it.
 - **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). Normalization follows detection precedence: partially annotated decks normalize only the detected slides; ignored classed siblings are a detection-semantics gap deferred to M2/M3, not silently promoted. `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
 - **Type consistency:** `SlideInfo` gains `widthValid`/`heightValid`; every consumer uses `readCanvasSize`; `DeckMutationError` is exported from both `target.ts` and `mutations.ts` (same class); `Transition` is used by template-independent mutations only.
 - **No placeholders:** every task names exact files, codes, messages, test code, and commands. The only generated artifacts are golden files, with an explicit inspection checklist.

@@ -89,7 +89,7 @@ These are mandatory for every test:
 
 Fixtures:
 
-- `basic`: contract deck, 3 slides.
+- `basic`: contract deck, 2 slides (matches the M0 fixture).
 - `rich`: text, image, shape, group, table, chart, notes, transition, runtime.
 - `messy`: sections without ids, mixed canvas sizes, inline styles, relative assets, scripts.
 - `animated`: CSS animations and transitions.

@@ -74,6 +74,55 @@ describe('getOutline', () => {
     expect(outline.slides[0].id).toBe('body');
     expect(outline.slides[0].elements[0].tag).toBe('h1');
   });
+
+  it('omits non-object tags from the element list', () => {
+    const doc = parseDeckHtml(`<!doctype html><html><head><title>T</title></head><body>
+<section data-slide-id="s1">
+  <script>window.hidden = true;</script>
+  <style>.hidden { color: red; }</style>
+  <template><p>Template copy</p></template>
+  <link rel="stylesheet" href="https://example.com/deck.css">
+  <meta name="author" content="Hidden">
+  <p data-ppt-el="e1">Kept</p>
+</section>
+</body></html>`);
+
+    expect(getOutline(doc).slides[0].elements.map((element) => element.tag)).toEqual(['p']);
+  });
+
+  it('summarizes only text outside nested script, style, and template elements', () => {
+    const doc = parseDeckHtml(`<!doctype html><html><head><title>T</title></head><body>
+<section data-slide-id="s1">
+  <div data-ppt-el="e1">Visible<script>hiddenScript()</script><style>.secret {}</style><template>Hidden template</template> copy</div>
+</section>
+</body></html>`);
+
+    expect(getOutline(doc).slides[0].elements[0].text).toBe('Visible copy');
+  });
+
+  it('requires a script with a trimmed runtime marker value', () => {
+    const invalid = parseDeckHtml(
+      '<!doctype html><html><head><title>T</title></head><body><section data-slide-id="s1"></section><div data-ppt-runtime="1"></div></body></html>'
+    );
+    expect(getOutline(invalid).runtime).toBe(false);
+
+    const padded = parseDeckHtml(
+      '<!doctype html><html><head><title>T</title></head><body><section data-slide-id="s1"></section><script data-ppt-runtime=" 1 "></script></body></html>'
+    );
+    expect(getOutline(padded).runtime).toBe(true);
+  });
+
+  it('collapses notes whitespace and returns null for empty notes', () => {
+    const doc = parseDeckHtml(`<!doctype html><html><head><title>T</title></head><body>
+<section data-slide-id="s1"><aside data-ppt-notes hidden>  Speaker
+  notes   here  </aside></section>
+<section data-slide-id="s2"><aside data-ppt-notes hidden>   </aside></section>
+</body></html>`);
+
+    const outline = getOutline(doc);
+    expect(outline.slides[0].notes).toBe('Speaker notes here');
+    expect(outline.slides[1].notes).toBeNull();
+  });
 });
 
 describe('readSlide', () => {
@@ -92,9 +141,21 @@ describe('readSlide', () => {
     expect(slide.html).toContain('data-ppt-notes');
   });
 
-  it('throws for an unknown slide', () => {
-    expect(() => readSlide(parseDeckHtml(source), 'missing')).toThrow(
-      'Slide "missing" was not found.'
+  it('throws for an unknown slide with the exact message', () => {
+    expect(() => readSlide(parseDeckHtml(source), 'missing')).toThrowError(
+      new Error('Slide "missing" was not found.')
     );
+  });
+
+  it('resolves duplicate slide ids to the first slide', () => {
+    const duplicate = parseDeckHtml(`<!doctype html><html><head><title>T</title></head><body>
+<section data-slide-id="dup"><p>First</p></section>
+<section data-slide-id="dup"><p>Second</p></section>
+</body></html>`);
+
+    const slide = readSlide(duplicate, 'dup');
+    expect(slide.index).toBe(0);
+    expect(slide.html).toContain('First');
+    expect(slide.html).not.toContain('Second');
   });
 });

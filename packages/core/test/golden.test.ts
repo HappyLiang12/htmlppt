@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { normalizeDeck } from '../src/normalize.js';
@@ -8,8 +10,16 @@ import { serializeDeck } from '../src/serialize.js';
 import { validateDeck } from '../src/validate.js';
 
 const fixtures = fileURLToPath(new URL('../../../test-utils/fixtures/', import.meta.url));
-const read = (name: string) =>
-  readFileSync(`${fixtures}${name}`, 'utf8').replace(/\r\n?/g, '\n');
+
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+function readPath(path: string): string {
+  return normalizeEol(readFileSync(path, 'utf8'));
+}
+
+const read = (name: string) => readPath(`${fixtures}${name}`);
 const parse = (name: string) => parseDeckHtml(read(name));
 
 describe('golden fixtures', () => {
@@ -53,6 +63,18 @@ describe('golden fixtures', () => {
 
     expect(serialize(crlf)).toBe(serialize(lf));
     expect(serialize(crlf)).toBe(read('messy.normalized.expected.html'));
+  });
+
+  it('normalizes CRLF fixture input through the read helper', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'htmlppt-golden-'));
+    try {
+      const file = join(directory, 'crlf.deck.html');
+      writeFileSync(file, '<section>\r\n<p>CRLF</p>\r\n</section>\r\n', 'utf8');
+
+      expect(readPath(file)).toBe('<section>\n<p>CRLF</p>\n</section>\n');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('infers the messy fixture canvas from inline styles and data attributes', () => {

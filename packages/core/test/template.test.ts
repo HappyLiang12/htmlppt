@@ -131,6 +131,57 @@ describe('createDeckHtml', () => {
     );
     expect(html).toContain('@media print');
     expect(html).toContain('break-after: page');
-    expect(html).not.toContain('display: block !important');
+    expect(html).not.toMatch(/display\s*:\s*block\s*!important/i);
+  });
+});
+
+describe('validation negative rules', () => {
+  const validate = (body: string) =>
+    validateDeck(
+      parseDeckHtml(
+        `<!doctype html><html><head><title>Rules</title></head><body>${body}</body></html>`
+      )
+    );
+
+  it('does not warn about application/ld+json script data', () => {
+    const result = validate(
+      '<section data-slide-id="s1"></section><script type="application/ld+json">{"@context":"https://schema.org"}</script>'
+    );
+
+    expect(result.warnings).not.toContainEqual(
+      expect.objectContaining({ code: 'script-present' })
+    );
+  });
+
+  it('does not warn about tel: or protocol-relative URLs', () => {
+    const result = validate(
+      '<section data-slide-id="s1"><a href="tel:+15551212">Call</a><a href="//example.com/deck">CDN</a></section>'
+    );
+
+    expect(result.warnings).not.toContainEqual(
+      expect.objectContaining({ code: 'relative-asset' })
+    );
+  });
+
+  it('locates a top-level non-runtime script at document scope', () => {
+    const result = validate(
+      '<section data-slide-id="s1"></section><script>window.x = 1;</script>'
+    );
+
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ code: 'script-present', location: 'document > script' })
+    );
+  });
+
+  it('keeps a deck with warnings valid', () => {
+    const result = validate(
+      '<section data-slide-id="s1"></section><section data-slide-id="s2"></section>'
+    );
+
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ code: 'missing-runtime' })
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
   });
 });

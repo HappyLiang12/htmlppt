@@ -178,6 +178,27 @@ function appendNotes(slide: Element, notes: string, doc: Document): void {
   slide.appendChild(aside);
 }
 
+function writeNotes(slide: Element, notes: string, doc: Document): void {
+  const asides = Array.from(slide.children).filter((child) =>
+    child.hasAttribute('data-ppt-notes')
+  );
+  const [aside, ...duplicates] = asides;
+  for (const duplicate of duplicates) duplicate.remove();
+  if (!notes) {
+    aside?.remove();
+    return;
+  }
+  if (aside) {
+    aside.textContent = notes;
+    return;
+  }
+  appendNotes(slide, notes, doc);
+}
+
+/**
+ * Adds a slide to a draft document. Option values (transition, width, and
+ * height) are validated only when the call is wrapped in {@link mutateDeck}.
+ */
 export function addSlide(doc: Document, options: AddSlideOptions = {}): string {
   const slides = explicitSlides(doc);
   const ids = options.ids ?? defaultIdFactory;
@@ -198,7 +219,7 @@ export function addSlide(doc: Document, options: AddSlideOptions = {}): string {
     }
   }
   if (options.notes !== undefined && options.notes !== '') {
-    appendNotes(section, options.notes, doc);
+    writeNotes(section, options.notes, doc);
   }
 
   const reference = options.afterSlideId
@@ -211,6 +232,10 @@ export function addSlide(doc: Document, options: AddSlideOptions = {}): string {
   return id;
 }
 
+/**
+ * Duplicates a slide in a draft document. The clone is not validated unless
+ * the call is wrapped in {@link mutateDeck}.
+ */
 export function duplicateSlide(doc: Document, slideId: string): string {
   const slides = explicitSlides(doc);
   const source = slides.find((slide) => slide.id === slideId);
@@ -287,26 +312,13 @@ export function updateSlideHtml(doc: Document, slideId: string, html: string): v
 
 export function setNotes(doc: Document, slideId: string, notes: string): void {
   const slide = findSlide(doc, slideId);
-  let aside: Element | null = null;
-  for (const child of Array.from(slide.element.children)) {
-    if (child.hasAttribute('data-ppt-notes')) {
-      aside = child;
-      break;
-    }
-  }
-  if (!notes) {
-    if (aside) aside.parentElement?.removeChild(aside);
-    return;
-  }
-  if (!aside) {
-    aside = doc.createElement('aside');
-    aside.setAttribute('data-ppt-notes', '');
-    aside.setAttribute('hidden', '');
-    slide.element.appendChild(aside);
-  }
-  aside.textContent = notes;
+  writeNotes(slide.element, notes, doc);
 }
 
+/**
+ * Sets a slide transition. The transition value is checked here; the result
+ * is validated only when the call is wrapped in {@link mutateDeck}.
+ */
 export function setTransition(doc: Document, slideId: string, transition: Transition): void {
   if (!TRANSITIONS.has(transition)) {
     fail('invalid-transition', `Transition "${transition}" is not one of none, fade, slide.`);

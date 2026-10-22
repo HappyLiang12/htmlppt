@@ -77,6 +77,48 @@ test.describe('presentation runtime', () => {
         await page.emulateMedia({ media: 'screen' });
         await expect(page.locator('[data-slide-id="s1"]')).toBeHidden();
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        await expect(page.locator('[data-slide-id]:visible')).toHaveCount(1);
+        expect(
+          await page.locator('[data-slide-id="s2"]').evaluate(readDisplay)
+        ).toBe('flex');
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('restores the active slide after navigating during print', { tag: '@feature:runtime' }, async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
+    try {
+      await execa('node', [cliPath, 'new', 'deck.html', '--slides', '2'], { cwd: directory });
+      const file = join(directory, 'deck.html');
+      const html = (await readFile(file, 'utf8')).replace(
+        '.slide {',
+        '.slide { display: flex;'
+      );
+      const server = await serveHtml(html);
+      try {
+        await page.goto(server.url);
+        await page.keyboard.press('ArrowRight');
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+
+        await page.emulateMedia({ media: 'print' });
+        await page.evaluate("window.dispatchEvent(new Event('beforeprint'))");
+        await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+
+        await page.keyboard.press('Home');
+        expect(page.url()).toContain('#/1');
+
+        await page.evaluate("window.dispatchEvent(new Event('afterprint'))");
+        await page.emulateMedia({ media: 'screen' });
+        await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+        await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+        await expect(page.locator('[data-slide-id]:visible')).toHaveCount(1);
+        expect(
+          await page.locator('[data-slide-id="s1"]').evaluate(readDisplay)
+        ).toBe('flex');
       } finally {
         await server.close();
       }
@@ -106,6 +148,15 @@ test.describe('presentation runtime', () => {
         await page.keyboard.press('ArrowRight');
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
         expect(page.url()).toContain('#/2');
+
+        await page.evaluate(`(() => {
+          const source = document.querySelector('script[data-ppt-runtime="1"]').textContent;
+          if (!source) throw new Error('Runtime source missing.');
+          const copy = document.createElement('script');
+          copy.textContent = source;
+          document.body.appendChild(copy);
+        })()`);
+        await expect(page.locator('style[data-ppt-runtime-style="1"]')).toHaveCount(1);
       } finally {
         await server.close();
       }

@@ -65,9 +65,8 @@ export const RUNTIME_SOURCE = String.raw`
     slides.forEach(function (slide) { slide.style.removeProperty('display'); });
   });
   window.addEventListener('afterprint', function () {
-    if (!printState) return;
-    slides.forEach(function (slide, i) { slide.style.display = printState[i]; });
     printState = null;
+    show(index);
   });
 
   var initial = /#\/(\d+)/.exec(location.hash);

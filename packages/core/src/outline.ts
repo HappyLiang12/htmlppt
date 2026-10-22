@@ -41,7 +41,13 @@ export interface SlideReadModel {
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
 
 function summarize(element: Element): string {
-  const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const clone = element.cloneNode(true) as Element;
+  for (const descendant of Array.from(
+    clone.querySelectorAll('script, style, template')
+  )) {
+    descendant.remove();
+  }
+  const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
   return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
@@ -60,7 +66,8 @@ function pathOf(slide: Element, element: Element): number[] {
 function notesOf(slide: Element): string | null {
   for (const child of Array.from(slide.children)) {
     if (child.hasAttribute('data-ppt-notes')) {
-      return (child.textContent ?? '').replace(/\s+/g, ' ').trim();
+      const notes = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
+      return notes.length > 0 ? notes : null;
     }
   }
   return null;
@@ -70,7 +77,8 @@ function elementsOf(slide: SlideInfo): OutlineElement[] {
   return Array.from(slide.element.children)
     .filter(
       (element) =>
-        !NON_OBJECT_TAGS.has(element.tagName) && !element.hasAttribute('data-ppt-notes')
+        !NON_OBJECT_TAGS.has(element.tagName.toUpperCase()) &&
+        !element.hasAttribute('data-ppt-notes')
     )
     .map((element) => ({
       id: element.getAttribute('data-ppt-el')?.trim() || null,
@@ -90,7 +98,11 @@ export function getOutline(doc: Document): DeckOutline {
     width: first?.width ?? 1600,
     height: first?.height ?? 900,
     slideCount: slides.length,
-    runtime: doc.querySelector('script[data-ppt-runtime="1"]') !== null,
+    runtime: Array.from(doc.querySelectorAll('[data-ppt-runtime]')).some(
+      (marker) =>
+        marker.tagName === 'SCRIPT' &&
+        marker.getAttribute('data-ppt-runtime')?.trim() === '1'
+    ),
     slides: slides.map((slide) => ({
       id: slide.id,
       index: slide.index,

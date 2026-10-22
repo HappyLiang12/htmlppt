@@ -256,6 +256,50 @@ describe('slide mutations', () => {
     expect(added.getAttribute('data-ppt-transition')).toBe('slide');
   });
 
+  it('appends a slide by default without moving existing slides', () => {
+    const doc = parseDeckHtml(source);
+    const id = addSlide(doc, { html: '<h1>Appended</h1>' });
+
+    expect(id).toBe('s3');
+    expect(ids(doc)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('copies supplied canvas dimensions onto the new slide', () => {
+    const doc = parseDeckHtml(source);
+    const id = addSlide(doc, { html: '<h1>Canvas</h1>', width: 1024, height: 768 });
+    const added = doc.querySelector(`[data-slide-id="${id}"]`) as Element;
+
+    expect(added.getAttribute('data-width')).toBe('1024');
+    expect(added.getAttribute('data-height')).toBe('768');
+  });
+
+  it('uses the injected id factory for the new slide id', () => {
+    const doc = parseDeckHtml(source);
+    const id = addSlide(doc, {
+      html: '<h1>Custom id</h1>',
+      ids: { slideId: () => 'custom', elementId: () => 'unused' }
+    });
+
+    expect(id).toBe('custom');
+    expect(doc.querySelector('[data-slide-id="custom"]')).not.toBeNull();
+  });
+
+  it('picks the next free id when slide ids are not contiguous', () => {
+    const sparse = parseDeckHtml(
+      `<!doctype html><html><head><title>Deck</title></head><body><section data-slide-id="s1"></section><section data-slide-id="s3"></section></body></html>`
+    );
+
+    expect(addSlide(sparse, { html: '<p>Sparse</p>' })).toBe('s2');
+  });
+
+  it('throws slide-not-found for a missing insertion anchor', () => {
+    const doc = parseDeckHtml(source);
+    expect(() =>
+      addSlide(doc, { html: '<h1>Missing anchor</h1>', afterSlideId: 'nope' })
+    ).toThrow(expect.objectContaining({ code: 'slide-not-found' }));
+    expect(ids(doc)).toEqual(['s1', 's2']);
+  });
+
   it('duplicates a slide with a new id and deep content', () => {
     const doc = parseDeckHtml(source);
     const id = duplicateSlide(doc, 's1');
@@ -296,6 +340,11 @@ describe('slide mutations', () => {
     expect(() => moveSlide(three, 's1', 9)).toThrow(
       expect.objectContaining({ code: 'index-out-of-range' })
     );
+
+    const ending = parseDeckHtml(source);
+    addSlide(ending, { html: '<h1>Third</h1>' });
+    moveSlide(ending, 's1', 2);
+    expect(ids(ending)).toEqual(['s2', 's3', 's1']);
   });
 
   it('sets a full slide order and rejects partial permutations', () => {
@@ -310,11 +359,20 @@ describe('slide mutations', () => {
     );
   });
 
-  it('replaces slide html while preserving slide attributes', () => {
-    const doc = parseDeckHtml(source);
-    updateSlideHtml(doc, 's2', '<h2>Replaced</h2><p>Text</p>');
-    const updated = doc.querySelector('[data-slide-id="s2"]') as Element;
-    expect(updated.getAttribute('data-slide-id')).toBe('s2');
+  it('replaces slide html while preserving all slide attributes', () => {
+    const doc = parseDeckHtml(`<!doctype html><html><head><title>Deck</title></head><body>
+<section class="slide hero" data-slide-id="s1" data-width="1024" data-height="768" data-ppt-transition="fade" data-custom="keep">
+  <h1>Old</h1>
+</section>
+</body></html>`);
+    updateSlideHtml(doc, 's1', '<h2>Replaced</h2><p>Text</p>');
+    const updated = doc.querySelector('[data-slide-id="s1"]') as Element;
+    expect(updated.getAttribute('data-slide-id')).toBe('s1');
+    expect(updated.getAttribute('data-width')).toBe('1024');
+    expect(updated.getAttribute('data-height')).toBe('768');
+    expect(updated.getAttribute('data-ppt-transition')).toBe('fade');
+    expect(updated.getAttribute('class')).toBe('slide hero');
+    expect(updated.getAttribute('data-custom')).toBe('keep');
     expect(updated.querySelector('h2')?.textContent).toBe('Replaced');
     expect(updated.querySelectorAll('[data-ppt-el]')).toHaveLength(0);
   });
@@ -331,6 +389,43 @@ describe('slide mutations', () => {
     expect(doc.querySelector('[data-slide-id="s2"] aside[data-ppt-notes]')).toBeNull();
   });
 
+  it('collapses duplicate direct notes asides when setting notes', () => {
+    const doc = parseDeckHtml(`<!doctype html><html><head><title>Deck</title></head><body>
+<section data-slide-id="s1">
+  <aside data-ppt-notes>First</aside>
+  <aside data-ppt-notes>Duplicate</aside>
+</section>
+<section data-slide-id="s2"></section>
+</body></html>`);
+
+    setNotes(doc, 's1', 'Updated');
+    const asides = Array.from(doc.querySelector('[data-slide-id="s1"]')?.children ?? []).filter(
+      (child) => child.hasAttribute('data-ppt-notes')
+    );
+    expect(asides).toHaveLength(1);
+    expect(asides[0].textContent).toBe('Updated');
+
+    setNotes(doc, 's1', '');
+    expect(
+      doc.querySelector('[data-slide-id="s1"] aside[data-ppt-notes]')
+    ).toBeNull();
+  });
+
+  it('collapses notes supplied in html and options when adding a slide', () => {
+    const doc = parseDeckHtml(source);
+    const id = addSlide(doc, {
+      html: '<h1>Notes</h1><aside data-ppt-notes>From html</aside><aside data-ppt-notes>Duplicate</aside>',
+      notes: 'Talk track'
+    });
+    const added = doc.querySelector(`[data-slide-id="${id}"]`) as Element;
+    const asides = Array.from(added.children).filter((child) =>
+      child.hasAttribute('data-ppt-notes')
+    );
+
+    expect(asides).toHaveLength(1);
+    expect(asides[0].textContent).toBe('Talk track');
+  });
+
   it('validates transitions before setting them', () => {
     const doc = parseDeckHtml(source);
     setTransition(doc, 's1', 'fade');
@@ -342,13 +437,13 @@ describe('slide mutations', () => {
     );
   });
 
-  it('returns an invalid-result error through the gate', () => {
+  it('rejects an invalid transition through the mutation gate', () => {
     const doc = parseDeckHtml(source);
     expect(() =>
       mutateDeck(doc, (draft) => {
         setTransition(draft, 's1', 'zoom' as never);
       })
-    ).toThrow(DeckMutationError);
+    ).toThrow(expect.objectContaining({ code: 'invalid-transition' }));
   });
 
   it('rejects invalid slide results through the gate', () => {
