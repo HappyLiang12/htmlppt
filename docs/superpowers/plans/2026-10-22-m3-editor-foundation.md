@@ -158,10 +158,10 @@ git commit -m "feat(editor): add selection controller and history"
 - [ ] **Step 2: Write the E2E RED**
 
 `e2e/editor.spec.ts` (tag `@feature:editor-core`):
-- Open the template deck; click the `h1`; the overlay shows 8 handles and a selection outline.
-- Drag the `h1` by (100, 50); the inline style has absolute left/top; the file contains the new position after autosave.
+- Open the template deck; click inside the `h1`; the nearest top-level object is selected and the overlay shows 8 handles and a selection outline.
+- Drag the selected top-level object by (100, 50); the inline style has absolute left/top; the file contains the new position after autosave.
 - Resize from the east handle; width changes, height does not.
-- ArrowRight (not editing text) nudges 1 px; Shift+ArrowRight nudges 10 px.
+- On a fixture deck whose slide has a movable top-level object, ArrowRight (not editing text) nudges 1 px; Shift+ArrowRight nudges 10 px. Nested selections are read-only: they get no handles and resize/rotate/nudge do nothing.
 - Reload preserves the transform.
 - With no object selected, arrow keys change slides (existing behavior).
 

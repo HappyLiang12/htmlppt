@@ -5,10 +5,12 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent
 } from 'react';
+import { detectSlides } from '@htmlppt/core';
 import {
   nudge,
   normalizeAngle,
   snapRect,
+  snapResizeRect,
   toDesignPoint,
   type Guide,
   type Handle,
@@ -17,6 +19,7 @@ import {
 } from './geometry';
 import { selectionFromEvent, topLevelObjects } from './selection';
 import {
+  buildSlideSrcDoc,
   commitSlide,
   EDITING_ATTRIBUTE,
   frameSlideElement
@@ -65,12 +68,12 @@ interface GestureBase {
   altKey: boolean;
   /** The iframe-rendered slide, used for containing-block geometry. */
   slide: Element;
-  /** Slide origin inside the iframe, for iframe-space overlay coordinates. */
-  slideOffset: Point;
 }
 
 interface DragSession extends GestureBase {
   kind: 'drag';
+  /** Slide origin inside the iframe, for iframe-space overlay coordinates. */
+  slideOffset: Point;
   targets: TransformTarget[];
   siblingRects: Rect[];
   bounds: Rect;
@@ -78,6 +81,8 @@ interface DragSession extends GestureBase {
 
 interface ResizeSession extends GestureBase {
   kind: 'resize';
+  /** Slide origin inside the iframe, for iframe-space overlay coordinates. */
+  slideOffset: Point;
   target: TransformTarget;
   handle: Handle;
   siblingRects: Rect[];
@@ -252,34 +257,67 @@ export function App() {
     }
   }, []);
 
+  const clearOverlay = useCallback(() => {
+    setSelectionRect(null);
+    setSelectionRotation(0);
+    setGuides([]);
+  }, []);
+
   const refreshOverlay = useCallback(() => {
     const current = stateRef.current;
     const selected = current.selection;
     if (!selected) {
-      setSelectionRect(null);
-      setSelectionRotation(0);
-      setGuides([]);
+      clearOverlay();
       return;
     }
     const frameDocument = frame.current?.contentDocument;
     const slideInfo = current.slides[current.activeIndex];
     if (!frameDocument || !slideInfo) {
-      setSelectionRect(null);
+      clearOverlay();
       return;
     }
     const slide = frameSlideElement(slideInfo, frameDocument);
     const element = slide ? elementAtPath(slide, selected.path) : null;
     if (!slide || !element) {
-      setSelectionRect(null);
+      clearOverlay();
       return;
     }
     setSelectionRect(frameRectOf(rectOf(element, slide), slideOffsetOf(slide)));
     setSelectionRotation(rotationOf(element));
-  }, []);
+  }, [clearOverlay]);
 
   useEffect(() => {
     refreshOverlay();
   }, [refreshOverlay, selection, activeIndex, srcDoc, slides, frameEpoch]);
+
+  /**
+   * Reloads the preview iframe from the current master document, discarding
+   * live gesture styles. The master (not `srcDoc`) is the source of truth
+   * after commits, because commits leave the preview DOM untouched.
+   */
+  const restoreFrameFromMaster = useCallback(() => {
+    const frameElement = frame.current;
+    const current = stateRef.current;
+    if (!frameElement) return;
+    const master = current.master;
+    const slide = master ? detectSlides(master)[current.activeIndex] : null;
+    if (master && slide) {
+      frameElement.srcdoc = buildSlideSrcDoc(master, slide);
+    } else if (current.srcDoc) {
+      frameElement.srcdoc = current.srcDoc;
+    }
+  }, []);
+
+  const cancelSession = useCallback((): boolean => {
+    if (!sessionRef.current) return false;
+    sessionRef.current = null;
+    detachSessionRef.current?.();
+    detachSessionRef.current = null;
+    clearOverlay();
+    actionsRef.current.clearSelection();
+    restoreFrameFromMaster();
+    return true;
+  }, [clearOverlay, restoreFrameFromMaster]);
 
   const moveSession = useCallback((point: Point, event: PointerEvent) => {
     const session = sessionRef.current;
@@ -356,8 +394,9 @@ export function App() {
       );
       let nextGuides: Guide[] = [];
       if (!noSnap) {
-        const snapped = snapRect(
+        const snapped = snapResizeRect(
           rect,
+          session.handle,
           session.siblingRects,
           threshold,
           session.bounds
@@ -419,24 +458,29 @@ export function App() {
         if (!session || event.pointerId !== session.pointerId) return;
         finishSession();
       };
+      const onPointerCancel = (event: PointerEvent) => {
+        const session = sessionRef.current;
+        if (!session || event.pointerId !== session.pointerId) return;
+        cancelSession();
+      };
 
       frameDocument?.addEventListener('pointermove', frameMove);
       frameDocument?.addEventListener('pointerup', onPointerUp);
-      frameDocument?.addEventListener('pointercancel', onPointerUp);
+      frameDocument?.addEventListener('pointercancel', onPointerCancel);
       window.addEventListener('pointermove', outerMove);
       window.addEventListener('pointerup', onPointerUp);
-      window.addEventListener('pointercancel', onPointerUp);
+      window.addEventListener('pointercancel', onPointerCancel);
 
       detachSessionRef.current = () => {
         frameDocument?.removeEventListener('pointermove', frameMove);
         frameDocument?.removeEventListener('pointerup', onPointerUp);
-        frameDocument?.removeEventListener('pointercancel', onPointerUp);
+        frameDocument?.removeEventListener('pointercancel', onPointerCancel);
         window.removeEventListener('pointermove', outerMove);
         window.removeEventListener('pointerup', onPointerUp);
-        window.removeEventListener('pointercancel', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerCancel);
       };
     },
-    [finishSession, moveSession, outerDesignPoint]
+    [cancelSession, finishSession, moveSession, outerDesignPoint]
   );
 
   const beginDragSession = useCallback(
@@ -474,7 +518,9 @@ export function App() {
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const slide = frameSlideNow();
-      if (!selected || !slideInfo || !slide) return;
+      if (!selected || selected.path.length !== 1 || !slideInfo || !slide) {
+        return;
+      }
       const element = elementAtPath(slide, selected.path);
       if (!element) return;
       event.preventDefault();
@@ -506,7 +552,7 @@ export function App() {
       const current = stateRef.current;
       const selected = current.selection;
       const slide = frameSlideNow();
-      if (!selected || !slide) return;
+      if (!selected || selected.path.length !== 1 || !slide) return;
       const element = elementAtPath(slide, selected.path);
       if (!element) return;
       event.preventDefault();
@@ -526,7 +572,6 @@ export function App() {
         altKey: event.altKey,
         moved: false,
         slide,
-        slideOffset: slideOffsetOf(slide),
         target: { element, start: startRect },
         center,
         startPointerAngle: rotationFromPointer(center, startPoint),
@@ -543,7 +588,9 @@ export function App() {
       const selected = current.selection;
       const slideInfo = current.slides[current.activeIndex];
       const slide = frameSlideNow();
-      if (!selected || !slideInfo || !slide) return false;
+      if (!selected || selected.path.length !== 1 || !slideInfo || !slide) {
+        return false;
+      }
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
       const rect = rectOf(element, slide);
@@ -571,12 +618,14 @@ export function App() {
       const current = stateRef.current;
 
       if (event.key === 'Escape') {
+        if (cancelSession()) {
+          event.preventDefault();
+          return;
+        }
         if (current.selection) {
           event.preventDefault();
           actionsRef.current.clearSelection();
-          setSelectionRect(null);
-          setSelectionRotation(0);
-          setGuides([]);
+          clearOverlay();
         }
         return;
       }
@@ -598,7 +647,7 @@ export function App() {
         );
       }
     },
-    [nudgeSelection]
+    [cancelSession, clearOverlay, nudgeSelection]
   );
 
   const handleFramePointerDown = useCallback(
@@ -619,9 +668,7 @@ export function App() {
       });
       if (!selected) {
         actionsRef.current.clearSelection();
-        setSelectionRect(null);
-        setSelectionRotation(0);
-        setGuides([]);
+        clearOverlay();
         return;
       }
 
@@ -639,7 +686,7 @@ export function App() {
         event.altKey
       );
     },
-    [beginDragSession]
+    [beginDragSession, clearOverlay]
   );
 
   keyDownRef.current = handleKeyDown;
@@ -791,9 +838,7 @@ export function App() {
           onPointerDown={(event) => {
             if (event.target !== event.currentTarget) return;
             actions.clearSelection();
-            setSelectionRect(null);
-            setSelectionRotation(0);
-            setGuides([]);
+            clearOverlay();
           }}
           className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#0a0c10] p-12"
         >
@@ -830,6 +875,9 @@ export function App() {
                 rotation={selectionRotation}
                 guides={guides}
                 scale={scale}
+                readOnly={selection !== null && selection.path.length > 1}
+                selectedId={selection?.elementId ?? null}
+                selectedPath={selection?.path ?? null}
                 onResizeStart={beginResizeSession}
                 onRotateStart={beginRotateSession}
               />

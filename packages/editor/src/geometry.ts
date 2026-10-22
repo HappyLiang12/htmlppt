@@ -43,6 +43,45 @@ interface AxisSnap {
   position: number;
 }
 
+function axisTargetLines(
+  boundsStart: number,
+  boundsSize: number,
+  targetStarts: number[],
+  targetSizes: number[]
+): number[] {
+  const lines = [
+    boundsStart,
+    boundsStart + boundsSize / 2,
+    boundsStart + boundsSize
+  ];
+  for (let index = 0; index < targetStarts.length; index += 1) {
+    const targetStart = targetStarts[index];
+    const targetSize = targetSizes[index];
+    lines.push(
+      targetStart,
+      targetStart + targetSize / 2,
+      targetStart + targetSize
+    );
+  }
+  return lines;
+}
+
+function bestLineSnap(
+  movingLine: number,
+  targetLines: number[],
+  threshold: number
+): AxisSnap | null {
+  let best: AxisSnap | null = null;
+  for (const position of targetLines) {
+    const delta = position - movingLine;
+    if (Math.abs(delta) > threshold) continue;
+    if (!best || Math.abs(delta) < Math.abs(best.delta)) {
+      best = { delta, position };
+    }
+  }
+  return best;
+}
+
 function bestAxisSnap(
   start: number,
   size: number,
@@ -53,20 +92,12 @@ function bestAxisSnap(
   threshold: number
 ): AxisSnap | null {
   const movingLines = [start, start + size / 2, start + size];
-  const targetLines = [
+  const targetLines = axisTargetLines(
     boundsStart,
-    boundsStart + boundsSize / 2,
-    boundsStart + boundsSize
-  ];
-  for (let index = 0; index < targetStarts.length; index += 1) {
-    const targetStart = targetStarts[index];
-    const targetSize = targetSizes[index];
-    targetLines.push(
-      targetStart,
-      targetStart + targetSize / 2,
-      targetStart + targetSize
-    );
-  }
+    boundsSize,
+    targetStarts,
+    targetSizes
+  );
 
   let best: AxisSnap | null = null;
   for (const position of targetLines) {
@@ -123,6 +154,70 @@ export function snapRect(
     guides.push({ axis: 'y', position: ySnap.position });
   }
   return { rect, guides };
+}
+
+/**
+ * Snaps a resized rect on the edge(s) the handle actually moves. East/west
+ * adjust one horizontal edge, north/south one vertical edge, and corners
+ * both. The opposite edge never moves, so a guide near it cannot shift the
+ * origin during a resize.
+ */
+export function snapResizeRect(
+  rect: Rect,
+  handle: Handle,
+  targets: Rect[],
+  thresholdDesign: number,
+  bounds: Rect
+): SnapResult {
+  const xLines = axisTargetLines(
+    bounds.x,
+    bounds.width,
+    targets.map((target) => target.x),
+    targets.map((target) => target.width)
+  );
+  const yLines = axisTargetLines(
+    bounds.y,
+    bounds.height,
+    targets.map((target) => target.y),
+    targets.map((target) => target.height)
+  );
+
+  const east = handle.includes('e');
+  const west = handle.includes('w');
+  const north = handle.includes('n');
+  const south = handle.includes('s');
+  const xSnap = east
+    ? bestLineSnap(rect.x + rect.width, xLines, thresholdDesign)
+    : west
+      ? bestLineSnap(rect.x, xLines, thresholdDesign)
+      : null;
+  const ySnap = south
+    ? bestLineSnap(rect.y + rect.height, yLines, thresholdDesign)
+    : north
+      ? bestLineSnap(rect.y, yLines, thresholdDesign)
+      : null;
+
+  const next = { ...rect };
+  const guides: Guide[] = [];
+  if (xSnap) {
+    if (east) {
+      next.width = Math.max(1, next.width + xSnap.delta);
+    } else {
+      next.x += xSnap.delta;
+      next.width = Math.max(1, next.width - xSnap.delta);
+    }
+    guides.push({ axis: 'x', position: xSnap.position });
+  }
+  if (ySnap) {
+    if (south) {
+      next.height = Math.max(1, next.height + ySnap.delta);
+    } else {
+      next.y += ySnap.delta;
+      next.height = Math.max(1, next.height - ySnap.delta);
+    }
+    guides.push({ axis: 'y', position: ySnap.position });
+  }
+  return { rect: next, guides };
 }
 
 /**

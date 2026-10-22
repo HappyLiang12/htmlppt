@@ -9,6 +9,12 @@ export interface CanvasOverlayProps {
   /** Active snap guides in design pixels. */
   guides: Guide[];
   scale: number;
+  /** Nested selections expose an outline only; transforms stay disabled. */
+  readOnly: boolean;
+  /** `data-ppt-el` id of the selected element, when authored. */
+  selectedId: string | null;
+  /** Child-index path from the slide to the selected element. */
+  selectedPath: readonly number[] | null;
   onResizeStart: (
     handle: Handle,
     event: ReactPointerEvent<HTMLDivElement>
@@ -39,6 +45,9 @@ export function CanvasOverlay({
   rotation,
   guides,
   scale,
+  readOnly,
+  selectedId,
+  selectedPath,
   onResizeStart,
   onRotateStart
 }: CanvasOverlayProps) {
@@ -68,6 +77,9 @@ export function CanvasOverlay({
       {rect && (
         <div
           data-testid="selection-outline"
+          data-readonly={readOnly ? 'true' : undefined}
+          data-selected-id={selectedId ?? undefined}
+          data-selected-path={selectedPath?.join('.')}
           className="pointer-events-none absolute border border-amber-400"
           style={{
             left: rect.x * scale,
@@ -77,28 +89,31 @@ export function CanvasOverlay({
             transform: rotation === 0 ? undefined : `rotate(${rotation}deg)`
           }}
         >
-          {HANDLES.map((handle) => (
-            <div
-              key={handle}
-              data-testid={`handle-${handle}`}
-              data-handle={handle}
-              className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-amber-200 bg-amber-400"
-              style={{
-                ...HANDLE_POSITIONS[handle],
-                transform: 'translate(-50%, -50%)'
-              }}
-              onPointerDown={(event) => onResizeStart(handle, event)}
-            />
-          ))}
-          <div
-            data-testid="rotate-handle"
-            className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-amber-200 bg-amber-400"
-            style={{
-              top: 0,
-              transform: 'translate(-50%, calc(-100% - 16px))'
-            }}
-            onPointerDown={onRotateStart}
-          />
+          {!readOnly && (
+            <>
+              {HANDLES.map((handle) => (
+                <div
+                  key={handle}
+                  data-testid={`handle-${handle}`}
+                  className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-amber-200 bg-amber-400"
+                  style={{
+                    ...HANDLE_POSITIONS[handle],
+                    transform: 'translate(-50%, -50%)'
+                  }}
+                  onPointerDown={(event) => onResizeStart(handle, event)}
+                />
+              ))}
+              <div
+                data-testid="rotate-handle"
+                className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-amber-200 bg-amber-400"
+                style={{
+                  top: 0,
+                  transform: 'translate(-50%, calc(-100% - 16px))'
+                }}
+                onPointerDown={onRotateStart}
+              />
+            </>
+          )}
         </div>
       )}
     </div>

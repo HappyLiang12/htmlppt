@@ -5,6 +5,7 @@ import {
   resizeRect,
   rotatePoint,
   snapRect,
+  snapResizeRect,
   toDesignPoint,
   type Guide,
   type Handle,
@@ -174,6 +175,91 @@ describe('snapRect', () => {
       { axis: 'x', position: 100 },
       { axis: 'y', position: 200 }
     ]);
+  });
+});
+
+describe('snapResizeRect', () => {
+  it('does not move the origin when an east resize is near an opposite-edge guide', () => {
+    const start = rect(100, 100, 200, 100);
+    const oppositeLeft = rect(102, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'e', [oppositeLeft], 4, SLIDE);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+  });
+
+  it('snaps the moving east edge without moving the origin', () => {
+    const start = rect(100, 100, 200, 100);
+    const target = rect(302, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'e', [target], 4, SLIDE);
+
+    expect(result.rect).toEqual(rect(100, 100, 202, 100));
+    expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 302 }]);
+  });
+
+  it('snaps the moving west edge and keeps the east edge fixed', () => {
+    const start = rect(100, 100, 200, 100);
+    const target = rect(98, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'w', [target], 4, SLIDE);
+
+    expect(result.rect).toEqual(rect(98, 100, 202, 100));
+    expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 98 }]);
+  });
+
+  it('does not move a west resize toward an opposite-edge guide', () => {
+    const start = rect(100, 100, 200, 100);
+    const oppositeRight = rect(248, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'w', [oppositeRight], 4, SLIDE);
+
+    expect(result.rect).toEqual(rect(100, 100, 200, 100));
+    expect(result.guides).toEqual<Guide[]>([]);
+  });
+
+  it('does not move a north resize toward a bottom-edge guide', () => {
+    const start = rect(100, 100, 200, 100);
+    const oppositeBottom = rect(400, 162, 40, 40);
+
+    const result = snapResizeRect(start, 'n', [oppositeBottom], 4, SLIDE);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+  });
+
+  it('does not move a south resize toward a top-edge guide', () => {
+    const start = rect(100, 100, 200, 100);
+    const oppositeTop = rect(400, 102, 40, 40);
+
+    const result = snapResizeRect(start, 's', [oppositeTop], 4, SLIDE);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+  });
+
+  it('snaps both moving edges for a corner handle', () => {
+    const start = rect(100, 100, 200, 100);
+    const target = rect(302, 201, 50, 40);
+
+    const result = snapResizeRect(start, 'se', [target], 4, SLIDE);
+
+    expect(result.rect).toEqual(rect(100, 100, 202, 101));
+    expect(result.guides).toEqual<Guide[]>([
+      { axis: 'x', position: 302 },
+      { axis: 'y', position: 201 }
+    ]);
+  });
+
+  it('snaps a moving edge to the slide bounds', () => {
+    const result = snapResizeRect(
+      rect(2, 100, 300, 100),
+      'w',
+      [],
+      4,
+      SLIDE
+    );
+
+    expect(result.rect).toEqual(rect(0, 100, 302, 100));
+    expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 0 }]);
   });
 });
 
