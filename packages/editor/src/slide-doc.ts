@@ -54,8 +54,26 @@ function ancestorsOf(doc: Document, element: Element): Element[] {
   return ancestors;
 }
 
-export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
-  frameSlideToken = crypto.randomUUID();
+export interface SlideSrcDocOptions {
+  /**
+   * Adds the preview marker that editor gestures resolve the live slide by.
+   * Thumbnail and sorter previews are inert and must not rotate the token the
+   * main canvas frame was built with.
+   */
+  markFrame?: boolean;
+}
+
+export function buildSlideSrcDoc(
+  doc: Document,
+  slide: SlideInfo,
+  options: SlideSrcDocOptions = {}
+): string {
+  const markFrame = options.markFrame !== false;
+  let frameToken: string | null = null;
+  if (markFrame) {
+    frameToken = crypto.randomUUID();
+    frameSlideToken = frameToken;
+  }
   const bodyAttributes = doc.body ? attributesOf(doc.body) : '';
   let content: string;
   if (slide.element.tagName === 'BODY') {
@@ -65,7 +83,9 @@ export function buildSlideSrcDoc(doc: Document, slide: SlideInfo): string {
     const open = ancestors.map(openTag).join('');
     const close = [...ancestors].reverse().map(closeTag).join('');
     const frameSlide = slide.element.cloneNode(true) as Element;
-    frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, frameSlideToken);
+    if (frameToken) {
+      frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, frameToken);
+    }
     content = `${open}${frameSlide.outerHTML}${close}`;
   }
   return `<!doctype html><html><head>${doc.head.innerHTML}<style data-ppt-editor-base>${BASE_STYLE}</style></head><body${bodyAttributes}>${content}</body></html>`;
@@ -83,6 +103,18 @@ function findFrameSlide(
     `[${FRAME_SLIDE_ATTRIBUTE}="${frameSlideToken}"]`
   );
   return candidate?.tagName === slide.element.tagName ? candidate : null;
+}
+
+/**
+ * Resolves the slide element rendered inside the preview iframe. The returned
+ * element lives in the iframe realm, which is what selection and geometry
+ * helpers require.
+ */
+export function frameSlideElement(
+  slide: SlideInfo,
+  frameDocument: Document
+): Element | null {
+  return findFrameSlide(slide, frameDocument);
 }
 
 export function commitSlide(
