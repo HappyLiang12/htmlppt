@@ -134,15 +134,17 @@ const TINY_PNG_DATA_URL =
 
 const TINY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#4f7cff"/></svg>';
 
-function chartFigure(id: string): string {
-  return `<figure data-ppt-el="${id}" data-ppt-chart='{"type":"bar","labels":["A","B","C"],"series":[{"name":"Series 1","values":[1,2,3]}]}' style="position: absolute; left: 100px; top: 100px; width: 640px; height: 360px;"><figcaption>Chart</figcaption></figure>`;
+function chartFigure(id: string, width = 640, height = 360): string {
+  return `<figure data-ppt-el="${id}" data-ppt-chart='{"type":"bar","labels":["A","B","C"],"series":[{"name":"Series 1","values":[1,2,3]}]}' style="position: absolute; left: 100px; top: 100px; width: ${width}px; height: ${height}px;"><figcaption>Chart</figcaption></figure>`;
 }
 
 /** Builds a one-or-more-slide template deck whose first slide has a chart. */
 function deckHtmlWithChart(
   title: string,
   slides: number,
-  chartId: string
+  chartId: string,
+  chartWidth = 640,
+  chartHeight = 360
 ): string {
   const anchor = `<h1 data-ppt-el="e1">${title}</h1>\n      </div>`;
   const html = createDeckHtml({ title, slides });
@@ -151,7 +153,7 @@ function deckHtmlWithChart(
   }
   return html.replace(
     anchor,
-    `${anchor}\n    ${chartFigure(chartId)}`
+    `${anchor}\n    ${chartFigure(chartId, chartWidth, chartHeight)}`
   );
 }
 
@@ -1271,6 +1273,190 @@ describe('htmlppt MCP stdio server', () => {
     expect(outlineAfter.payload.revision).toBe(revisionBefore);
   });
 
+  it('reports local image open, stat, and read failures as invalid-image', async () => {
+    const relativePath = 'image-failures.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Image failures',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const revisionBefore = (
+      await callTool('get_outline', { path: relativePath })
+    ).payload.revision;
+
+    // A directory with an image extension is opened and fstat'ed but rejected
+    // as a non-regular file. The old stat-then-readFile sequence also had a
+    // path where a successful stat was followed by a failing read; this proves
+    // the descriptor-based path keeps every failure inside invalid-image.
+    await mkdir(join(dir, 'directory.png'));
+    const directory = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'directory.png'
+    });
+    expect(directory.result.isError).toBe(true);
+    expect(directory.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(directory.payload.message)).toContain('directory.png');
+    expect(String(directory.payload.message)).toContain('not a file');
+    expect(String(directory.payload.message)).not.toContain('file-unreadable');
+
+    // A file that disappears is an image error naming the image path, not a
+    // deck file-not-found error.
+    const deletedPath = join(dir, 'deleted.png');
+    await writeFile(deletedPath, TINY_SVG, 'utf8');
+    await rm(deletedPath);
+    const deleted = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'deleted.png'
+    });
+    expect(deleted.result.isError).toBe(true);
+    expect(deleted.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(deleted.payload.message)).toContain('Image file not found');
+    expect(String(deleted.payload.message)).toContain('deleted.png');
+
+    await writeFile(join(dir, 'empty.png'), Buffer.alloc(0));
+    const empty = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: 'empty.png'
+    });
+    expect(empty.result.isError).toBe(true);
+    expect(empty.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(empty.payload.message)).toContain('is empty');
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+  it('rejects UNC, protocol-relative, and drive-relative image sources', async () => {
+    const relativePath = 'image-sources.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      title: 'Image sources',
+      slides: 1
+    });
+    expect(created.result.isError).toBeFalsy();
+    const before = await readFile(deckPath);
+    const revisionBefore = (
+      await callTool('get_outline', { path: relativePath })
+    ).payload.revision;
+
+    // Neither form is a local file. URL validation rejects them before any
+    // filesystem access, so a Windows UNC share is never contacted.
+    for (const source of ['//server/share/pixel.png', '\\\\server\\share\\pixel.png']) {
+      const result = await callTool('add_image', {
+        path: relativePath,
+        slideId: 's1',
+        source
+      });
+      expect(result.result.isError).toBe(true);
+      expect(result.payload).toMatchObject({
+        code: 'invalid-image',
+        path: deckPath
+      });
+      expect(String(result.payload.message)).toContain('absolute http(s) URL');
+    }
+
+    // A single-letter drive prefix is a local path, not a `c:` URL.
+    const driveRelative = `C:htmlppt-missing-${randomUUID()}.png`;
+    const drive = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: driveRelative
+    });
+    expect(drive.result.isError).toBe(true);
+    expect(drive.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(drive.payload.message)).toContain('Image file not found');
+    expect(String(drive.payload.message)).not.toContain(
+      'Image URLs must use http:'
+    );
+
+    // Missing and empty-string sources are schema failures; whitespace reaches
+    // the handler and is an invalid-image domain error.
+    await expectInvalidArguments('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: ''
+    });
+    const blank = await callTool('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: '   '
+    });
+    expect(blank.result.isError).toBe(true);
+    expect(blank.payload).toMatchObject({
+      code: 'invalid-image',
+      path: deckPath
+    });
+    expect(String(blank.payload.message)).toContain('Choose an image');
+
+    // A sub-pixel width used to pass `positive()` and then fail in core with
+    // invalid-insert; the schema now rejects it before the handler runs.
+    await expectInvalidArguments('add_image', {
+      path: relativePath,
+      slideId: 's1',
+      source: TINY_PNG_DATA_URL,
+      width: 0.5
+    });
+
+    expect(await readFile(deckPath)).toEqual(before);
+    const outlineAfter = await callTool('get_outline', { path: relativePath });
+    expect(outlineAfter.payload.revision).toBe(revisionBefore);
+  });
+
+  it('preserves a 640x140 chart figure when updating chart data', async () => {
+    const relativePath = 'short-chart.deck.html';
+    const deckPath = join(dir, relativePath);
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Short chart', 1, 'short-chart', 640, 140)
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const updated = await callTool('update_chart', {
+      path: relativePath,
+      slideId: 's1',
+      target: { elementId: 'short-chart' },
+      chart: {
+        type: 'line',
+        title: 'Short trend',
+        labels: ['A', 'B'],
+        series: [{ name: 'Series 1', values: [1, 2] }]
+      }
+    });
+    expect(updated.result.isError).toBeFalsy();
+    expect(updated.payload).toMatchObject({
+      path: deckPath,
+      width: 640,
+      height: 140
+    });
+
+    const document = await readDeckAt(deckPath);
+    const figure = document.querySelector('figure[data-ppt-el="short-chart"]');
+    expect(figure?.querySelector('svg')?.getAttribute('viewBox')).toBe(
+      '0 0 640 140'
+    );
+    expect(validateDeck(document).valid).toBe(true);
+  });
+
   it('returns structured table and chart errors without writing', async () => {
     const relativePath = 'bad-objects.deck.html';
     const deckPath = join(dir, relativePath);
@@ -1642,6 +1828,153 @@ describe('htmlppt MCP stdio server', () => {
       expect(data).toMatchObject({ type: 'pie', title: 'Hosted update' });
       expect(figure?.querySelector('svg')).not.toBeNull();
       expect(validateDeck(document).valid).toBe(true);
+    } finally {
+      await events?.close();
+      await host.close();
+    }
+  });
+
+  it('returns object-tool failures and a revision conflict through a live host', async () => {
+    const hostedDir = join(dir, 'hosted-errors');
+    await mkdir(hostedDir, { recursive: true });
+    const deckPath = join(hostedDir, 'hosted-errors.deck.html');
+    const relativePath = join('hosted-errors', 'hosted-errors.deck.html');
+    const created = await callTool('create_deck', {
+      path: relativePath,
+      html: deckHtmlWithChart('Hosted errors', 1, 'chart')
+    });
+    expect(created.result.isError).toBeFalsy();
+
+    const hostedEditorDir = join(dir, 'hosted-errors-editor');
+    await mkdir(hostedEditorDir, { recursive: true });
+    await writeFile(
+      join(hostedEditorDir, 'index.html'),
+      '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+      'utf8'
+    );
+    const token = randomUUID();
+    const host = await startHost({
+      filePath: deckPath,
+      token,
+      editorDir: hostedEditorDir,
+      port: 0
+    });
+    const base = new URL(host.url).origin;
+    const authorization = { authorization: `Bearer ${token}` };
+    let events: SseStream | undefined;
+    try {
+      const health = await fetch(`${base}/api/health`, {
+        headers: authorization
+      });
+      expect(health.status).toBe(200);
+      const initial = (await health.json()) as { revision: string };
+      await writeSession({
+        path: deckPath,
+        port: host.port,
+        token,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: initial.revision
+      });
+
+      const eventsResponse = await fetchEventStream(
+        `${base}/api/events?token=${encodeURIComponent(token)}`
+      );
+      expect(eventsResponse.status).toBe(200);
+      events = openEventStream(eventsResponse);
+      expect((await events.next()).event).toBe('hello');
+
+      const before = await readFile(deckPath);
+      const initialRevision = initial.revision;
+
+      // Domain failures inside the mutation run before the host PUT, so each
+      // must return its structured code and leave both the file and the host
+      // revision untouched.
+      const failures = [
+        {
+          name: 'add_image',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            source: join('hosted-errors', 'missing.png')
+          },
+          code: 'invalid-image'
+        },
+        {
+          name: 'add_table',
+          args: { path: relativePath, slideId: 's1', rows: 0, columns: 2 },
+          code: 'invalid-table'
+        },
+        {
+          name: 'update_chart',
+          args: {
+            path: relativePath,
+            slideId: 's1',
+            target: { elementId: 'chart' },
+            chart: '{"type":"bar",'
+          },
+          code: 'invalid-chart'
+        }
+      ];
+      for (const failure of failures) {
+        const { result, payload } = await callTool(
+          failure.name,
+          failure.args
+        );
+        expect(
+          result.isError,
+          `${failure.name} unexpectedly succeeded: ${JSON.stringify(payload)}`
+        ).toBe(true);
+        expect(payload).toMatchObject({
+          code: failure.code,
+          path: deckPath
+        });
+        expect(String(payload.message).trim().length).toBeGreaterThan(0);
+        const deckResponse = await fetch(`${base}/api/deck`, {
+          headers: authorization
+        });
+        expect(await deckResponse.json()).toMatchObject({
+          revision: initialRevision
+        });
+      }
+      expect(await readFile(deckPath)).toEqual(before);
+
+      const table = await callTool('add_table', {
+        path: relativePath,
+        slideId: 's1',
+        rows: 2,
+        columns: 2
+      });
+      expect(table.result.isError).toBeFalsy();
+      const tableRevision = table.payload.revision;
+      expect(typeof tableRevision).toBe('string');
+      expect(await events.next()).toEqual({
+        event: 'revision',
+        data: { revision: tableRevision, source: 'mcp' }
+      });
+
+      // Changing the deck outside the MCP server invalidates the revision it
+      // cached after add_table; the next object mutation must report conflict.
+      const external = (await readFile(deckPath, 'utf8')).replace(
+        'Hosted errors',
+        'External host edit'
+      );
+      await writeFile(deckPath, external, 'utf8');
+      const externalBytes = await readFile(deckPath);
+
+      const conflict = await callTool('add_image', {
+        path: relativePath,
+        slideId: 's1',
+        source: TINY_PNG_DATA_URL
+      });
+      expect(conflict.result.isError).toBe(true);
+      expect(conflict.payload).toMatchObject({
+        code: 'conflict',
+        path: deckPath
+      });
+      expect(String(conflict.payload.message)).toContain('Re-read');
+      expect(typeof conflict.payload.currentRevision).toBe('string');
+      expect(await readFile(deckPath)).toEqual(externalBytes);
     } finally {
       await events?.close();
       await host.close();

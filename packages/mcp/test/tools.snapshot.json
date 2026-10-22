@@ -98,8 +98,8 @@
         },
         "width": {
           "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Optional width in pixels. Height follows the 16:9 default ratio. Defaults to 480."
+          "minimum": 1,
+          "description": "Optional width in pixels, at least 1. Height follows the 16:9 default ratio. Defaults to 480."
         },
         "target": {
           "anyOf": [

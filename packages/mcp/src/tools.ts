@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, mkdir, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, open, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import {
   MAX_IMAGE_BYTES,
@@ -157,12 +157,17 @@ const IMAGE_TYPE_HINT = 'PNG, JPEG, GIF, WebP, AVIF, or SVG';
 
 /**
  * Local paths are anything without a URL scheme, plus Windows drive paths
- * (`C:\...`), which URL parsing would otherwise mistake for a `c:` URL.
+ * (`C:\...`, `C:/...`, and drive-relative `C:...`), which URL parsing would
+ * otherwise mistake for a `c:` URL. Protocol-relative and UNC values
+ * (`//server/share/x.png`, `\\server\share\x.png`) are not local: resolving
+ * them would contact a remote share, so they go through URL validation and
+ * fail as `invalid-image` instead.
  */
 function isLocalImageSource(value: string): boolean {
+  if (/^[\\/]{2}/.test(value)) return false;
   if (/^data:/i.test(value)) return false;
   if (/^https?:\/\//i.test(value)) return false;
-  if (/^[a-z]:[\\/]/i.test(value)) return true;
+  if (/^[a-z]:/i.test(value)) return true;
   return !/^[a-z][a-z0-9+.-]*:/i.test(value);
 }
 
@@ -170,9 +175,49 @@ function imageFailure(message: string): never {
   throw new ToolError('invalid-image', message);
 }
 
+function imageReadFailure(filePath: string, error: unknown): never {
+  imageFailure(
+    `Could not read the image file "${filePath}": ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
 /**
- * Reads a local image only after extension and byte-size checks, so an
- * unsupported or oversized file is rejected without loading it into memory.
+ * Reads exactly `size` bytes from an already-open descriptor. A short read
+ * means the file shrank after it was measured, so the data is rejected rather
+ * than embedded truncated.
+ */
+async function readImageBytes(
+  handle: FileHandle,
+  size: number,
+  filePath: string
+): Promise<Buffer> {
+  const bytes = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const { bytesRead } = await handle.read(
+      bytes,
+      offset,
+      size - offset,
+      offset
+    );
+    if (bytesRead === 0) {
+      imageFailure(
+        `The image file "${filePath}" changed while it was being read. Try again.`
+      );
+    }
+    offset += bytesRead;
+  }
+  return bytes;
+}
+
+/**
+ * Opens a local image once, measures that descriptor, and reads from the same
+ * descriptor. Checks and bytes therefore come from one open file: a path
+ * swapped after the open cannot substitute a FIFO, device, or larger file.
+ * Every open, stat, and read failure is an `invalid-image` naming the image
+ * path, never a deck `file-not-found`/`file-unreadable` error.
  */
 async function localImageDataUrl(
   accessor: DeckAccess,
@@ -185,32 +230,39 @@ async function localImageDataUrl(
       `Unsupported image file type for "${filePath}". Use ${IMAGE_TYPE_HINT}.`
     );
   }
-  let stats;
+
+  let handle: FileHandle;
   try {
-    stats = await stat(filePath);
+    handle = await open(filePath, 'r');
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       imageFailure(`Image file not found: ${filePath}.`);
     }
-    imageFailure(
-      `Could not read the image file "${filePath}": ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    imageReadFailure(filePath, error);
   }
-  if (!stats.isFile()) {
-    imageFailure(`The image path is not a file: ${filePath}.`);
+
+  let bytes: Buffer;
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      imageFailure(`The image path is not a file: ${filePath}.`);
+    }
+    if (stats.size === 0) {
+      imageFailure(`The image file "${filePath}" is empty.`);
+    }
+    if (stats.size > MAX_IMAGE_BYTES) {
+      imageFailure(
+        `The image "${filePath}" is ${formatBytes(stats.size)}; the limit is 8 MB. Resize or compress it before inserting.`
+      );
+    }
+    bytes = await readImageBytes(handle, stats.size, filePath);
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    imageReadFailure(filePath, error);
+  } finally {
+    await handle.close().catch(() => undefined);
   }
-  if (stats.size === 0) {
-    imageFailure(`The image file "${filePath}" is empty.`);
-  }
-  if (stats.size > MAX_IMAGE_BYTES) {
-    imageFailure(
-      `The image "${filePath}" is ${formatBytes(stats.size)}; the limit is 8 MB. Resize or compress it before inserting.`
-    );
-  }
-  return imageDataUrlFromBytes(await readFile(filePath), mime);
+  return imageDataUrlFromBytes(bytes, mime);
 }
 
 async function resolveImageSource(
@@ -649,10 +701,11 @@ export function registerTools(
         source: imageSourceSchema,
         width: z
           .number()
-          .positive()
+          .finite()
+          .min(1)
           .optional()
           .describe(
-            'Optional width in pixels. Height follows the 16:9 default ratio. Defaults to 480.'
+            'Optional width in pixels, at least 1. Height follows the 16:9 default ratio. Defaults to 480.'
           ),
         target: targetSchema.optional()
       }
@@ -665,7 +718,7 @@ export function registerTools(
           // Local bytes are read before the synchronous mutation callback.
           const source = await resolveImageSource(accessor, args.source);
           const width = args.width ?? 480;
-          const height = Math.round((width * 9) / 16);
+          const height = Math.max(1, Math.round((width * 9) / 16));
           let elementId: string | null = null;
           const result = await accessor.mutate(filePath, (draft) => {
             const slide = findSlide(draft, args.slideId).element;
