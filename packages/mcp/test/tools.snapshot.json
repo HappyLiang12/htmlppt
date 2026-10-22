@@ -394,7 +394,7 @@
         "outDir": {
           "type": "string",
           "minLength": 1,
-          "description": "Output directory. Defaults to the deck directory."
+          "description": "Output directory, resolved against the deck directory and confined to it. Defaults to the deck directory."
         }
       },
       "required": [

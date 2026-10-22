@@ -170,9 +170,12 @@ export async function renderPdf(options: PdfOptions): Promise<void> {
 
 export async function renderPngs(options: PngOptions): Promise<string[]> {
   const name = options.basename;
-  if (!name || name === '.' || name === '..' || /[<>:"/\\|?*]|[. ]$/.test(name)
+  const windowsReserved = process.platform === 'win32'
+    && (/[<>:"|?*]|[. ]$/.test(name)
+      || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name));
+  if (!name || name === '.' || name === '..' || /[/\\]/.test(name)
     || [...name].some(char => char.charCodeAt(0) < 32)
-    || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) {
+    || windowsReserved) {
     throw new RenderError('Invalid basename: use a filename, not a path or reserved filename.');
   }
   return withPage(options, 'png', async (page, slides, ready) => {

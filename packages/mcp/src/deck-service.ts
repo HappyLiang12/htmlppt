@@ -13,6 +13,11 @@ import {
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
 import { isAbortError } from './abort.js';
+import {
+  INVALID_OUT_DIR_MESSAGE,
+  sameFilePath,
+  verifyExportDirectory
+} from './export-path.js';
 import { findLiveSession } from './host-session.js';
 
 /**
@@ -27,7 +32,11 @@ export const HOST_EXPORT_TIMEOUT_MS = 60_000;
 export type ExportFormat = 'pdf' | 'png';
 
 export class DeckExportError extends Error {
-  readonly code: 'renderer-unavailable' | 'export-failed';
+  readonly code:
+    | 'renderer-unavailable'
+    | 'export-failed'
+    | 'invalid-out-dir'
+    | 'source-overwrite';
 
   constructor(
     code: DeckExportError['code'],
@@ -104,11 +113,40 @@ async function renderExport(
   outDir?: string
 ): Promise<string[]> {
   const parsed = path.parse(deckPath);
-  const directory = path.resolve(outDir ?? parsed.dir);
-  await mkdir(directory, { recursive: true });
-  const first = detectSlides(document)[0];
+  await mkdir(path.resolve(outDir ?? parsed.dir), { recursive: true });
+  const directory = await verifyExportDirectory(
+    deckPath,
+    path.resolve(outDir ?? parsed.dir)
+  );
+  if (!directory) {
+    throw new DeckExportError('invalid-out-dir', INVALID_OUT_DIR_MESSAGE);
+  }
+  const slides = detectSlides(document);
+  const first = slides[0];
   if (!first) {
     throw new DeckExportError('export-failed', 'No slide canvas was detected.');
+  }
+  if (format === 'pdf') {
+    const outPath = path.join(directory, `${parsed.name}.pdf`);
+    if (await sameFilePath(outPath, deckPath)) {
+      throw new DeckExportError(
+        'source-overwrite',
+        'Refusing to overwrite the source deck. Choose a different --out path.'
+      );
+    }
+  } else {
+    for (let index = 0; index < slides.length; index += 1) {
+      const outPath = path.join(
+        directory,
+        `${parsed.name}-s${index + 1}.png`
+      );
+      if (await sameFilePath(outPath, deckPath)) {
+        throw new DeckExportError(
+          'source-overwrite',
+          'Refusing to overwrite the source deck. Choose a different --out path.'
+        );
+      }
+    }
   }
   const renderer = await import('@htmlppt/renderer');
   try {

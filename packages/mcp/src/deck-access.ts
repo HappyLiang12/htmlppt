@@ -10,6 +10,10 @@ import {
   type SaveResult
 } from './deck-service.js';
 import { ToolError } from './errors.js';
+import {
+  INVALID_OUT_DIR_MESSAGE,
+  resolveExportDirectory
+} from './export-path.js';
 
 const SESSION_POLL_INTERVAL_MS = 100;
 const SESSION_TIMEOUT_MS = 5_000;
@@ -69,8 +73,12 @@ export class DeckAccess {
     format: ExportFormat,
     outDir?: string
   ): Promise<string[]> {
+    const directory = await resolveExportDirectory(filePath, outDir);
+    if (directory === null) {
+      throw new ToolError('invalid-out-dir', INVALID_OUT_DIR_MESSAGE);
+    }
     const service = await createDeckService(filePath);
-    return service.exportFiles(filePath, format, outDir);
+    return service.exportFiles(filePath, format, directory);
   }
 }
 

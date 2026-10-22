@@ -464,9 +464,29 @@ describe('real Chromium rendering', () => {
     expect(await readFile(path.join(dir, 'deck-s2.png', 'keep'), 'utf8')).toBe('untouched');
   });
 
-  it.each(['', '.', '..', '../escape', 'dir/file', 'dir\\file', 'C:escape', 'CON', 'nul.txt', 'trailing.', 'trailing ', 'bad\u0000name'])('rejects invalid basename %j before writing', async basename => {
+  const invalidBasenames = ['', '.', '..', '../escape', 'dir/file', 'dir\\file', 'bad\u0000name'];
+  const windowsOnlyInvalid = ['C:escape', 'CON', 'nul.txt', 'trailing.', 'trailing '];
+  it.each(
+    process.platform === 'win32'
+      ? [...invalidBasenames, ...windowsOnlyInvalid]
+      : invalidBasenames
+  )('rejects invalid basename %j before writing', async basename => {
     await expect(renderPngs({ html: twoSlides, width: 320, height: 180, outDir: dir, basename }))
       .rejects.toMatchObject({ name: 'RenderError', message: expect.stringMatching(/basename/i) });
     expect(await readdir(dir)).toEqual([]);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'allows POSIX filenames that are reserved only on Windows',
+    async () => {
+      const [file] = await renderPngs({
+        html: twoSlides,
+        width: 320,
+        height: 180,
+        outDir: dir,
+        basename: 'C:CON.'
+      });
+      expect(path.basename(file!)).toBe('C:CON.-s1.png');
+    }
+  );
 });

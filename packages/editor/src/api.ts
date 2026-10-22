@@ -9,6 +9,36 @@ export interface DeckResponse {
   filePath: string;
 }
 
+export interface SaveDeckOptions {
+  force?: boolean;
+}
+
+/**
+ * The deck storage used by the controller. Host tabs use the HTTP endpoints;
+ * standalone tabs switch to File System Access or IndexedDB.
+ */
+export interface DeckPersistence {
+  load(): Promise<DeckResponse>;
+  save(
+    html: string,
+    baseRevision: string,
+    options?: SaveDeckOptions
+  ): Promise<{ revision: string }>;
+  flush(html: string, baseRevision: string): void;
+}
+
+export type ExportFormat = 'html' | 'pdf' | 'png';
+
+export class DeckAuthError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Failed to load deck (${status})`);
+    this.name = 'DeckAuthError';
+    this.status = status;
+  }
+}
+
 export function tokenFromLocation(): string {
   return new URLSearchParams(location.search).get('token') ?? '';
 }
@@ -18,13 +48,9 @@ export async function fetchDeck(token: string): Promise<DeckResponse> {
     headers: { authorization: `Bearer ${token}` }
   });
   if (!response.ok) {
-    throw new Error(`Failed to load deck (${response.status})`);
+    throw new DeckAuthError(response.status);
   }
   return (await response.json()) as DeckResponse;
-}
-
-export interface SaveDeckOptions {
-  force?: boolean;
 }
 
 /**
@@ -114,6 +140,48 @@ export function flushDeck(
     body: JSON.stringify({ html, baseRevision }),
     keepalive: true
   }).catch(() => undefined);
+}
+
+export function hostPersistence(token: string): DeckPersistence {
+  return {
+    load: () => fetchDeck(token),
+    save: (html, baseRevision, options) =>
+      saveDeck(token, html, baseRevision, options),
+    flush: (html, baseRevision) => flushDeck(token, html, baseRevision)
+  };
+}
+
+export async function exportDeck(
+  token: string,
+  format: ExportFormat,
+  outDir?: string
+): Promise<string[]> {
+  const response = await fetch('/api/export', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      format,
+      ...(outDir ? { outDir } : {})
+    })
+  });
+  if (!response.ok) {
+    const { detail, payload } = await readErrorPayload(response);
+    const message =
+      payload !== null &&
+      typeof payload === 'object' &&
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : detail || `Export failed (${response.status})`;
+    throw new Error(message);
+  }
+  const body = (await response.json()) as { files?: unknown };
+  if (!Array.isArray(body.files)) {
+    throw new Error('Export response did not list files.');
+  }
+  return body.files.filter((file): file is string => typeof file === 'string');
 }
 
 export function deckEventsUrl(token: string): string {

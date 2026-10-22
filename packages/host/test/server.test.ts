@@ -1,14 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HOST_VERSION, startHost } from '../src/server.js';
+import {
+  HOST_VERSION,
+  isAllowedOrigin,
+  startHost
+} from '../src/server.js';
 
 interface Context {
   dir: string;
   deckPath: string;
   deckHtml: string;
+  editorDir: string;
   token: string;
   host: Awaited<ReturnType<typeof startHost>>;
   base: string;
@@ -222,6 +228,40 @@ function countStatWatchers(): number {
     .filter((resource) => resource === 'StatWatcher').length;
 }
 
+/**
+ * Sends a request line verbatim. fetch() normalizes encoded dot segments
+ * client-side, so traversal probes need the raw HTTP client.
+ */
+function rawGet(
+  port: number,
+  rawPath: string,
+  cookie: string
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path: rawPath,
+        method: 'GET',
+        headers: { cookie }
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8')
+          })
+        );
+      }
+    );
+    request.on('error', reject);
+    request.end();
+  });
+}
+
 let context: Context | undefined;
 
 async function setup(): Promise<Context> {
@@ -252,7 +292,16 @@ async function setup(): Promise<Context> {
       throw new Error(`Failed to read the deck: ${deckResponse.status}`);
     }
     const deck = (await deckResponse.json()) as { revision: string };
-    context = { dir, deckPath, deckHtml, token, host, base, revision: deck.revision };
+    context = {
+      dir,
+      deckPath,
+      deckHtml,
+      editorDir,
+      token,
+      host,
+      base,
+      revision: deck.revision
+    };
     return context;
   } catch (error) {
     await host?.close();
@@ -272,6 +321,24 @@ afterEach(async () => {
   } finally {
     await rm(ctx.dir, { recursive: true, force: true });
   }
+});
+
+describe('isAllowedOrigin', () => {
+  it('normalizes default ports and accepts both loopback names', () => {
+    expect(isAllowedOrigin('http://127.0.0.1', 80)).toBe(true);
+    expect(isAllowedOrigin('http://localhost', 80)).toBe(true);
+    expect(isAllowedOrigin('http://127.0.0.1:80', 80)).toBe(true);
+    expect(isAllowedOrigin('http://127.0.0.1:8080', 8080)).toBe(true);
+    expect(isAllowedOrigin('http://localhost:8080', 8080)).toBe(true);
+  });
+
+  it('rejects foreign, secured, malformed, and wrong-port origins', () => {
+    expect(isAllowedOrigin('http://127.0.0.1:8080', 80)).toBe(false);
+    expect(isAllowedOrigin('http://evil.example:80', 80)).toBe(false);
+    expect(isAllowedOrigin('https://127.0.0.1:8080', 8080)).toBe(false);
+    expect(isAllowedOrigin('http://127.0.0.1:8081', 8080)).toBe(false);
+    expect(isAllowedOrigin('not a url', 8080)).toBe(false);
+  });
 });
 
 describe('host', () => {
@@ -371,14 +438,43 @@ describe('host', () => {
     expect(response.status).toBe(200);
   });
 
-  it('accepts the token as a query parameter', async () => {
+  it('requires a bearer token for health', async () => {
     const ctx = await setup();
 
-    const response = await fetch(
+    const response = await fetch(`${ctx.base}/api/health`, {
+      headers: { authorization: `Bearer ${ctx.token}` }
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects the token when it is supplied as a query parameter', async () => {
+    const ctx = await setup();
+
+    const health = await fetch(
       `${ctx.base}/api/health?token=${encodeURIComponent(ctx.token)}`
     );
 
+    expect(health.status).toBe(401);
+    expect(await health.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('accepts the token as a query parameter only for the event stream', async () => {
+    const ctx = await setup();
+
+    const response = await fetch(
+      `${ctx.base}/api/events?token=${encodeURIComponent(ctx.token)}`
+    );
+
     expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Expected an SSE response body.');
+    }
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('event: hello');
+    await reader.cancel();
   });
 
   it('reports health with the current revision', async () => {
@@ -450,6 +546,69 @@ describe('host', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('console.log("editor shell");');
+  });
+
+  it('does not serve deck files other than the opened deck', async () => {
+    const ctx = await setup();
+    const cookie = `htmlppt_token=${encodeURIComponent(ctx.token)}`;
+    const marker = 'sibling-deck-marker';
+    await writeFile(
+      join(ctx.dir, 'other.html'),
+      `<!doctype html><title>${marker}</title>`,
+      'utf8'
+    );
+
+    const response = await fetch(`${ctx.base}/other.html`, {
+      headers: { cookie }
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain(marker);
+  });
+
+  it('rejects encoded path traversal without leaking files', async () => {
+    const ctx = await setup();
+    const cookie = `htmlppt_token=${encodeURIComponent(ctx.token)}`;
+    const deckMarker = 'parent-secret-marker';
+    await writeFile(join(ctx.dir, 'parent-secret.txt'), deckMarker, 'utf8');
+    const outsideMarker = 'outside-secret-marker';
+    const outsideName = `htmlppt-outside-${randomUUID()}.txt`;
+    const outsidePath = join(ctx.dir, '..', outsideName);
+    await writeFile(outsidePath, outsideMarker, 'utf8');
+
+    try {
+      const probes = [
+        '/%2e%2e/parent-secret.txt',
+        '/..%2fparent-secret.txt',
+        '/%2e%2e%2fparent-secret.txt',
+        `/%2e%2e/%2e%2e/${outsideName}`
+      ];
+      for (const probe of probes) {
+        const result = await rawGet(ctx.host.port, probe, cookie);
+        expect([400, 403, 404]).toContain(result.status);
+        expect(result.body).not.toContain(deckMarker);
+        expect(result.body).not.toContain(outsideMarker);
+      }
+    } finally {
+      await rm(outsidePath, { force: true });
+    }
+  });
+
+  it('does not expose directory listings', async () => {
+    const ctx = await setup();
+    const cookie = `htmlppt_token=${encodeURIComponent(ctx.token)}`;
+    const marker = 'directory-secret-marker';
+    await mkdir(join(ctx.editorDir, 'assets'));
+    await writeFile(join(ctx.editorDir, 'assets', 'secret.txt'), marker, 'utf8');
+
+    const response = await fetch(`${ctx.base}/assets/`, {
+      headers: { cookie }
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.text();
+    expect(body).not.toContain(marker);
+    expect(body).not.toContain('secret.txt');
   });
 
   it('saves a valid deck atomically and returns a new revision', async () => {
@@ -684,6 +843,42 @@ describe('host', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'invalid body' });
   });
+
+  it(
+    'rejects a deck update over 16 MiB and still accepts a normal save',
+    async () => {
+      const ctx = await setup();
+      const oversized = JSON.stringify({
+        html: 'x'.repeat(16 * 1024 * 1024)
+      });
+
+      const rejected = await fetch(`${ctx.base}/api/deck`, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${ctx.token}`,
+          'content-type': 'application/json'
+        },
+        body: oversized
+      });
+
+      expect(rejected.status).toBe(413);
+      const body = (await rejected.json()) as {
+        error: string;
+        message: string;
+      };
+      expect(body.error).toBe('payload-too-large');
+      expect(body.message).toMatch(/16 MiB/);
+      expect(await readFile(ctx.deckPath, 'utf8')).toBe(ctx.deckHtml);
+
+      const normal = await putDeck(
+        ctx,
+        ctx.deckHtml.replace('Basic deck', 'After oversized update'),
+        { baseRevision: ctx.revision }
+      );
+      expect(normal.status).toBe(200);
+    },
+    30_000
+  );
 
   it('rejects an invalid deck and leaves the file unchanged', async () => {
     const ctx = await setup();

@@ -60,6 +60,12 @@ import {
   runTool,
   type ToolContext
 } from './errors.js';
+import {
+  INVALID_OUT_DIR_MESSAGE,
+  resolveExportDirectory,
+  sameFilePath,
+  verifyExportDirectory
+} from './export-path.js';
 import authoring from './resources/authoring.md?raw';
 import contract from './resources/contract.md?raw';
 import example from './resources/example.html?raw';
@@ -1027,7 +1033,9 @@ export function registerTools(
           .string()
           .min(1)
           .optional()
-          .describe('Output directory. Defaults to the deck directory.')
+          .describe(
+            'Output directory, resolved against the deck directory and confined to it. Defaults to the deck directory.'
+          )
       }
     },
     async (args) => {
@@ -1046,9 +1054,13 @@ export function registerTools(
           );
         }
         const parsedPath = path.parse(filePath);
-        const outputDirectory = args.outDir
-          ? accessor.resolve(args.outDir)
-          : parsedPath.dir;
+        const outputDirectory = await resolveExportDirectory(
+          filePath,
+          args.outDir
+        );
+        if (outputDirectory === null) {
+          throw new ToolError('invalid-out-dir', INVALID_OUT_DIR_MESSAGE);
+        }
         if (args.format === 'html') {
           const outputPath = path.join(
             outputDirectory,
@@ -1057,6 +1069,19 @@ export function registerTools(
           context.operation = 'write';
           context.outputPath = outputPath;
           await mkdir(outputDirectory, { recursive: true });
+          const verified = await verifyExportDirectory(
+            filePath,
+            outputDirectory
+          );
+          if (verified === null) {
+            throw new ToolError('invalid-out-dir', INVALID_OUT_DIR_MESSAGE);
+          }
+          if (await sameFilePath(outputPath, filePath)) {
+            throw new ToolError(
+              'source-overwrite',
+              'Refusing to overwrite the source deck. Choose a different outDir.'
+            );
+          }
           await writeDeckFileAtomic(
             outputPath,
             serializeExport(snapshot.document)

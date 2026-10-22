@@ -131,7 +131,7 @@ export function SorterView({
     >
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-zinc-200">排序檢視</h2>
-        <p className="text-xs text-zinc-500">拖曳投影片以重新排序</p>
+        <p className="text-xs text-zinc-400">拖曳投影片以重新排序</p>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {slides.map((slide, index) => {
@@ -177,6 +177,15 @@ export function SorterView({
                   <span className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
                     {index + 1}
                   </span>
+                  {active && (
+                    <span
+                      data-testid="sorter-active-marker"
+                      aria-hidden="true"
+                      className="absolute right-1 top-1 z-10 rounded bg-amber-400 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-950"
+                    >
+                      ✓ 目前
+                    </span>
+                  )}
                   <SlideMiniature
                     master={master}
                     slide={slide}
@@ -200,7 +209,7 @@ export function SorterView({
                   onClick={(event) => {
                     if (event.detail <= 1) onDuplicate(index);
                   }}
-                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30"
+                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/60"
                 >
                   複製
                 </button>
@@ -212,7 +221,7 @@ export function SorterView({
                     if (event.detail <= 1) onDelete(index);
                   }}
                   disabled={!canDelete}
-                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30 disabled:opacity-40"
+                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/60 disabled:opacity-40"
                 >
                   刪除
                 </button>

@@ -218,6 +218,83 @@ describe('htmlppt cli', () => {
     expect((await readdir(cwd)).sort()).toEqual(['deck.html', 'out.html']);
   });
 
+  it('refuses to overwrite the source deck with an HTML export', async () => {
+    const cwd = await makeTempDir('htmlppt-cli-');
+    await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+    const source = await readFile(join(cwd, 'deck.html'));
+
+    for (const out of ['deck.html', './deck.html', join(cwd, 'deck.html')]) {
+      const output = capture();
+      const code = await runCli(
+        ['export', 'deck.html', '--format', 'html', '--out', out],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain(
+        'Refusing to overwrite the source deck. Choose a different --out path.'
+      );
+      expect(output.stdout).toEqual([]);
+      expect(await readFile(join(cwd, 'deck.html'))).toEqual(source);
+    }
+    expect((await readdir(cwd)).sort()).toEqual(['deck.html']);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'refuses a case-variant --out that names the source deck',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+      const source = await readFile(join(cwd, 'deck.html'));
+      const output = capture();
+
+      const code = await runCli(
+        ['export', 'deck.html', '--format', 'html', '--out', 'DeCk.HtMl'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(1);
+      expect(output.stderr.join('\n')).toContain(
+        'Refusing to overwrite the source deck.'
+      );
+      expect(await readFile(join(cwd, 'deck.html'))).toEqual(source);
+    }
+  );
+
+  it(
+    'refuses to overwrite the source deck with a PDF export',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+      const source = await readFile(join(cwd, 'deck.html'));
+      const previous = process.env.HTMLPPT_CHROMIUM;
+      // A missing browser proves the refusal happens before rendering.
+      process.env.HTMLPPT_CHROMIUM = join(cwd, 'missing-browser.exe');
+      try {
+        const output = capture();
+        const code = await runCli(
+          ['export', 'deck.html', '--format', 'pdf', '--out', 'deck.html'],
+          { cwd, ...output.io }
+        );
+
+        expect(code).toBe(1);
+        expect(output.stderr.join('\n')).toContain(
+          'Refusing to overwrite the source deck. Choose a different --out path.'
+        );
+        expect(output.stderr.join('\n')).not.toContain('Chromium');
+        expect(await readFile(join(cwd, 'deck.html'))).toEqual(source);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.HTMLPPT_CHROMIUM;
+        } else {
+          process.env.HTMLPPT_CHROMIUM = previous;
+        }
+      }
+      expect((await readdir(cwd)).sort()).toEqual(['deck.html']);
+    },
+    30_000
+  );
+
   it('rejects unsupported export formats with a clear error', async () => {
     const cwd = await makeTempDir('htmlppt-cli-');
     await runCli(['new', 'deck.html'], { cwd, ...capture().io });
@@ -1484,6 +1561,29 @@ describe('htmlppt cli as a real process', () => {
       expect(await server.waitForExit(10_000)).toBe(0);
     } finally {
       server.kill();
+    }
+  });
+
+  it('exports a deck whose name contains shell metacharacters', async () => {
+    const workspace = await createCliWorkspace();
+    const name =
+      'deck 幻灯片;touch marker.txt;& copy nul marker.txt.html';
+    await runCli(['new', name], { cwd: workspace.cwd, ...capture().io });
+
+    const result = await runCliProcess(
+      ['export', name, '--format', 'html', '--out', 'exported.html'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(await readFile(join(workspace.cwd, 'exported.html'), 'utf8'))
+      .toContain('Untitled deck');
+    // The argument array is passed literally: no injected command ran.
+    for (const marker of ['marker.txt', 'marker.txt.html']) {
+      await expect(
+        readFile(join(workspace.cwd, marker))
+      ).rejects.toMatchObject({ code: 'ENOENT' });
     }
   });
 });

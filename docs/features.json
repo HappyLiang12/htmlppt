@@ -12,6 +12,9 @@
     { "id": "presenter", "spec": "4.Presentation", "status": "active", "tests": ["@feature:presenter"] },
     { "id": "mcp", "spec": "6", "status": "active", "tests": ["@feature:mcp"] },
     { "id": "live-sync", "spec": "9", "status": "active", "tests": ["@feature:live-sync"] },
-    { "id": "export-pdf-png", "spec": "9.Export", "status": "planned", "tests": ["@feature:export-pdf-png"] }
+    { "id": "export-pdf-png", "spec": "9.Export", "status": "active", "tests": ["@feature:export-pdf-png"] },
+    { "id": "standalone", "spec": "10.Persistence clients", "status": "active", "tests": ["@feature:standalone"] },
+    { "id": "recovery", "spec": "10.Persistence clients", "status": "active", "tests": ["@feature:recovery"] },
+    { "id": "accessibility", "spec": "11.Accessibility", "status": "active", "tests": ["@feature:accessibility"] }
   ]
 }

@@ -44,6 +44,12 @@ describe('mapShortcut primary modifier shortcuts', () => {
     expect(mapShortcut(press('z', { metaKey: true, shiftKey: true }))).toEqual(
       { type: 'redo' }
     );
+    expect(mapShortcut(press('y', { ctrlKey: true }))).toEqual({
+      type: 'redo'
+    });
+    expect(mapShortcut(press('y', { metaKey: true }))).toEqual({
+      type: 'redo'
+    });
   });
 
   it('maps save, export, duplicate, group, and ungroup', () => {
@@ -181,7 +187,6 @@ describe('mapShortcut modifier and key guards', () => {
     expect(mapShortcut(press('a', { ctrlKey: true, shiftKey: true }))).toBeNull();
     expect(mapShortcut(press('s', { ctrlKey: true, shiftKey: true }))).toBeNull();
     expect(mapShortcut(press('c', { ctrlKey: true, shiftKey: true }))).toBeNull();
-    expect(mapShortcut(press('y', { ctrlKey: true }))).toBeNull();
   });
 
   it('ignores every shortcut while an editable target handles the key', () => {

@@ -109,6 +109,16 @@ export function ThumbnailRail({
               width={THUMBNAIL_WIDTH}
               className="rounded-[2px] shadow-md shadow-black/40"
             />
+            {active && (
+              <span
+                data-testid="thumbnail-active-marker"
+                aria-hidden="true"
+                title="目前投影片"
+                className="absolute right-1 top-1 rounded bg-amber-400 px-1 py-0.5 text-[10px] font-semibold text-zinc-950"
+              >
+                ✓
+              </span>
+            )}
             <span
               className={`flex items-center gap-1 px-1 pb-0.5 text-[11px] ${
                 active ? 'text-amber-200' : 'text-zinc-400'

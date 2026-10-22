@@ -11,9 +11,13 @@ export interface InsertMenuProps {
 }
 
 const BUTTON =
-  'rounded border border-white/15 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40';
+  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
 const MENU =
-  'absolute left-0 top-full z-20 mt-1 flex w-max flex-col gap-1 rounded border border-white/15 bg-[#161a21] p-2 shadow-xl';
+  'absolute left-0 top-full z-20 mt-1 flex w-max flex-col gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl';
+const FIELD =
+  'w-16 rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70';
+
+type MenuName = 'shape' | 'table' | 'image';
 
 const SHAPES: { shape: ShapeKind; label: string }[] = [
   { shape: 'rect', label: '矩形' },
@@ -32,10 +36,34 @@ export function InsertMenu({
   onInsertImageFile,
   onInsertImageUrl
 }: InsertMenuProps) {
-  const [menu, setMenu] = useState<'shape' | 'table' | 'image' | null>(null);
+  const [menu, setMenu] = useState<MenuName | null>(null);
   const [rows, setRows] = useState('3');
   const [columns, setColumns] = useState('3');
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const triggers = useRef<Record<MenuName, HTMLButtonElement | null>>({
+    shape: null,
+    table: null,
+    image: null
+  });
+
+  const closeMenu = (name: MenuName) => {
+    setMenu(null);
+    triggers.current[name]?.focus();
+  };
+
+  const menuKeyDown = (
+    event: {
+      key: string;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    },
+    name: MenuName
+  ) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu(name);
+  };
 
   const tableSize = (value: string, limit: number): number | null => {
     const parsed = Number(value);
@@ -64,13 +92,23 @@ export function InsertMenu({
           data-testid="insert-shape"
           title="插入形狀"
           aria-expanded={menu === 'shape'}
+          ref={(element) => {
+            triggers.current.shape = element;
+          }}
           className={BUTTON}
           onClick={() => setMenu((current) => (current === 'shape' ? null : 'shape'))}
+          onKeyDown={(event) => {
+            if (menu === 'shape') menuKeyDown(event, 'shape');
+          }}
         >
           形狀
         </button>
         {menu === 'shape' && (
-          <div className={MENU}>
+          <div
+            data-testid="insert-menu-shape"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'shape')}
+          >
             {SHAPES.map(({ shape, label }) => (
               <button
                 key={shape}
@@ -95,13 +133,23 @@ export function InsertMenu({
           data-testid="insert-table"
           title="插入表格"
           aria-expanded={menu === 'table'}
+          ref={(element) => {
+            triggers.current.table = element;
+          }}
           className={BUTTON}
           onClick={() => setMenu((current) => (current === 'table' ? null : 'table'))}
+          onKeyDown={(event) => {
+            if (menu === 'table') menuKeyDown(event, 'table');
+          }}
         >
           表格
         </button>
         {menu === 'table' && (
-          <div className={MENU}>
+          <div
+            data-testid="insert-menu-table"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'table')}
+          >
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
               列
               <input
@@ -112,7 +160,7 @@ export function InsertMenu({
                 aria-label="表格列數"
                 value={rows}
                 onChange={(event) => setRows(event.target.value)}
-                className="w-16 rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70"
+                className={FIELD}
               />
             </label>
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
@@ -125,7 +173,7 @@ export function InsertMenu({
                 aria-label="表格欄數"
                 value={columns}
                 onChange={(event) => setColumns(event.target.value)}
-                className="w-16 rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70"
+                className={FIELD}
               />
             </label>
             <button
@@ -161,13 +209,23 @@ export function InsertMenu({
           data-testid="insert-image"
           title="插入圖片"
           aria-expanded={menu === 'image'}
+          ref={(element) => {
+            triggers.current.image = element;
+          }}
           className={BUTTON}
           onClick={() => setMenu((current) => (current === 'image' ? null : 'image'))}
+          onKeyDown={(event) => {
+            if (menu === 'image') menuKeyDown(event, 'image');
+          }}
         >
           圖片
         </button>
         {menu === 'image' && (
-          <div className={MENU}>
+          <div
+            data-testid="insert-menu-image"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'image')}
+          >
             <button
               type="button"
               data-testid="insert-image-upload"

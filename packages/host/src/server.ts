@@ -9,7 +9,7 @@ import {
   readDeckFile,
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
-import { detectSlides, validateDeck } from '@htmlppt/core';
+import { detectSlides, serializeExport, validateDeck } from '@htmlppt/core';
 import {
   renderPdf,
   renderPngs,
@@ -17,6 +17,7 @@ import {
   RenderError
 } from '@htmlppt/renderer';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 
 export interface HostOptions {
   filePath: string;
@@ -60,6 +61,8 @@ const WATCH_INTERVAL_MS = 50;
 const WATCH_DEBOUNCE_MS = 100;
 const HEARTBEAT_MS = 15_000;
 const TOKEN_COOKIE = 'htmlppt_token';
+const DECK_BODY_LIMIT = 16 * 1024 * 1024;
+const EXPORT_BODY_LIMIT = 64 * 1024;
 const encoder = new TextEncoder();
 const SSE_HEADERS = {
   'content-type': 'text/event-stream',
@@ -108,6 +111,18 @@ function withSaveLock<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
+function createSerialLock(): <T>(task: () => Promise<T>) => Promise<T> {
+  let chain: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const run = chain.then(task, task);
+    chain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  };
+}
+
 function sseChunk(event: string, data: unknown): Uint8Array {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -140,6 +155,24 @@ async function waitFor(
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Accepts only this host's loopback origin. Default ports are normalized so a
+ * host listening on port 80 still matches `http://127.0.0.1` (URL omits :80).
+ */
+export function isAllowedOrigin(origin: string, port: number): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:') return false;
+  if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') {
+    return false;
+  }
+  return (parsed.port || '80') === String(port);
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -216,6 +249,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   ];
 
   const clients = new Set<SseClient>();
+  const withExportLock = createSerialLock();
 
   function remember(source: RevisionSource): void {
     history.push({
@@ -291,24 +325,20 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     const bearer = authorization.toLowerCase().startsWith(bearerPrefix)
       ? authorization.slice(bearerPrefix.length)
       : '';
-    const queryToken = new URL(c.req.url).searchParams.get('token') ?? '';
+    // EventSource cannot set headers, so its query token is the only exception.
+    // Every other API route accepts the token solely as a bearer header.
+    const allowsQueryToken =
+      c.req.method === 'GET' && c.req.path === '/api/events';
+    const queryToken = allowsQueryToken
+      ? new URL(c.req.url).searchParams.get('token') ?? ''
+      : '';
     if (bearer !== options.token && queryToken !== options.token) {
       return c.json({ error: 'unauthorized' }, 401);
     }
 
     const origin = c.req.header('origin');
-    if (origin) {
-      let parsed: URL;
-      try {
-        parsed = new URL(origin);
-      } catch {
-        return c.json({ error: 'forbidden origin' }, 403);
-      }
-      const isLocal =
-        parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
-      if (parsed.protocol !== 'http:' || !isLocal || parsed.port !== String(port)) {
-        return c.json({ error: 'forbidden origin' }, 403);
-      }
+    if (origin && !isAllowedOrigin(origin, port)) {
+      return c.json({ error: 'forbidden origin' }, 403);
     }
 
     await next();
@@ -320,6 +350,32 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       message: `Could not read ${options.filePath}. Restore the deck file or stop the host with "htmlppt stop".`
     };
   }
+
+  const deckBodyLimit = bodyLimit({
+    maxSize: DECK_BODY_LIMIT,
+    onError: (c) =>
+      c.json(
+        {
+          error: 'payload-too-large',
+          message:
+            'Deck updates are limited to 16 MiB. Remove large embedded assets or split the deck into a smaller file.'
+        },
+        413
+      )
+  });
+
+  const exportBodyLimit = bodyLimit({
+    maxSize: EXPORT_BODY_LIMIT,
+    onError: (c) =>
+      c.json(
+        {
+          error: 'payload-too-large',
+          message:
+            'Export requests are limited to 64 KiB. Send only { "format": "pdf" | "png", "outDir": "..." }.'
+        },
+        413
+      )
+  });
 
   // Health is a cached liveness probe: it must stay available even when the
   // deck was deleted, otherwise a live host becomes an orphan that stop cannot
@@ -347,7 +403,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     });
   });
 
-  app.put('/api/deck', async (c) => {
+  app.put('/api/deck', deckBodyLimit, async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -431,7 +487,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     });
   });
 
-  app.post('/api/export', async (c) => {
+  app.post('/api/export', exportBodyLimit, async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -446,11 +502,11 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       format?: unknown;
       outDir?: unknown;
     };
-    if (format !== 'pdf' && format !== 'png') {
+    if (format !== 'pdf' && format !== 'png' && format !== 'html') {
       return c.json(
         {
           error: 'unsupported format',
-          message: 'Export format must be "pdf" or "png".'
+          message: 'Export format must be "html", "pdf", or "png".'
         },
         400
       );
@@ -489,47 +545,77 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         400
       );
     }
-    await mkdir(resolvedOutDir, { recursive: true });
 
     const first = detectSlides(parseDeckHtml(snapshot.html))[0];
     const basename =
       path.basename(snapshot.filePath).replace(/\.html?$/i, '') || 'deck';
 
-    try {
-      if (format === 'pdf') {
-        const outPath = path.join(resolvedOutDir, `${basename}.pdf`);
-        await renderPdf({
+    // Fixed output names make concurrent renders destructive. Serialize the
+    // filesystem work per host, and re-check containment after mkdir so a
+    // symlink swapped in after resolution cannot redirect the writes.
+    return withExportLock(async () => {
+      await mkdir(resolvedOutDir, { recursive: true });
+      const [canonicalDeckDir, canonicalOutDir] = await Promise.all([
+        realpath(deckDir),
+        realpath(resolvedOutDir)
+      ]);
+      if (!isInside(canonicalDeckDir, canonicalOutDir)) {
+        return c.json(
+          {
+            error: 'invalid outDir',
+            message: 'outDir must stay inside the deck directory.'
+          },
+          400
+        );
+      }
+
+      try {
+        if (format === 'html') {
+          const outPath = path.join(
+            canonicalOutDir,
+            `${basename}.export.html`
+          );
+          await writeDeckFileAtomic(
+            outPath,
+            serializeExport(parseDeckHtml(snapshot.html))
+          );
+          return c.json({ files: [outPath] });
+        }
+        if (format === 'pdf') {
+          const outPath = path.join(canonicalOutDir, `${basename}.pdf`);
+          await renderPdf({
+            html: snapshot.html,
+            width: first.width,
+            height: first.height,
+            outPath
+          });
+          return c.json({ files: [outPath] });
+        }
+        const files = await renderPngs({
           html: snapshot.html,
           width: first.width,
           height: first.height,
-          outPath
+          outDir: canonicalOutDir,
+          basename
         });
-        return c.json({ files: [outPath] });
+        return c.json({ files });
+      } catch (error) {
+        if (error instanceof RendererUnavailableError) {
+          return c.json(
+            {
+              error: 'renderer-unavailable',
+              message: error.message,
+              hint: 'Install Google Chrome, Microsoft Edge or Chromium, or set HTMLPPT_CHROMIUM to its executable path.'
+            },
+            501
+          );
+        }
+        if (error instanceof RenderError) {
+          return c.json({ error: 'render-failed', message: error.message }, 500);
+        }
+        throw error;
       }
-      const files = await renderPngs({
-        html: snapshot.html,
-        width: first.width,
-        height: first.height,
-        outDir: resolvedOutDir,
-        basename
-      });
-      return c.json({ files });
-    } catch (error) {
-      if (error instanceof RendererUnavailableError) {
-        return c.json(
-          {
-            error: 'renderer-unavailable',
-            message: error.message,
-            hint: 'Install Google Chrome, Microsoft Edge or Chromium, or set HTMLPPT_CHROMIUM to its executable path.'
-          },
-          501
-        );
-      }
-      if (error instanceof RenderError) {
-        return c.json({ error: 'render-failed', message: error.message }, 500);
-      }
-      throw error;
-    }
+    });
   });
 
   app.get('/api/events', (c) => {

@@ -151,5 +151,6 @@ explicitly asks for that.
 - Re-read after a person edits in the editor, because their writes create new
   revisions.
 - Run `validate_deck` or `htmlppt validate` before exporting.
-- `export_deck` supports HTML only in v1. It writes
-  `<name>.export.html` beside the deck or into `outDir`.
+- `export_deck` writes `<name>.export.html` for `format: "html"`, or a PDF /
+  one PNG per slide for `pdf` / `png`. `outDir` resolves against the deck
+  directory and must stay inside it.

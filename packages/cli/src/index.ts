@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, mkdir, readFile, readdir } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
 import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -268,6 +268,40 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   return true;
 }
 
+const SOURCE_OVERWRITE_MESSAGE =
+  'Refusing to overwrite the source deck. Choose a different --out path.';
+
+function comparablePath(value: string): string {
+  const resolved = resolve(value);
+  // Windows paths are case-insensitive, so a case variant names the same file.
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * The source deck must survive every export. Compare the resolved paths and,
+ * when both exist, their real paths so a symlink alias is also refused.
+ */
+async function rejectSourceOverwrite(
+  source: string,
+  destination: string
+): Promise<void> {
+  let same = comparablePath(source) === comparablePath(destination);
+  if (!same) {
+    try {
+      const [sourceReal, destinationReal] = await Promise.all([
+        realpath(source),
+        realpath(destination)
+      ]);
+      same = comparablePath(sourceReal) === comparablePath(destinationReal);
+    } catch {
+      // A missing destination cannot alias the source through realpath.
+    }
+  }
+  if (same) {
+    throw new Error(SOURCE_OVERWRITE_MESSAGE);
+  }
+}
+
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
   for (const diagnostic of result.errors) {
     io.stderr(`ERROR ${diagnostic.code}: ${diagnostic.message}`);
@@ -407,6 +441,7 @@ export async function runCli(
         const destination = options.out
           ? resolve(io.cwd, options.out)
           : join(parsedPath.dir, `${parsedPath.name}.export.html`);
+        await rejectSourceOverwrite(sourcePath, destination);
         await writeDeckFileAtomic(destination, serializeExport(doc));
         io.stdout(`Exported ${destination}`);
         return;
@@ -416,12 +451,14 @@ export async function runCli(
           `Unsupported export format "${options.format}". Use --format html, pdf, or png.`
         );
       }
-      const first = detectSlides(doc)[0];
-      const renderer = await import('@htmlppt/renderer');
+      const slides = detectSlides(doc);
+      const first = slides[0];
       if (options.format === 'pdf') {
         const destination = options.out
           ? resolve(io.cwd, options.out)
           : join(parsedPath.dir, `${parsedPath.name}.pdf`);
+        await rejectSourceOverwrite(sourcePath, destination);
+        const renderer = await import('@htmlppt/renderer');
         await renderer.renderPdf({
           html,
           width: first.width,
@@ -432,7 +469,14 @@ export async function runCli(
         return;
       }
       const outDir = options.out ? resolve(io.cwd, options.out) : parsedPath.dir;
+      for (let index = 0; index < slides.length; index += 1) {
+        await rejectSourceOverwrite(
+          sourcePath,
+          join(outDir, `${parsedPath.name}-s${index + 1}.png`)
+        );
+      }
       await mkdir(outDir, { recursive: true });
+      const renderer = await import('@htmlppt/renderer');
       const files = await renderer.renderPngs({
         html,
         width: first.width,

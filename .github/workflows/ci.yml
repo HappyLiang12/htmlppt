@@ -4,12 +4,23 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   static:
-    name: Static checks
-    runs-on: ubuntu-latest
+    name: Static (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +34,13 @@ jobs:
       - run: npm run typecheck
 
   unit:
-    name: Unit tests
-    runs-on: ubuntu-latest
+    name: Unit (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
@@ -37,47 +51,87 @@ jobs:
       - run: npm ci
       - run: npm run test:unit
 
-  integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm run test:integration
+      - run: npm run build
 
-  integration-windows:
-    name: Integration tests (Windows)
-    runs-on: windows-latest
+  integration:
+    name: Integration (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/ms-playwright' || '~/.cache/ms-playwright' }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+      - if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - if: runner.os == 'Windows'
+        run: npx playwright install chromium
       - run: npm run test:integration
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-artifacts-${{ matrix.os }}-${{ matrix.node }}
+          path: |
+            packages/*/test-results
+            test-results
+          if-no-files-found: ignore
 
   e2e:
-    name: E2E (Chromium)
-    runs-on: ubuntu-latest
+    name: E2E (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/ms-playwright' || '~/.cache/ms-playwright' }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run build
+      - if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - if: runner.os == 'Windows'
+        run: npx playwright install chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.os }}-${{ matrix.node }}
           path: |
             test-results
             playwright-report
@@ -86,6 +140,7 @@ jobs:
   feature-matrix:
     name: Feature matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -96,16 +151,45 @@ jobs:
       - run: npm run test:matrix
 
   package-smoke:
-    name: Package smoke (${{ matrix.os }})
+    name: Package smoke (${{ matrix.os }} / Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:package
+
+  verify-all:
+    name: Verify all (Ubuntu / Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run test:package
+      - run: npx playwright install --with-deps chromium
+      - run: npm run verify:all
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: verify-all-artifacts
+          path: |
+            test-results
+            playwright-report
+          if-no-files-found: ignore

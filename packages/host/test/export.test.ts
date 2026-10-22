@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from 'node:fs/promises';
 import path from 'node:path';
 import { makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -144,6 +152,30 @@ async function expectDeckUnchanged(ctx: Context): Promise<void> {
 
 describe('host export endpoint', () => {
   it(
+    'exports standalone HTML next to the deck without touching the source',
+    async () => {
+      const ctx = await setup();
+
+      const response = await postExport(ctx, { format: 'html' });
+      expect(response.status).toBe(200);
+      const files = (await readJson(response)).files as string[];
+      expect(files).toHaveLength(1);
+      const expected = path.join(ctx.dir, 'fixture.export.html');
+      expect(samePath(files[0], expected)).toBe(true);
+
+      const exported = await readFile(expected, 'utf8');
+      expect(exported).toContain(
+        '<!-- Edited with htmlppt. Format: htmldeck/v1. -->'
+      );
+      expect(exported).toContain('data-ppt-deck');
+      expect(exported).toContain('data-slide-id="s2"');
+      expect(exported).not.toContain('data-ppt-editing');
+      await expectDeckUnchanged(ctx);
+    },
+    30_000
+  );
+
+  it(
     'exports a PDF next to the deck by default and leaves the source untouched',
     async () => {
       const ctx = await setup();
@@ -205,6 +237,56 @@ describe('host export endpoint', () => {
     30_000
   );
 
+  it(
+    'runs two concurrent PNG exports to the same outDir without conflicts',
+    async () => {
+      const ctx = await setup();
+
+      const responses = await Promise.all([
+        postExport(ctx, { format: 'png', outDir: 'exports' }),
+        postExport(ctx, { format: 'png', outDir: 'exports' })
+      ]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+
+      for (const response of responses) {
+        const files = (await readJson(response)).files as string[];
+        expect(files).toHaveLength(2);
+        for (const file of files) {
+          expect(path.dirname(file)).toBe(path.join(ctx.dir, 'exports'));
+          const data = await readFile(file);
+          expect(data.length).toBeGreaterThan(0);
+          expect(data.subarray(0, 8)).toEqual(PNG_SIGNATURE);
+        }
+      }
+      await expectDeckUnchanged(ctx);
+    },
+    60_000
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a symlinked outDir that escapes the deck directory',
+    async () => {
+      // Windows symlink creation needs privileges that CI does not grant; the
+      // POSIX job exercises the realpath containment path instead.
+      const ctx = await setup();
+      const outside = path.join(ctx.dir, '..', `htmlppt-outside-${randomUUID()}`);
+      await mkdir(outside);
+      await symlink(outside, path.join(ctx.dir, 'link'), 'dir');
+      try {
+        for (const outDir of ['link', 'link/nested']) {
+          const response = await postExport(ctx, { format: 'png', outDir });
+          expect(response.status).toBe(400);
+          expect(await readJson(response)).toMatchObject({
+            error: 'invalid outDir'
+          });
+        }
+        expect(await readdir(outside)).toEqual([]);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
   it('rejects outDir values that escape the deck directory', async () => {
     const ctx = await setup();
     const suffix = path.basename(ctx.dir);
@@ -219,6 +301,43 @@ describe('host export endpoint', () => {
 
     await expect(stat(path.resolve(ctx.dir, relativeEscape))).rejects.toThrow();
     await expect(stat(absoluteEscape)).rejects.toThrow();
+  });
+
+  it('rejects a query-string token on the export route', async () => {
+    const ctx = await setup();
+
+    const response = await fetch(
+      `${ctx.base}/api/export?token=${encodeURIComponent(ctx.token)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ format: 'png' })
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(await readJson(response)).toEqual({ error: 'unauthorized' });
+    await expect(
+      stat(path.join(ctx.dir, 'fixture-s1.png'))
+    ).rejects.toThrow();
+  });
+
+  it('rejects an export body over 64 KiB before rendering', async () => {
+    const ctx = await setup();
+
+    const response = await postExport(ctx, {
+      format: 'png',
+      padding: 'x'.repeat(65 * 1024)
+    });
+
+    expect(response.status).toBe(413);
+    const body = await readJson(response);
+    expect(body.error).toBe('payload-too-large');
+    expect(String(body.message)).toMatch(/64 KiB/);
+    await expect(
+      stat(path.join(ctx.dir, 'fixture-s1.png'))
+    ).rejects.toThrow();
+    await expectDeckUnchanged(ctx);
   });
 
   it('requires the session token, the host origin, and a supported format', async () => {
@@ -245,7 +364,7 @@ describe('host export endpoint', () => {
     );
     expect(foreignOrigin.status).toBe(403);
 
-    for (const format of ['jpg', 'html', undefined, 42]) {
+    for (const format of ['jpg', undefined, 42]) {
       const response = await postExport(ctx, { format });
       expect(response.status).toBe(400);
       expect(await readJson(response)).toMatchObject({

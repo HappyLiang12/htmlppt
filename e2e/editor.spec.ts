@@ -1474,7 +1474,7 @@ test(
 
       await expect(page.getByTestId('toolbar')).toBeVisible();
       await expect(page.getByTestId('play')).toBeEnabled();
-      await expect(page.getByTestId('export-html')).toBeDisabled();
+      await expect(page.getByTestId('export-open')).toBeEnabled();
     } finally {
       await closeEditor(editor);
     }

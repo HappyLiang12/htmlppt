@@ -11,12 +11,16 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { chromium, expect, test, type Page } from '@playwright/test';
 import { execa } from 'execa';
 import { PDFDocument } from 'pdf-lib';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import { startCliHost } from './helpers';
+
+// The editor screenshot and the export renderer must use the same Chromium
+// build; otherwise system Chrome on a CI runner can shift AA and text pixels.
+process.env.HTMLPPT_CHROMIUM = chromium.executablePath();
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = join(repoRoot, 'packages/cli/dist/bin.js');

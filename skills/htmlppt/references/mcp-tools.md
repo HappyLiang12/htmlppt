@@ -324,10 +324,11 @@ Arguments: `{ path, format, outDir? }`.
   `<deck-name>-sN.png` per slide.
 
 PDF and PNG require a system Chrome, Edge, or Chromium (or `HTMLPPT_CHROMIUM`)
-and fail with `renderer-unavailable` when none is found; `render-failed`
-reports a rendering error. When a live editor owns the deck, rendering runs
-through that host and `outDir` must stay inside the deck directory. An invalid
-deck fails with `invalid-deck` and includes `errors`.
+and fail with `renderer-unavailable` when none is found; `export-failed`
+reports a rendering error. `outDir` resolves against the deck directory and
+must stay inside it for every format, in direct and host-attached mode; an
+escape fails with `invalid-out-dir`. An invalid deck fails with `invalid-deck`
+and includes `errors`.
 
 ## Resources
 
@@ -363,6 +364,8 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `target-invalid` | The selector or path is invalid, or an insertion anchor is not a direct child of the slide. |
 | `invalid-fragment` | `add_element` HTML is not exactly one root element. |
 | `invalid-image` | `add_image` source is not a supported data/http(s) URL, or a local image cannot be opened, measured, or read, is not a regular file, is empty, has an unsupported type, or is larger than 8 MB. A missing or empty-string `source` is `InvalidParams` before the handler runs. |
+| `invalid-out-dir` | `export_deck` `outDir` escapes the deck directory. Use a relative subdirectory such as `exports`. |
+| `source-overwrite` | The export destination would replace the source deck (for example a deck named `deck.pdf` exported as PDF). Rename the deck or choose a different `outDir`. |
 | `invalid-table` | `add_table` rows or columns are outside the 50x20 core bounds. |
 | `invalid-chart` | `update_chart` data is malformed or fails chart validation; the deck is unchanged. |
 | `invalid-insert` | A core insert rejected the geometry or content, for example a computed non-positive image size. |

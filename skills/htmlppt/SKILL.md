@@ -34,9 +34,10 @@ surface is documented in [references/mcp-tools.md](references/mcp-tools.md).
 exit code. The CLI talks to the same files and contract.
 
 Both workflows are safe to mix: MCP writes are atomic and revision-checked.
-The host and the deck file update after an external or MCP write, but the
-editor's live-sync UI arrives in M3. Reload the editor page after external or
-MCP writes until then; a save based on the old revision returns 409/conflict.
+The editor receives host revision events over SSE. A clean editor applies
+external or MCP changes automatically; unsaved edits surface a conflict banner
+with reload or overwrite choices. A save based on an old revision returns
+409/conflict.
 
 ## Contract at a glance
 

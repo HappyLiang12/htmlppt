@@ -183,3 +183,52 @@ scripts/package-smoke.mjs
 - README/LICENSE/CONTRIBUTING/SECURITY/contract/MCP docs exist.
 - The package tarball contains the editor, skill, CLI, and MCP bins.
 - Release is prepared; publishing waits for explicit user authorization.
+
+---
+
+## Amendment (2026-10-23): final-release acceptance gaps
+
+The Task 8 acceptance review found three items that the M4 exit explicitly
+deferred to M5 but this plan never allocated. They are in scope before the M5
+merge:
+
+### Task 8a: Editor export UI and host HTML export
+
+**Files:** `packages/host/src/server.ts`, `packages/host/test/export.test.ts`,
+`packages/editor/src/api.ts`, `packages/editor/src/components/Toolbar.tsx`,
+`packages/editor/src/App.tsx`, `e2e/export-ui.spec.ts`, docs.
+
+- Extend `POST /api/export` with `format: "html"`; write
+  `<basename>.export.html` inside the confined `outDir` using
+  `serializeExport`, and keep PDF/PNG behavior unchanged.
+- Replace the disabled toolbar placeholder with an accessible Export menu
+  (HTML / PDF / PNG), wired to Ctrl/Cmd+Shift+E, with busy/error/result
+  feedback.
+- Host mode writes through the endpoint; standalone mode downloads HTML and
+  explains that PDF/PNG require a host.
+
+### Task 8b: IndexedDB crash recovery
+
+**Files:** new `packages/editor/src/recovery.ts` (+ test),
+`packages/editor/src/App.tsx`, `packages/editor/src/use-deck-controller.ts`,
+E2E recovery test.
+
+- Persist dirty master HTML to IndexedDB (debounced), keyed by deck path.
+- After a reload with an unsaved draft, show a recovery banner offering
+  restore or discard; restore marks the deck dirty so autosave persists it.
+- Clear the draft once a save succeeds.
+
+### Task 8c: Standalone upload/download mode
+
+**Files:** new `packages/editor/src/standalone.ts` (+ test),
+`packages/editor/src/api.ts`, `packages/editor/src/App.tsx`,
+`packages/editor/src/use-deck-controller.ts`, `e2e/standalone.spec.ts`.
+
+- When `/api/deck` is unavailable, show an open/drop empty state and load a
+  local HTML file into the editor.
+- Save in place through a File System Access handle; otherwise autosave to
+  IndexedDB and download through Ctrl+S / Export HTML.
+- PDF/PNG are disabled in standalone mode with actionable guidance.
+
+Each item is test-first. The final acceptance run must include the new
+`@feature:standalone` and `@feature:recovery` matrix rows.
