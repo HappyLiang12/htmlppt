@@ -38,6 +38,11 @@ export interface ObjectSummary {
   tag: string;
   elementId: string | null;
   text: string;
+  locked: boolean;
+  hidden: boolean;
+  group: boolean;
+  /** A hide recovery can restore the authored display declaration. */
+  canUnhide: boolean;
 }
 
 export type SlideBackground =
@@ -189,7 +194,11 @@ export function summarizeObjects(slide: Element): ObjectSummary[] {
     path: [Array.from(slide.children).indexOf(element)],
     tag: element.tagName.toLowerCase(),
     elementId: element.getAttribute('data-ppt-el')?.trim() || null,
-    text: textSummary(element)
+    text: textSummary(element),
+    locked: element.getAttribute('data-ppt-locked') === 'true',
+    hidden: (element as HTMLElement).style?.display === 'none',
+    group: element.hasAttribute('data-ppt-group'),
+    canUnhide: element.hasAttribute('data-ppt-display')
   }));
 }
 

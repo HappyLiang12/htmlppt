@@ -5,7 +5,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { detectSlides, type Transition } from '@htmlppt/core';
+import { detectSlides, type SlideInfo, type Transition } from '@htmlppt/core';
 import { openDeckEvents, tokenFromLocation } from './api';
 import {
   planConflictResolution,
@@ -36,6 +36,14 @@ import {
   frameSlideElement
 } from './slide-doc';
 import type { PastedObjectGeometry } from './object-ops';
+import {
+  applyObjectCommand,
+  isGroupElement,
+  isHiddenElement,
+  isLockedElement,
+  type ObjectCommand,
+  type ObjectMeasurement
+} from './commands/objects';
 import {
   angleDelta,
   applyRect,
@@ -69,7 +77,10 @@ import {
   CanvasOverlay,
   type SelectionBox
 } from './components/CanvasOverlay';
-import { Inspector } from './components/Inspector';
+import {
+  Inspector,
+  type ObjectActionState
+} from './components/Inspector';
 import { PlayView } from './components/PlayView';
 import { SorterView } from './components/SorterView';
 import { ThumbnailRail } from './components/ThumbnailRail';
@@ -201,6 +212,63 @@ function frameGuidesOf(guides: Guide[], offset: Point): Guide[] {
 function slideOffsetOf(slide: Element): Point {
   const rect = slide.getBoundingClientRect();
   return { x: rect.left, y: rect.top };
+}
+
+const NO_OBJECT_ACTIONS: ObjectActionState = {
+  canGroup: false,
+  canUngroup: false,
+  canAlign: false,
+  canDistribute: false,
+  canOrder: false,
+  canToggle: false,
+  locked: false,
+  hidden: false,
+  group: false
+};
+
+function selectionElements(
+  slide: SlideInfo | undefined,
+  selections: readonly SelectionTarget[],
+  activeIndex: number
+): Element[] | null {
+  if (!slide) return null;
+  const elements: Element[] = [];
+  for (const target of selections) {
+    if (target.slideIndex !== activeIndex || target.path.length !== 1) return null;
+    const element = elementAtPath(slide.element, target.path);
+    if (!element) return null;
+    elements.push(element);
+  }
+  return elements;
+}
+
+function objectActionStateFor(
+  slide: SlideInfo | undefined,
+  selections: readonly SelectionTarget[],
+  activeIndex: number
+): ObjectActionState {
+  const elements = selectionElements(slide, selections, activeIndex);
+  if (!elements || elements.length === 0) return NO_OBJECT_ACTIONS;
+  const unlocked = elements.every((element) => !isLockedElement(element));
+  const visible = elements.every((element) => !isHiddenElement(element));
+  const single = elements.length === 1 ? elements[0] ?? null : null;
+  return {
+    canGroup:
+      elements.length >= 2 &&
+      unlocked &&
+      visible &&
+      elements.every(
+        (element) => !isGroupElement(element) && !element.querySelector('[data-ppt-group]')
+      ),
+    canUngroup: Boolean(single && isGroupElement(single) && unlocked && visible),
+    canAlign: elements.length >= 2 && unlocked && visible,
+    canDistribute: elements.length >= 3 && unlocked && visible,
+    canOrder: Boolean(single && unlocked && visible),
+    canToggle: Boolean(single),
+    locked: isLockedElement(single),
+    hidden: isHiddenElement(single),
+    group: isGroupElement(single)
+  };
 }
 
 export function App() {
@@ -410,6 +478,11 @@ export function App() {
         !slideInfo ||
         !frameDocument
       ) {
+        return false;
+      }
+      const top = elementAtPath(slideInfo.element, [selected.path[0] ?? -1]);
+      if (!top || isLockedElement(top) || isHiddenElement(top)) return false;
+      if (isGroupElement(top) && (field === 'width' || field === 'height')) {
         return false;
       }
       const slide = frameSlideElement(slideInfo, frameDocument);
@@ -666,7 +739,7 @@ export function App() {
     for (const target of current.selections) {
       if (target.slideIndex !== current.activeIndex) continue;
       const element = elementAtPath(slide, target.path);
-      if (!element) continue;
+      if (!element || isHiddenElement(element)) continue;
       boxes.push({
         rect: frameRectOf(rectOf(element, slide), offset),
         rotation: rotationOf(element),
@@ -974,7 +1047,9 @@ export function App() {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element) return;
+      if (!element || isLockedElement(element) || isGroupElement(element)) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       // Keep overlay gestures in the editor document; without capture a drag
@@ -1015,7 +1090,9 @@ export function App() {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element) return;
+      if (!element || isLockedElement(element) || isHiddenElement(element)) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1065,6 +1142,17 @@ export function App() {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
         const rect = rectOf(element, slide);
+        if (isLockedElement(element) || isHiddenElement(element)) {
+          if (!isHiddenElement(element)) {
+            boxes.push({
+              rect: frameRectOf(rect, offset),
+              rotation: rotationOf(element),
+              path: target.path,
+              elementId: target.elementId
+            });
+          }
+          continue;
+        }
         const next = nudge(
           rect,
           dx,
@@ -1107,6 +1195,15 @@ export function App() {
     if (!slideInfo || !frameDocument) return false;
     const slide = frameSlideElement(slideInfo, frameDocument);
     if (!slide) return false;
+    const top = elementAtPath(slide, [current.selection.path[0] ?? -1]);
+    if (
+      !top ||
+      isLockedElement(top) ||
+      isHiddenElement(top) ||
+      isGroupElement(top)
+    ) {
+      return false;
+    }
     const selected = elementAtPath(slide, current.selection.path);
     if (!selected) return false;
 
@@ -1130,6 +1227,90 @@ export function App() {
     );
     actionsRef.current.setScale(next);
   }, []);
+
+  const runObjectCommand = useCallback(
+    async (
+      command: ObjectCommand,
+      targets: readonly SelectionTarget[],
+      options: { selectResult?: boolean } = {}
+    ) => {
+      if (targets.length === 0) return;
+      if (!actionsRef.current.settlePendingEdits()) return;
+      const current = stateRef.current;
+      const slideInfo = current.slides[current.activeIndex];
+      if (!slideInfo || !current.master) return;
+      const slideIndex = current.activeIndex;
+
+      let measurements: ObjectMeasurement[] = [];
+      if (
+        command.type === 'group' ||
+        command.type === 'align' ||
+        command.type === 'distribute'
+      ) {
+        const frameSlide = frameSlideNow();
+        if (!frameSlide) return;
+        try {
+          measurements = targets.map((target) => {
+            const element = elementAtPath(frameSlide, target.path);
+            if (!element) throw new Error('Select the object again before changing layout.');
+            const snapshot = snapshotGeometry(element, frameSlide);
+            return { target, rect: snapshot.rect, offset: snapshot.offset };
+          });
+        } catch {
+          return;
+        }
+      }
+
+      try {
+        await actionsRef.current.commitMaster((master) => {
+          const result = applyObjectCommand(
+            master,
+            slideIndex,
+            command,
+            targets,
+            measurements
+          );
+          if (!result.changed) return false;
+          if (options.selectResult !== false && result.targets.length > 0) {
+            actionsRef.current.selectTargets(result.targets);
+          }
+          return true;
+        });
+      } catch {
+        // The controller already surfaced the failure and recorded no history.
+      }
+    },
+    [frameSlideNow]
+  );
+
+  const handleObjectCommand = useCallback(
+    (command: ObjectCommand) => {
+      const current = stateRef.current;
+      const targets = current.selections.filter(
+        (target) => target.slideIndex === current.activeIndex
+      );
+      void runObjectCommand(command, targets);
+    },
+    [runObjectCommand]
+  );
+
+  const handleObjectRecovery = useCallback(
+    (path: number[], action: 'unlock' | 'unhide') => {
+      const current = stateRef.current;
+      if (!current.slides[current.activeIndex]) return;
+      const target: SelectionTarget = {
+        slideIndex: current.activeIndex,
+        path,
+        elementId: null
+      };
+      const command: ObjectCommand =
+        action === 'unlock'
+          ? { type: 'lock', locked: false }
+          : { type: 'hide', hidden: false };
+      void runObjectCommand(command, [target], { selectResult: false });
+    },
+    [runObjectCommand]
+  );
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent, activeDocument: Document | null) => {
@@ -1233,11 +1414,19 @@ export function App() {
           event.preventDefault();
           void actionsRef.current.saveNow().catch(() => undefined);
           return;
-        case 'export':
         case 'group':
+          if (current.selections.length < 2) return;
+          event.preventDefault();
+          handleObjectCommand({ type: 'group' });
+          return;
         case 'ungroup':
+          if (current.selections.length !== 1) return;
+          event.preventDefault();
+          handleObjectCommand({ type: 'ungroup' });
+          return;
+        case 'export':
         case 'help':
-          // Export is M5; group/ungroup are M4; help is not part of the shell.
+          // Export is M5; help is not part of the shell.
           event.preventDefault();
           return;
         case 'select-all':
@@ -1317,6 +1506,7 @@ export function App() {
       cancelSession,
       clearOverlay,
       computeFitScale,
+      handleObjectCommand,
       nudgeSelection,
       playing,
       startPlay,
@@ -1361,6 +1551,17 @@ export function App() {
       if (!existing) actionsRef.current.select(selected);
       // Drilled nested selections show read-only geometry for now.
       if (selected.path.length !== 1) return;
+      const clickedTop = elementAtPath(frameSlide, selected.path);
+      if (
+        !clickedTop ||
+        isLockedElement(clickedTop) ||
+        isHiddenElement(clickedTop)
+      ) {
+        // Locked objects stay selectable but inert: no native text selection
+        // drag, and no editor transform session.
+        if (clickedTop) event.preventDefault();
+        return;
+      }
 
       const dragSelections = existing ? current.selections : [selected];
       const items = dragSelections
@@ -1375,7 +1576,9 @@ export function App() {
         }))
         .filter(
           (item): item is { element: Element; selection: SelectionTarget } =>
-            item.element !== null
+            item.element !== null &&
+            !isLockedElement(item.element) &&
+            !isHiddenElement(item.element)
         )
         .sort((a, b) => {
           if (sameSelection(a.selection, selected)) return -1;
@@ -1440,6 +1643,20 @@ export function App() {
       if (!target || !frameDocument.body.contains(target)) return;
       const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
       if (!editable || !editable.textContent?.trim()) return;
+      const slideRoot =
+        frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}]`) ??
+        frameDocument.body;
+      let top: Element = editable;
+      while (top.parentElement && top.parentElement !== slideRoot) {
+        top = top.parentElement;
+      }
+      if (
+        isLockedElement(top) ||
+        isHiddenElement(top) ||
+        isGroupElement(top)
+      ) {
+        return;
+      }
       event.preventDefault();
       if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
         textBaselineRef.current.set(editable, editable.innerHTML);
@@ -1506,6 +1723,18 @@ export function App() {
   const goTo = (index: number) => {
     actions.showSlide(index);
   };
+
+  const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
+  const primaryObject =
+    activeSlide && selection
+      ? elementAtPath(activeSlide.element, selection.path)
+      : null;
+  const overlayHandles =
+    primaryObject && isLockedElement(primaryObject)
+      ? 'none'
+      : primaryObject && isGroupElement(primaryObject)
+        ? 'rotate'
+        : 'all';
 
   if (playing && activeSlide) {
     return (
@@ -1646,6 +1875,7 @@ export function App() {
                     selectionBoxes.length > 1 ||
                     (selection !== null && selection.path.length > 1)
                   }
+                  handles={overlayHandles}
                   onResizeStart={beginResizeSession}
                   onRotateStart={beginRotateSession}
                 />
@@ -1664,7 +1894,10 @@ export function App() {
             selection={selection}
             selectionCount={selections.length}
             geometry={selectionGeometry}
+            objectActions={objectActions}
             onSelectObject={handleSelectObject}
+            onObjectCommand={handleObjectCommand}
+            onObjectRecovery={handleObjectRecovery}
             onCommitGeometry={handleGeometryCommit}
             onSetTransition={handleTransitionChange}
             onSetBackground={handleBackgroundChange}

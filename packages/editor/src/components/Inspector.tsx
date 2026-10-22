@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
 import type { SlideInfo, Transition } from '@htmlppt/core';
+import type { ObjectCommand } from '../commands/objects';
 import type { SelectionTarget } from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
 import {
@@ -26,6 +27,18 @@ export type InspectorTab = 'design' | 'text' | 'notes';
 type PendingActions = Pick<DeckControllerActions,
   'changePendingEdit' | 'cancelPendingEdit' | 'settlePendingEdits'>;
 
+export interface ObjectActionState {
+  canGroup: boolean;
+  canUngroup: boolean;
+  canAlign: boolean;
+  canDistribute: boolean;
+  canOrder: boolean;
+  canToggle: boolean;
+  locked: boolean;
+  hidden: boolean;
+  group: boolean;
+}
+
 export interface InspectorProps {
   pendingActions: PendingActions;
   slide: SlideInfo | undefined;
@@ -33,12 +46,42 @@ export interface InspectorProps {
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
   geometry: GeometryValues | null;
+  objectActions: ObjectActionState;
   onSelectObject: (path: number[]) => void;
+  onObjectCommand: (command: ObjectCommand) => void;
+  onObjectRecovery: (path: number[], action: 'unlock' | 'unhide') => void;
   onCommitGeometry: (field: GeometryField, value: number) => boolean;
   onSetTransition: (transition: Transition) => void;
   onSetBackground: (background: SlideBackground) => boolean;
   onClearBackground: () => boolean;
   onSetNotes: (notes: string) => void;
+}
+
+const ACTION_CLASS =
+  'rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40';
+
+function ActionButton({
+  testId,
+  label,
+  disabled,
+  onClick
+}: {
+  testId: string;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      disabled={disabled}
+      onClick={onClick}
+      className={ACTION_CLASS}
+    >
+      {label}
+    </button>
+  );
 }
 
 const TABS: readonly { id: InspectorTab; label: string }[] = [
@@ -146,7 +189,10 @@ export function Inspector({
   selection,
   selectionCount = selection ? 1 : 0,
   geometry,
+  objectActions,
   onSelectObject,
+  onObjectCommand,
+  onObjectRecovery,
   onCommitGeometry,
   onSetTransition,
   onSetBackground,
@@ -188,6 +234,8 @@ export function Inspector({
   const multi = selectionCount > 1;
   const readOnly = multi || (selection !== null && selection.path.length > 1);
   const selectedTopPath = selection?.path[0];
+  const geometryLocked = readOnly || objectActions.locked || objectActions.hidden;
+  const sizeLocked = geometryLocked || objectActions.group;
 
   const selectTab = (next: InspectorTab, focus: boolean) => {
     setTab(next);
@@ -306,7 +354,14 @@ export function Inspector({
               {objects.map((object) => {
                 const selected = selectedTopPath === object.path[0];
                 return (
-                  <li key={object.path.join('.')}>
+                  <li
+                    key={object.path.join('.')}
+                    className={`flex items-stretch gap-1 rounded border transition-colors ${
+                      selected
+                        ? 'border-amber-400/70 bg-amber-400/10'
+                        : 'border-white/10 hover:border-white/25'
+                    }`}
+                  >
                     <button
                       type="button"
                       data-testid="object-row"
@@ -314,10 +369,8 @@ export function Inspector({
                       data-object-path={object.path.join('.')}
                       aria-current={selected ? 'true' : undefined}
                       onClick={() => onSelectObject(object.path)}
-                      className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left text-xs transition-colors ${
-                        selected
-                          ? 'border-amber-400/70 bg-amber-400/10 text-amber-100'
-                          : 'border-white/10 text-zinc-300 hover:border-white/25'
+                      className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                        selected ? 'text-amber-100' : 'text-zinc-300'
                       }`}
                     >
                       <span className="rounded bg-white/5 px-1 py-0.5 font-mono text-[10px] text-zinc-400">
@@ -331,13 +384,156 @@ export function Inspector({
                       <span className="min-w-0 flex-1 truncate">
                         {object.text || '（無文字）'}
                       </span>
+                      {object.group && (
+                        <span className="rounded bg-sky-400/15 px-1 py-0.5 text-[10px] text-sky-200">
+                          群組
+                        </span>
+                      )}
+                      {object.locked && (
+                        <span
+                          data-testid="object-locked-badge"
+                          className="rounded bg-rose-400/15 px-1 py-0.5 text-[10px] text-rose-200"
+                        >
+                          鎖定
+                        </span>
+                      )}
+                      {object.hidden && (
+                        <span
+                          data-testid="object-hidden-badge"
+                          className="rounded bg-violet-400/15 px-1 py-0.5 text-[10px] text-violet-200"
+                        >
+                          隱藏
+                        </span>
+                      )}
                     </button>
+                    {object.locked && (
+                      <button
+                        type="button"
+                        data-testid="object-unlock"
+                        aria-label={`解鎖 ${object.text || object.elementId || object.tag}`}
+                        onClick={() => onObjectRecovery(object.path, 'unlock')}
+                        className="shrink-0 px-2 text-[11px] text-rose-200 hover:text-rose-100"
+                      >
+                        解鎖
+                      </button>
+                    )}
+                    {object.hidden && object.canUnhide && (
+                      <button
+                        type="button"
+                        data-testid="object-unhide"
+                        aria-label={`顯示 ${object.text || object.elementId || object.tag}`}
+                        onClick={() => onObjectRecovery(object.path, 'unhide')}
+                        className="shrink-0 px-2 text-[11px] text-violet-200 hover:text-violet-100"
+                      >
+                        顯示
+                      </button>
+                    )}
                   </li>
                 );
               })}
             </ul>
           )}
         </section>
+
+        {selection && (
+          <section
+            data-testid="object-actions"
+            aria-label="物件操作"
+            className={SECTION_CLASS}
+          >
+            <h3 className={HEADING_CLASS}>物件操作</h3>
+            <div className="grid grid-cols-3 gap-1">
+              <ActionButton
+                testId="object-group"
+                label="群組"
+                disabled={!objectActions.canGroup}
+                onClick={() => onObjectCommand({ type: 'group' })}
+              />
+              <ActionButton
+                testId="object-ungroup"
+                label="取消群組"
+                disabled={!objectActions.canUngroup}
+                onClick={() => onObjectCommand({ type: 'ungroup' })}
+              />
+              <ActionButton
+                testId="object-order-front"
+                label="最前"
+                disabled={!objectActions.canOrder}
+                onClick={() => onObjectCommand({ type: 'order', direction: 'front' })}
+              />
+              <ActionButton
+                testId="object-order-forward"
+                label="上移"
+                disabled={!objectActions.canOrder}
+                onClick={() => onObjectCommand({ type: 'order', direction: 'forward' })}
+              />
+              <ActionButton
+                testId="object-order-backward"
+                label="下移"
+                disabled={!objectActions.canOrder}
+                onClick={() => onObjectCommand({ type: 'order', direction: 'backward' })}
+              />
+              <ActionButton
+                testId="object-order-back"
+                label="最後"
+                disabled={!objectActions.canOrder}
+                onClick={() => onObjectCommand({ type: 'order', direction: 'back' })}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {(
+                [
+                  ['left', '左對齊'],
+                  ['center', '置中'],
+                  ['right', '右對齊'],
+                  ['top', '頂端'],
+                  ['middle', '垂直置中'],
+                  ['bottom', '底部']
+                ] as const
+              ).map(([mode, label]) => (
+                <ActionButton
+                  key={mode}
+                  testId={`align-${mode}`}
+                  label={label}
+                  disabled={!objectActions.canAlign}
+                  onClick={() => onObjectCommand({ type: 'align', mode })}
+                />
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              <ActionButton
+                testId="distribute-horizontal"
+                label="水平等距"
+                disabled={!objectActions.canDistribute}
+                onClick={() => onObjectCommand({ type: 'distribute', axis: 'horizontal' })}
+              />
+              <ActionButton
+                testId="distribute-vertical"
+                label="垂直等距"
+                disabled={!objectActions.canDistribute}
+                onClick={() => onObjectCommand({ type: 'distribute', axis: 'vertical' })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              <ActionButton
+                testId="object-lock"
+                label={objectActions.locked ? '解除鎖定' : '鎖定'}
+                disabled={!objectActions.canToggle}
+                onClick={() =>
+                  onObjectCommand({ type: 'lock', locked: !objectActions.locked })
+                }
+              />
+              <ActionButton
+                testId="object-hide"
+                label={objectActions.hidden ? '顯示物件' : '隱藏物件'}
+                disabled={!objectActions.canToggle}
+                onClick={() =>
+                  onObjectCommand({ type: 'hide', hidden: !objectActions.hidden })
+                }
+              />
+            </div>
+          </section>
+        )}
 
         {selection ? (
           <section
@@ -346,9 +542,21 @@ export function Inspector({
             className={SECTION_CLASS}
           >
             <h3 className={HEADING_CLASS}>位置與大小</h3>
-            {multi ? (
+            {objectActions.hidden ? (
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+                物件已隱藏，請先顯示後再調整位置。
+              </p>
+            ) : objectActions.locked ? (
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+                物件已鎖定，請先解除鎖定再調整位置。
+              </p>
+            ) : multi ? (
               <p className="text-[11px] text-zinc-500">
-                已選取 {selectionCount} 個物件，僅支援移動、複製與刪除。
+                已選取 {selectionCount} 個物件；可對齊、分佈、群組，或拖曳移動。
+              </p>
+            ) : objectActions.group ? (
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+                群組僅支援移動與旋轉；取消群組後可調整大小。
               </p>
             ) : (
               readOnly && (
@@ -362,7 +570,7 @@ export function Inspector({
                 field="x"
                 label="X"
                 value={geometry?.x ?? null}
-                disabled={readOnly || geometry === null}
+                disabled={geometryLocked || geometry === null}
                 pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
@@ -370,7 +578,7 @@ export function Inspector({
                 field="y"
                 label="Y"
                 value={geometry?.y ?? null}
-                disabled={readOnly || geometry === null}
+                disabled={geometryLocked || geometry === null}
                 pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
@@ -378,7 +586,7 @@ export function Inspector({
                 field="width"
                 label="寬"
                 value={geometry?.width ?? null}
-                disabled={readOnly || geometry === null}
+                disabled={sizeLocked || geometry === null}
                 pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
@@ -386,7 +594,7 @@ export function Inspector({
                 field="height"
                 label="高"
                 value={geometry?.height ?? null}
-                disabled={readOnly || geometry === null}
+                disabled={sizeLocked || geometry === null}
                 pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
               />
@@ -395,7 +603,7 @@ export function Inspector({
                   field="rotation"
                   label="旋轉"
                   value={geometry?.rotation ?? null}
-                  disabled={readOnly || geometry === null}
+                  disabled={geometryLocked || geometry === null}
                   pendingActions={pendingActions}
                 onCommit={onCommitGeometry}
                 />
