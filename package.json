@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "lint:deps": "depcruise packages --config dependency-cruiser.cjs",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json --noEmit",
-    "test:unit": "npm run test -w @htmlppt/core",
+    "test:unit": "npm run test -w @htmlppt/core && npm run test -w @htmlppt/editor",
     "test:integration": "npm run build && npm run test -w @htmlppt/host && npm run test -w @htmlppt/cli",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
