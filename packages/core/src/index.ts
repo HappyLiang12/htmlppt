@@ -14,11 +14,19 @@ export type { IdFactory } from './ids.js';
 export {
   DeckMutationError,
   addElement,
+  addSlide,
+  deleteSlide,
+  duplicateSlide,
+  moveSlide,
   mutateDeck,
   removeElement,
   resolveTarget,
   setElementHtml,
+  setNotes,
+  setSlideOrder,
   setStyle,
-  setText
+  setText,
+  setTransition,
+  updateSlideHtml
 } from './mutations.js';
-export type { ElementTarget } from './mutations.js';
+export type { AddSlideOptions, ElementTarget, Transition } from './mutations.js';
