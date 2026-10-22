@@ -192,7 +192,9 @@ test.describe('presentation runtime', () => {
         await page.locator('#probe').focus();
         await page.keyboard.press('ArrowRight');
         expect(page.url()).toContain('#/1');
-        await page.locator('body').click({ position: { x: 10, y: 10 } });
+        // Clicking the deck now advances, so blur explicitly before testing
+        // the modifier chord.
+        await page.evaluate("document.getElementById('probe').blur()");
         await page.keyboard.press('Shift+ArrowRight');
         expect(page.url()).toContain('#/1');
         await page.keyboard.press('ArrowRight');

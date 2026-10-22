@@ -1,15 +1,23 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, mkdir } from 'node:fs/promises';
+import { access, mkdir, open, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  MAX_IMAGE_BYTES,
+  DeckMutationError,
   addElement,
   addSlide,
+  chartSizeOf,
   createDeckHtml,
   deleteSlide,
   duplicateSlide,
   findSlide,
+  formatBytes,
   getElement,
   getOutline,
+  imageDataUrlFromBytes,
+  imageMimeFromFileName,
+  insertImage,
+  insertTable,
   moveSlide,
   normalizeDeck,
   readSlide,
@@ -24,8 +32,11 @@ import {
   setStyle,
   setText,
   setTransition,
+  updateChart,
   updateSlideHtml,
   validateDeck,
+  validateImageSource,
+  type ElementTarget,
   type SlideBackground,
   type Transition
 } from '@htmlppt/core';
@@ -128,6 +139,174 @@ const backgroundSchema = z
 const stylesSchema = z
   .record(z.string(), z.union([z.string(), z.null()]))
   .describe('CSS property names mapped to values; null removes a property.');
+
+const imageSourceSchema = z
+  .string()
+  .min(1)
+  .describe(
+    'A supported image data URL, an absolute http(s) URL (validated, never fetched), or a local image path resolved against the server working directory. Local files are embedded as data URLs.'
+  );
+
+const chartSchema = z
+  .union([z.string(), z.record(z.string(), z.unknown())])
+  .describe(
+    'Chart JSON string or object: { type: "bar"|"line"|"pie", title?, labels: string[], series: [{ name, values: number[] }], colors?, legend?, valueLabels? }.'
+  );
+
+const IMAGE_TYPE_HINT = 'PNG, JPEG, GIF, WebP, AVIF, or SVG';
+
+/**
+ * Local paths are anything without a URL scheme, plus Windows drive paths
+ * (`C:\...`, `C:/...`, and drive-relative `C:...`), which URL parsing would
+ * otherwise mistake for a `c:` URL. Protocol-relative and UNC values
+ * (`//server/share/x.png`, `\\server\share\x.png`) are not local: resolving
+ * them would contact a remote share, so they go through URL validation and
+ * fail as `invalid-image` instead.
+ */
+function isLocalImageSource(value: string): boolean {
+  if (/^[\\/]{2}/.test(value)) return false;
+  if (/^data:/i.test(value)) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  if (/^[a-z]:/i.test(value)) return true;
+  return !/^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
+function imageFailure(message: string): never {
+  throw new ToolError('invalid-image', message);
+}
+
+function imageReadFailure(filePath: string, error: unknown): never {
+  imageFailure(
+    `Could not read the image file "${filePath}": ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
+/**
+ * Reads exactly `size` bytes from an already-open descriptor. A short read
+ * means the file shrank after it was measured, so the data is rejected rather
+ * than embedded truncated.
+ */
+async function readImageBytes(
+  handle: FileHandle,
+  size: number,
+  filePath: string
+): Promise<Buffer> {
+  const bytes = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const { bytesRead } = await handle.read(
+      bytes,
+      offset,
+      size - offset,
+      offset
+    );
+    if (bytesRead === 0) {
+      imageFailure(
+        `The image file "${filePath}" changed while it was being read. Try again.`
+      );
+    }
+    offset += bytesRead;
+  }
+  return bytes;
+}
+
+/**
+ * Opens a local image once, measures that descriptor, and reads from the same
+ * descriptor. Checks and bytes therefore come from one open file: a path
+ * swapped after the open cannot substitute a FIFO, device, or larger file.
+ * Every open, stat, and read failure is an `invalid-image` naming the image
+ * path, never a deck `file-not-found`/`file-unreadable` error.
+ */
+async function localImageDataUrl(
+  accessor: DeckAccess,
+  input: string
+): Promise<string> {
+  const filePath = accessor.resolve(input);
+  const mime = imageMimeFromFileName(filePath);
+  if (!mime) {
+    imageFailure(
+      `Unsupported image file type for "${filePath}". Use ${IMAGE_TYPE_HINT}.`
+    );
+  }
+
+  let handle: FileHandle;
+  try {
+    handle = await open(filePath, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      imageFailure(`Image file not found: ${filePath}.`);
+    }
+    imageReadFailure(filePath, error);
+  }
+
+  let bytes: Buffer;
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      imageFailure(`The image path is not a file: ${filePath}.`);
+    }
+    if (stats.size === 0) {
+      imageFailure(`The image file "${filePath}" is empty.`);
+    }
+    if (stats.size > MAX_IMAGE_BYTES) {
+      imageFailure(
+        `The image "${filePath}" is ${formatBytes(stats.size)}; the limit is 8 MB. Resize or compress it before inserting.`
+      );
+    }
+    bytes = await readImageBytes(handle, stats.size, filePath);
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    imageReadFailure(filePath, error);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return imageDataUrlFromBytes(bytes, mime);
+}
+
+async function resolveImageSource(
+  accessor: DeckAccess,
+  source: string
+): Promise<string> {
+  const value = source.trim();
+  if (!value) {
+    imageFailure(
+      `Choose an image file or URL. Supported types: ${IMAGE_TYPE_HINT}.`
+    );
+  }
+  if (isLocalImageSource(value)) {
+    return localImageDataUrl(accessor, value);
+  }
+  // Data and http(s) URLs stay as authored: `validateImageSource` shares the
+  // decoded size and MIME checks with the editor, and remote URLs are never
+  // fetched on the Node host.
+  return validateImageSource(value);
+}
+
+/** Resolves an insertion anchor and enforces the direct-child rule. */
+function insertionAnchor(
+  slide: Element,
+  target: ElementTarget | undefined
+): Element | null {
+  if (!target) return null;
+  const reference = resolveTarget(slide, target);
+  if (reference.parentElement !== slide) {
+    throw new DeckMutationError(
+      'target-invalid',
+      'The insertion anchor must be a direct child of the slide.'
+    );
+  }
+  return reference;
+}
+
+function insertAfterAnchor(
+  slide: Element,
+  element: Element,
+  anchor: Element | null
+): void {
+  if (anchor) slide.insertBefore(element, anchor.nextElementSibling);
+}
 
 export interface ToolOptions {
   cwd?: string;
@@ -505,6 +684,140 @@ export function registerTools(
             revision: result.revision,
             elementId
           };
+        }
+      );
+    }
+  );
+
+  server.registerTool(
+    'add_image',
+    {
+      title: 'Add image',
+      description:
+        'Insert one image as a top-level object. Accepts a data URL, an absolute http(s) URL (never fetched), or a local path embedded as a validated data URL. Local files must be a supported type and at most 8 MB. Optionally inserts after a direct-child target.',
+      inputSchema: {
+        path: deckPath,
+        slideId,
+        source: imageSourceSchema,
+        width: z
+          .number()
+          .finite()
+          .min(1)
+          .optional()
+          .describe(
+            'Optional width in pixels, at least 1. Height follows the 16:9 default ratio. Defaults to 480.'
+          ),
+        target: targetSchema.optional()
+      }
+    },
+    async (args) => {
+      const filePath = accessor.resolve(args.path);
+      return runTool(
+        { path: filePath, slideId: args.slideId, target: args.target },
+        async () => {
+          // Local bytes are read before the synchronous mutation callback.
+          const source = await resolveImageSource(accessor, args.source);
+          const width = args.width ?? 480;
+          const height = Math.max(1, Math.round((width * 9) / 16));
+          let elementId: string | null = null;
+          const result = await accessor.mutate(filePath, (draft) => {
+            const slide = findSlide(draft, args.slideId).element;
+            const anchor = insertionAnchor(slide, args.target);
+            const element = insertImage(slide, {
+              source,
+              x: 100,
+              y: 100,
+              width,
+              height
+            });
+            insertAfterAnchor(slide, element, anchor);
+            elementId = element.getAttribute('data-ppt-el');
+          });
+          return { path: filePath, revision: result.revision, elementId };
+        }
+      );
+    }
+  );
+
+  server.registerTool(
+    'add_table',
+    {
+      title: 'Add table',
+      description:
+        'Insert one table object with a header row as a top-level object. Rows and columns are positive integers within the core limits (50 rows, 20 columns). Optionally inserts after a direct-child target.',
+      inputSchema: {
+        path: deckPath,
+        slideId,
+        rows: z
+          .number()
+          .int()
+          .describe('Row count including the header row; 1-50.'),
+        columns: z.number().int().describe('Column count; 1-20.'),
+        target: targetSchema.optional()
+      }
+    },
+    async (args) => {
+      const filePath = accessor.resolve(args.path);
+      return runTool(
+        { path: filePath, slideId: args.slideId, target: args.target },
+        async () => {
+          let elementId: string | null = null;
+          const result = await accessor.mutate(filePath, (draft) => {
+            const slide = findSlide(draft, args.slideId).element;
+            const anchor = insertionAnchor(slide, args.target);
+            const element = insertTable(slide, {
+              rows: args.rows,
+              columns: args.columns,
+              header: true,
+              x: 100,
+              y: 100,
+              width: 960
+            });
+            insertAfterAnchor(slide, element, anchor);
+            elementId = element.getAttribute('data-ppt-el');
+          });
+          return { path: filePath, revision: result.revision, elementId };
+        }
+      );
+    }
+  );
+
+  server.registerTool(
+    'update_chart',
+    {
+      title: 'Update chart',
+      description:
+        'Replace the data of an existing chart figure (figure[data-ppt-chart]), normalize the JSON, and regenerate its SVG at the persisted size.',
+      inputSchema: {
+        path: deckPath,
+        slideId,
+        target: targetSchema,
+        chart: chartSchema
+      }
+    },
+    async (args) => {
+      const filePath = accessor.resolve(args.path);
+      return runTool(
+        { path: filePath, slideId: args.slideId, target: args.target },
+        async () => {
+          let width = 0;
+          let height = 0;
+          const result = await accessor.mutate(filePath, (draft) => {
+            const slide = findSlide(draft, args.slideId).element;
+            const element = resolveTarget(slide, args.target);
+            if (
+              element.tagName.toLowerCase() !== 'figure' ||
+              !element.hasAttribute('data-ppt-chart')
+            ) {
+              throw new ToolError(
+                'not-a-chart',
+                'The target is not a chart. Charts are <figure data-ppt-chart> elements.'
+              );
+            }
+            updateChart(element, args.chart);
+            ({ width, height } = chartSizeOf(element));
+          });
+          return { path: filePath, revision: result.revision, width, height };
         }
       );
     }

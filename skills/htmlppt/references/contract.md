@@ -90,8 +90,13 @@ Minimal explicit slide:
   `data-ppt-runtime` attribute whose value is not `1`, or on an element other
   than `<script>`, is an error (`invalid-runtime-marker`).
 - The runtime handles the first/last slide, arrow keys, space, Page Up/Down,
-  Home/End, the `#/n` URL hash, and print styles. Do not replace it with custom
-  navigation unless the user asks and accepts that the editor will not run it.
+  Home/End, the `#/n` URL hash, and print styles. Clicking a noninteractive
+  area advances; links, buttons, form controls, and editable content keep their
+  own behavior. `F` toggles fullscreen and `P` opens the presenter view (notes,
+  next-slide preview, timer, prev/next). Authored `fade`/`slide` transitions
+  animate slide changes unless the viewer prefers reduced motion. Do not replace
+  the runtime with custom navigation unless the user asks and accepts that the
+  editor will not run it.
 
 ## Charts
 

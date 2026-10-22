@@ -13,6 +13,7 @@ import {
   type Response
 } from '@playwright/test';
 import { execa } from 'execa';
+import { parseDeckHtml } from '../packages/core/dist/node.js';
 import { startCliHost } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -427,6 +428,17 @@ async function savedDocument(editor: EditorHarness): Promise<string> {
 }
 
 /**
+ * Checks real attributes in the saved document. Raw substring checks would
+ * also match the bundled runtime source, whose selectors mention these names.
+ */
+async function savedHas(
+  editor: EditorHarness,
+  selector: string
+): Promise<boolean> {
+  return parseDeckHtml(await savedDocument(editor)).querySelector(selector) !== null;
+}
+
+/**
  * Replaces the first slide heading in the deck file behind the host's back.
  * The host watcher turns that write into an external revision.
  */
@@ -532,16 +544,22 @@ async function savedStyle(
 ): Promise<Record<string, string | null>> {
   const html = await readFile(join(directory, file), 'utf8');
   const style = /style="([^"]*)"/.exec(tagPattern.exec(html)?.[0] ?? '')?.[1] ?? '';
+  // The serializer escapes quotes inside attribute values; decode them before
+  // splitting declarations so url("...") values stay intact.
+  const decoded = style
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
   return {
-    position: styleDeclaration(style, 'position'),
-    left: styleDeclaration(style, 'left'),
-    top: styleDeclaration(style, 'top'),
-    width: styleDeclaration(style, 'width'),
-    height: styleDeclaration(style, 'height'),
-    transform: styleDeclaration(style, 'transform'),
-    background: styleDeclaration(style, 'background'),
-    'background-image': styleDeclaration(style, 'background-image'),
-    'background-color': styleDeclaration(style, 'background-color')
+    position: styleDeclaration(decoded, 'position'),
+    left: styleDeclaration(decoded, 'left'),
+    top: styleDeclaration(decoded, 'top'),
+    width: styleDeclaration(decoded, 'width'),
+    height: styleDeclaration(decoded, 'height'),
+    transform: styleDeclaration(decoded, 'transform'),
+    background: styleDeclaration(decoded, 'background'),
+    'background-image': styleDeclaration(decoded, 'background-image'),
+    'background-color': styleDeclaration(decoded, 'background-color')
   };
 }
 
@@ -827,9 +845,10 @@ test(
       expect(Number.parseFloat(saved.top ?? '')).toBeCloseTo(50 / scale, 0);
 
       const html = await readFile(join(editor.directory, editor.file), 'utf8');
-      expect(html).not.toContain('data-testid');
-      expect(html).not.toContain('data-ppt-frame-slide');
-      expect(html).not.toContain('contenteditable');
+      const savedDoc = parseDeckHtml(html);
+      expect(savedDoc.querySelector('[data-testid]')).toBeNull();
+      expect(savedDoc.querySelector('[data-ppt-frame-slide]')).toBeNull();
+      expect(savedDoc.querySelector('[contenteditable]')).toBeNull();
     } finally {
       await closeEditor(editor);
     }
@@ -1253,6 +1272,44 @@ test(
       expect(await slideInnerGeometry(editor.frame)).toEqual(wrapperBefore);
       await expect(heading).toHaveText('Untitled deck');
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'keyboard focus in the text toolbar keeps editing and applies bold',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('Toolbar focus bold');
+      await page.keyboard.press('Control+Shift+ArrowLeft');
+
+      // Simulates keyboard focus leaving the iframe for a toolbar button.
+      await page.getByTestId('text-bold').focus();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Enter');
+
+      await expect(heading.locator('span[style*="font-weight"]')).toHaveCSS(
+        'font-weight',
+        '700'
+      );
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      const saved = await savedDocument(editor);
+      expect(saved).toMatch(/font-weight:\s*bold/);
+      expect(saved).not.toContain('contenteditable');
     } finally {
       await closeEditor(editor);
     }
@@ -1919,7 +1976,7 @@ test(
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(true);
       const savedWithNotes = await savedDocument(editor);
       expect(savedWithNotes).toMatch(
@@ -1933,7 +1990,7 @@ test(
       await page.getByTestId('inspector-tab-design').click();
       expect((await removeSave).ok()).toBeTruthy();
       await expect
-        .poll(async () => (await savedDocument(editor)).includes('data-ppt-notes'))
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(false);
       expect(await savedDocument(editor)).not.toMatch(
         /<aside[^>]*data-ppt-notes/
@@ -1954,19 +2011,71 @@ test(
       await expect(select).toBeVisible();
       await expect(select).toHaveValue('none');
 
-      const save = waitForDeckSave(page);
+      // Choosing a transition only stages it; the deck changes on confirmation.
       await select.selectOption('fade');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      expect(
+        await savedHas(editor, '[data-ppt-transition="fade"]')
+      ).toBe(false);
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('transition-apply').click();
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () =>
-          (await savedDocument(editor)).includes('data-ppt-transition="fade"')
-        )
+        .poll(async () => savedHas(editor, '[data-ppt-transition="fade"]'))
         .toBe(true);
 
       await page.reload();
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
       await expect(page.getByTestId('transition-select')).toHaveValue('fade');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'transition preview and cancel never mutate the deck',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const select = page.getByTestId('transition-select');
+      await expect(select).toHaveValue('none');
+      await expect(page.getByTestId('transition-preview')).toBeDisabled();
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await select.selectOption('slide');
+        await expect(page.getByTestId('transition-preview')).toBeEnabled();
+        await page.getByTestId('transition-preview').click();
+
+        const overlay = page.getByTestId('transition-preview-overlay');
+        await expect(overlay).toBeVisible();
+        await expect(overlay).toHaveAttribute('data-transition', 'slide');
+        await expect(overlay).toHaveCount(0, { timeout: 3_000 });
+
+        await page.getByTestId('transition-cancel').click();
+        await expect(select).toHaveValue('none');
+        await expect(page.getByTestId('transition-preview')).toBeDisabled();
+        expect(saveRequests).toHaveLength(0);
+        expect(await savedHas(editor, '[data-ppt-transition]')).toBe(false);
+      } finally {
+        page.off('request', countSave);
+      }
+
+      await select.selectOption('fade');
+      const save = waitForDeckSave(page);
+      await page.getByTestId('transition-apply').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect
+        .poll(async () => savedHas(editor, '[data-ppt-transition="fade"]'))
+        .toBe(true);
     } finally {
       await closeEditor(editor);
     }
@@ -2068,9 +2177,7 @@ test(
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
-        .poll(async () =>
-          (await savedDocument(editor)).includes('data-ppt-notes')
-        )
+        .poll(async () => savedHas(editor, '[data-ppt-notes]'))
         .toBe(false);
 
       // The notes aside was the first child, so the old path 1 now resolves to
@@ -2132,6 +2239,51 @@ test(
       expect(cleared['background-image']).toBeNull();
       expect(cleared['background-color']).toBeNull();
       await expect(value).toHaveValue('');
+
+      // Each background form replaces the others instead of mixing.
+      const kind = page.getByTestId('background-kind');
+      await kind.selectOption('gradient');
+      await value.fill('linear-gradient(90deg, #112233, #445566)');
+      const gradientSave = waitForDeckSave(page);
+      await page.getByTestId('apply-background').click();
+      expect((await gradientSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file)).background
+        )
+        .toContain('linear-gradient');
+      const gradient = await savedSlideStyle(editor.directory, editor.file);
+      expect(gradient['background-image']).toBeNull();
+
+      await kind.selectOption('image');
+      await value.fill('https://example.com/bg.png');
+      const imageSave = waitForDeckSave(page);
+      await page.getByTestId('apply-background').click();
+      expect((await imageSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file))[
+              'background-image'
+            ]
+        )
+        .toContain('example.com');
+      const image = await savedSlideStyle(editor.directory, editor.file);
+      expect(image.background).toBeNull();
+      expect(image['background-image']).not.toContain('linear-gradient');
+
+      const imageClearSave = waitForDeckSave(page);
+      await clear.click();
+      expect((await imageClearSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file))[
+              'background-image'
+            ]
+        )
+        .toBeNull();
     } finally {
       await closeEditor(editor);
     }
@@ -2650,8 +2802,13 @@ test(
         await page.keyboard.press('Control+ArrowRight');
         await expect(play.locator('h1')).toHaveText('Untitled deck');
 
-        // Keys work while the deck iframe owns focus.
-        await play.locator('h1').click();
+        // Keys work while the deck iframe owns focus. Focus without a click,
+        // because a noninteractive click now advances the presentation.
+        await play.locator('body').evaluate((body) => {
+          body.tabIndex = 0;
+          body.focus();
+        });
+        await expect(play.locator('body')).toBeFocused();
         await page.keyboard.press('ArrowRight');
         await expect(play.locator('h1')).toHaveText('Untitled deck — 2');
 
@@ -2694,10 +2851,10 @@ test(
 
         // Presenting never writes the deck.
         expect(saveRequests).toHaveLength(0);
-        const saved = await savedDocument(editor);
-        expect(saved).not.toContain('data-testid');
-        expect(saved).not.toContain('contenteditable');
-        expect(saved).not.toContain('data-ppt-frame-slide');
+        const saved = parseDeckHtml(await savedDocument(editor));
+        expect(saved.querySelector('[data-testid]')).toBeNull();
+        expect(saved.querySelector('[contenteditable]')).toBeNull();
+        expect(saved.querySelector('[data-ppt-frame-slide]')).toBeNull();
       } finally {
         page.off('request', countSave);
       }

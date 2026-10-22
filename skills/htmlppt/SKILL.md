@@ -58,10 +58,11 @@ MCP writes until then; a save based on the old revision returns 409/conflict.
 - Runtime: multi-slide decks include exactly one
   `<script data-ppt-runtime="1">...</script>` with the real runtime body, not
   an empty marker. `create_deck` and `htmlppt new` write it for you.
-- Charts: a figure with `data-ppt-chart='{"type":"bar",...}'` holding valid
-  JSON.
+- Charts: a figure with `data-ppt-chart='{"type":"bar","labels":["Q1"],"series":[{"name":"USD","values":[12]}]}'`
+  holding valid JSON. The rendered SVG is derived from that attribute.
 - Assets: use `data:` URIs or absolute URLs. Relative asset paths are flagged
-  by validation and do not travel with an exported file.
+  by validation and do not travel with an exported file. `add_image` embeds a
+  local file as a data URL; remote URLs are never fetched.
 - No editor artifacts: never write `data-ppt-editing` or
   `data-ppt-frame-slide` into the file.
 
@@ -132,9 +133,9 @@ the full runtime from [examples/basic.html](examples/basic.html).
    - Existing deck: `get_outline` first, then `read_slide` or `get_element`
      before replacing anything. Never guess slide or object ids.
 3. Mutate in small steps, one tool call per change. Use `add_slide`,
-   `set_text`, `set_style`, `add_element`, `set_slide_background`,
-   `set_notes`, `set_transition`, and the other mutation tools listed in the
-   tool reference.
+   `set_text`, `set_style`, `add_element`, `add_image`, `add_table`,
+   `update_chart`, `set_slide_background`, `set_notes`, `set_transition`, and
+   the other mutation tools listed in the tool reference.
 4. Validate after a batch of edits with `validate_deck`. Fix every reported
    error before moving on. Warnings are advisory but should be reviewed.
 5. For human review, call `open_editor` and give the returned

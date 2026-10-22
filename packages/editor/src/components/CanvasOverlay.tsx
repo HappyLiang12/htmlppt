@@ -23,6 +23,8 @@ export interface CanvasOverlayProps {
    * numeric geometry stay single-object operations.
    */
   readOnly: boolean;
+  /** Groups keep rotation but cannot be resized; locked objects disable both. */
+  handles?: 'all' | 'rotate' | 'none';
   onResizeStart: (
     handle: Handle,
     event: ReactPointerEvent<HTMLDivElement>
@@ -53,6 +55,7 @@ export function CanvasOverlay({
   guides,
   scale,
   readOnly,
+  handles = 'all',
   onResizeStart,
   onRotateStart
 }: CanvasOverlayProps) {
@@ -80,7 +83,8 @@ export function CanvasOverlay({
       )}
 
       {boxes.map((box, index) => {
-        const interactive = index === 0 && !readOnly;
+        const interactive = index === 0 && !readOnly && handles !== 'none';
+        const resizable = interactive && handles !== 'rotate';
         return (
           <div
             key={box.path.join('.') || index}
@@ -101,7 +105,7 @@ export function CanvasOverlay({
           >
             {interactive && (
               <>
-                {HANDLES.map((handle) => (
+                {resizable && HANDLES.map((handle) => (
                   <div
                     key={handle}
                     data-testid={`handle-${handle}`}
