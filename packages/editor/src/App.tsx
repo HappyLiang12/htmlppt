@@ -382,6 +382,11 @@ export function App() {
 
   const [view, setView] = useState<EditorView>('normal');
   const [playing, setPlaying] = useState(false);
+  const [transitionPreview, setTransitionPreview] = useState<{
+    transition: Transition;
+    id: number;
+  } | null>(null);
+  const transitionPreviewSequence = useRef(0);
   const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
@@ -610,6 +615,18 @@ export function App() {
     },
     [commitMasterDocument]
   );
+
+  const handlePreviewTransition = useCallback((transition: Transition) => {
+    if (transition === 'none') return;
+    const reduceMotion =
+      window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+    if (reduceMotion) return;
+    transitionPreviewSequence.current += 1;
+    setTransitionPreview({
+      transition,
+      id: transitionPreviewSequence.current
+    });
+  }, []);
 
   const handleBackgroundChange = useCallback(
     (background: SlideBackground): boolean => {
@@ -2597,6 +2614,19 @@ export function App() {
                   onResizeStart={beginResizeSession}
                   onRotateStart={beginRotateSession}
                 />
+                {transitionPreview && (
+                  <div
+                    key={transitionPreview.id}
+                    data-testid="transition-preview-overlay"
+                    data-transition={transitionPreview.transition}
+                    className={`htmlppt-transition-preview htmlppt-transition-preview--${transitionPreview.transition}`}
+                    onAnimationEnd={() =>
+                      setTransitionPreview((current) =>
+                        current?.id === transitionPreview.id ? null : current
+                      )
+                    }
+                  />
+                )}
               </div>
             ) : status === 'loading' ? (
               <p className="text-sm text-zinc-500">載入中…</p>
@@ -2627,6 +2657,7 @@ export function App() {
             onReplaceImageFile={handleReplaceImageFile}
             onReplaceImageUrl={handleReplaceImageUrl}
             onEditChart={handleOpenChartEditor}
+            onPreviewTransition={handlePreviewTransition}
             onSetTransition={handleTransitionChange}
             onSetBackground={handleBackgroundChange}
             onClearBackground={handleClearBackground}

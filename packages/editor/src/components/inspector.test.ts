@@ -75,6 +75,7 @@ function props(overrides: Partial<InspectorInputs> = {}): InspectorInputs {
     onReplaceImageFile: () => undefined,
     onReplaceImageUrl: () => undefined,
     onEditChart: () => undefined,
+    onPreviewTransition: () => undefined,
     onSetTransition: () => undefined,
     onSetBackground: () => true,
     onClearBackground: () => true,
@@ -202,6 +203,51 @@ describe('inspector notes draft', () => {
       next.blur();
     });
     expect(onSetNotes).not.toHaveBeenCalled();
+  });
+});
+
+describe('inspector transition staging', () => {
+  async function choose(value: string): Promise<void> {
+    await act(async () => {
+      const select = selectByTestId('transition-select');
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  it('previews and cancels without committing', async () => {
+    const onSetTransition = vi.fn();
+    const onPreviewTransition = vi.fn();
+    await render({ onSetTransition, onPreviewTransition });
+
+    expect(selectByTestId('transition-select').value).toBe('none');
+    expect(buttonByTestId('transition-preview').disabled).toBe(true);
+    expect(buttonByTestId('transition-apply').disabled).toBe(true);
+    expect(buttonByTestId('transition-cancel').disabled).toBe(true);
+
+    await choose('slide');
+    expect(onSetTransition).not.toHaveBeenCalled();
+    expect(buttonByTestId('transition-preview').disabled).toBe(false);
+    expect(buttonByTestId('transition-apply').disabled).toBe(false);
+
+    await click(buttonByTestId('transition-preview'));
+    expect(onPreviewTransition).toHaveBeenCalledWith('slide');
+    expect(onSetTransition).not.toHaveBeenCalled();
+
+    await click(buttonByTestId('transition-cancel'));
+    expect(selectByTestId('transition-select').value).toBe('none');
+    expect(onSetTransition).not.toHaveBeenCalled();
+  });
+
+  it('commits exactly the staged transition on apply', async () => {
+    const onSetTransition = vi.fn();
+    await render({ onSetTransition });
+
+    await choose('fade');
+    expect(onSetTransition).not.toHaveBeenCalled();
+    await click(buttonByTestId('transition-apply'));
+    expect(onSetTransition).toHaveBeenCalledTimes(1);
+    expect(onSetTransition).toHaveBeenCalledWith('fade');
   });
 });
 

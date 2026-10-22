@@ -81,6 +81,7 @@ export interface InspectorProps {
   onReplaceImageFile: (file: File) => void;
   onReplaceImageUrl: () => void;
   onEditChart: () => void;
+  onPreviewTransition: (transition: Transition) => void;
   onSetTransition: (transition: Transition) => void;
   onSetBackground: (background: SlideBackground) => boolean;
   onClearBackground: () => boolean;
@@ -333,6 +334,7 @@ export function Inspector({
   onReplaceImageFile,
   onReplaceImageUrl,
   onEditChart,
+  onPreviewTransition,
   onSetTransition,
   onSetBackground,
   onClearBackground,
@@ -358,6 +360,18 @@ export function Inspector({
   );
   const [backgroundError, setBackgroundError] = useState('');
   const backgroundPendingRef = useRef(false);
+
+  // Staging a transition is local UI state: previews and cancellation never
+  // touch the master document; only Apply calls onSetTransition.
+  const committedTransition = transitionOf(slide?.element);
+  const [transitionDraft, setTransitionDraft] = useState<Transition>(
+    committedTransition
+  );
+  const transitionDirty = transitionDraft !== committedTransition;
+
+  useEffect(() => {
+    setTransitionDraft(committedTransition);
+  }, [committedTransition, slide?.id]);
 
   useEffect(() => {
     if (!notesPendingRef.current) setNotesDraft(notes);
@@ -976,14 +990,14 @@ export function Inspector({
             className={SECTION_CLASS}
           >
             <h3 className={HEADING_CLASS}>投影片設定</h3>
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
               <span className="text-[11px] text-zinc-400">轉場</span>
               <select
                 data-testid="transition-select"
                 aria-label="轉場"
-                value={transitionOf(slide?.element)}
+                value={transitionDraft}
                 onChange={(event) =>
-                  onSetTransition(event.target.value as Transition)
+                  setTransitionDraft(event.target.value as Transition)
                 }
                 className={FIELD_CLASS}
               >
@@ -991,7 +1005,41 @@ export function Inspector({
                 <option value="fade">淡入</option>
                 <option value="slide">滑動</option>
               </select>
-            </label>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  data-testid="transition-preview"
+                  disabled={transitionDraft === 'none'}
+                  onClick={() => onPreviewTransition(transitionDraft)}
+                  className={ACTION_CLASS}
+                >
+                  預覽
+                </button>
+                <button
+                  type="button"
+                  data-testid="transition-apply"
+                  disabled={!transitionDirty}
+                  onClick={() => onSetTransition(transitionDraft)}
+                  className={ACTION_CLASS}
+                >
+                  套用
+                </button>
+                <button
+                  type="button"
+                  data-testid="transition-cancel"
+                  disabled={!transitionDirty}
+                  onClick={() => setTransitionDraft(committedTransition)}
+                  className={ACTION_CLASS}
+                >
+                  取消
+                </button>
+              </div>
+              {transitionDirty && (
+                <span className="text-[11px] text-amber-300">
+                  轉場尚未套用。
+                </span>
+              )}
+            </div>
 
             <div className="flex flex-col gap-1">
               <span className="text-[11px] text-zinc-400">背景</span>

@@ -532,16 +532,22 @@ async function savedStyle(
 ): Promise<Record<string, string | null>> {
   const html = await readFile(join(directory, file), 'utf8');
   const style = /style="([^"]*)"/.exec(tagPattern.exec(html)?.[0] ?? '')?.[1] ?? '';
+  // The serializer escapes quotes inside attribute values; decode them before
+  // splitting declarations so url("...") values stay intact.
+  const decoded = style
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
   return {
-    position: styleDeclaration(style, 'position'),
-    left: styleDeclaration(style, 'left'),
-    top: styleDeclaration(style, 'top'),
-    width: styleDeclaration(style, 'width'),
-    height: styleDeclaration(style, 'height'),
-    transform: styleDeclaration(style, 'transform'),
-    background: styleDeclaration(style, 'background'),
-    'background-image': styleDeclaration(style, 'background-image'),
-    'background-color': styleDeclaration(style, 'background-color')
+    position: styleDeclaration(decoded, 'position'),
+    left: styleDeclaration(decoded, 'left'),
+    top: styleDeclaration(decoded, 'top'),
+    width: styleDeclaration(decoded, 'width'),
+    height: styleDeclaration(decoded, 'height'),
+    transform: styleDeclaration(decoded, 'transform'),
+    background: styleDeclaration(decoded, 'background'),
+    'background-image': styleDeclaration(decoded, 'background-image'),
+    'background-color': styleDeclaration(decoded, 'background-color')
   };
 }
 
@@ -1954,8 +1960,15 @@ test(
       await expect(select).toBeVisible();
       await expect(select).toHaveValue('none');
 
-      const save = waitForDeckSave(page);
+      // Choosing a transition only stages it; the deck changes on confirmation.
       await select.selectOption('fade');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      expect(
+        (await savedDocument(editor)).includes('data-ppt-transition="fade"')
+      ).toBe(false);
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('transition-apply').click();
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
       await expect
@@ -1967,6 +1980,57 @@ test(
       await page.reload();
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
       await expect(page.getByTestId('transition-select')).toHaveValue('fade');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'transition preview and cancel never mutate the deck',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openNudgeDeck(page);
+    try {
+      const select = page.getByTestId('transition-select');
+      await expect(select).toHaveValue('none');
+      await expect(page.getByTestId('transition-preview')).toBeDisabled();
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        await select.selectOption('slide');
+        await expect(page.getByTestId('transition-preview')).toBeEnabled();
+        await page.getByTestId('transition-preview').click();
+
+        const overlay = page.getByTestId('transition-preview-overlay');
+        await expect(overlay).toBeVisible();
+        await expect(overlay).toHaveAttribute('data-transition', 'slide');
+        await expect(overlay).toHaveCount(0, { timeout: 3_000 });
+
+        await page.getByTestId('transition-cancel').click();
+        await expect(select).toHaveValue('none');
+        await expect(page.getByTestId('transition-preview')).toBeDisabled();
+        expect(saveRequests).toHaveLength(0);
+        expect(
+          (await savedDocument(editor)).includes('data-ppt-transition')
+        ).toBe(false);
+      } finally {
+        page.off('request', countSave);
+      }
+
+      await select.selectOption('fade');
+      const save = waitForDeckSave(page);
+      await page.getByTestId('transition-apply').click();
+      expect((await save).ok()).toBeTruthy();
+      await expect
+        .poll(async () =>
+          (await savedDocument(editor)).includes('data-ppt-transition="fade"')
+        )
+        .toBe(true);
     } finally {
       await closeEditor(editor);
     }
@@ -2132,6 +2196,51 @@ test(
       expect(cleared['background-image']).toBeNull();
       expect(cleared['background-color']).toBeNull();
       await expect(value).toHaveValue('');
+
+      // Each background form replaces the others instead of mixing.
+      const kind = page.getByTestId('background-kind');
+      await kind.selectOption('gradient');
+      await value.fill('linear-gradient(90deg, #112233, #445566)');
+      const gradientSave = waitForDeckSave(page);
+      await page.getByTestId('apply-background').click();
+      expect((await gradientSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file)).background
+        )
+        .toContain('linear-gradient');
+      const gradient = await savedSlideStyle(editor.directory, editor.file);
+      expect(gradient['background-image']).toBeNull();
+
+      await kind.selectOption('image');
+      await value.fill('https://example.com/bg.png');
+      const imageSave = waitForDeckSave(page);
+      await page.getByTestId('apply-background').click();
+      expect((await imageSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file))[
+              'background-image'
+            ]
+        )
+        .toContain('example.com');
+      const image = await savedSlideStyle(editor.directory, editor.file);
+      expect(image.background).toBeNull();
+      expect(image['background-image']).not.toContain('linear-gradient');
+
+      const imageClearSave = waitForDeckSave(page);
+      await clear.click();
+      expect((await imageClearSave).ok()).toBeTruthy();
+      await expect
+        .poll(
+          async () =>
+            (await savedSlideStyle(editor.directory, editor.file))[
+              'background-image'
+            ]
+        )
+        .toBeNull();
     } finally {
       await closeEditor(editor);
     }
