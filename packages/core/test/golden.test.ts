@@ -8,7 +8,8 @@ import { serializeDeck } from '../src/serialize.js';
 import { validateDeck } from '../src/validate.js';
 
 const fixtures = fileURLToPath(new URL('../../../test-utils/fixtures/', import.meta.url));
-const read = (name: string) => readFileSync(`${fixtures}${name}`, 'utf8');
+const read = (name: string) =>
+  readFileSync(`${fixtures}${name}`, 'utf8').replace(/\r\n?/g, '\n');
 const parse = (name: string) => parseDeckHtml(read(name));
 
 describe('golden fixtures', () => {
@@ -37,6 +38,28 @@ describe('golden fixtures', () => {
     const result = normalizeDeck(second);
     expect(result.changed).toBe(false);
     expect(serializeDeck(second)).toBe(once);
+  });
+
+  it('normalizes CRLF editor input to the same deck as the LF fixture', () => {
+    const lf = read('messy.deck.html');
+    const crlf = lf.replace(/\n/g, '\r\n');
+    const serialize = (html: string) => {
+      const doc = parseDeckHtml(html);
+      normalizeDeck(doc);
+      // Linkedom keeps CRLF in whitespace text nodes, so line endings survive
+      // parsing and serialization; compare the documents modulo line endings.
+      return serializeDeck(doc).replace(/\r\n?/g, '\n');
+    };
+
+    expect(serialize(crlf)).toBe(serialize(lf));
+    expect(serialize(crlf)).toBe(read('messy.normalized.expected.html'));
+  });
+
+  it('infers the messy fixture canvas from inline styles and data attributes', () => {
+    const outline = getOutline(parse('messy.deck.html'));
+    expect(outline.slides[0]).toMatchObject({ width: 1280, height: 720 });
+    expect(outline.slides[1]).toMatchObject({ width: 1920, height: 1080 });
+    expect(outline).toMatchObject({ width: 1280, height: 720 });
   });
 
   it('keeps object counts and runtime presence for every fixture after normalize and serialize', () => {
