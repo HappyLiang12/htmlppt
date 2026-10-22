@@ -285,4 +285,33 @@ describe('insert and update', () => {
     element.querySelector('svg')?.remove();
     expect(chartSizeOf(element)).toEqual({ width: 640, height: 360 });
   });
+
+  it('preserves authored heights down to the 120px chart minimum', () => {
+    const element = insertChart(slide(), {
+      data: BAR,
+      x: 0,
+      y: 0,
+      width: 640,
+      height: 140
+    });
+    // Drop the SVG so the size must come from the authored inline style, as
+    // it does for a hand-written chart figure before its first update.
+    element.querySelector('svg')?.remove();
+    expect(chartSizeOf(element)).toEqual({ width: 640, height: 140 });
+
+    updateChart(element, {
+      type: 'line',
+      labels: ['A', 'B'],
+      series: [{ name: 'Trend', values: [2, 5] }]
+    });
+    expect(element.querySelector('svg')?.getAttribute('viewBox')).toBe(
+      '0 0 640 140'
+    );
+
+    // Width keeps its larger 160px minimum; a short width falls back instead
+    // of being treated as an authored size.
+    (element as HTMLElement).style.width = '140px';
+    element.querySelector('svg')?.remove();
+    expect(chartSizeOf(element)).toEqual({ width: 640, height: 140 });
+  });
 });

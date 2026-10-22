@@ -96,14 +96,22 @@ exactly one element inside the slide. `path` is child indices starting at the
 slide element. Missing or ambiguous targets produce stable error codes; read
 the outline before guessing.
 
-## Notes, transitions, and charts
+## Notes, transitions, charts, tables, and images
 
 - `set_notes` writes or clears the direct-child notes aside. An empty string
   removes it.
 - `set_transition` accepts `none`, `fade`, or `slide`.
-- Chart data lives in `data-ppt-chart` as JSON. Keep labels and series small
-  and readable; invalid JSON is a validation error. The attribute is the source
-  of truth for the chart, and v1 targets bar, line, and pie charts.
+- Chart data lives in `data-ppt-chart` on a `<figure>` as JSON with `type`
+  (`bar`, `line`, or `pie`), `labels`, and `series` (`{ name, values }`
+  entries). Optional fields are `title`, `colors`, `legend`, and
+  `valueLabels`. Labels and each series' values must have the same length, and
+  the rendered SVG is derived from the attribute. Use `update_chart` rather
+  than editing the SVG. Invalid JSON is a validation error.
+- Tables are real `<table>` elements. `add_table` creates one with a header
+  row within the 50-row and 20-column core limits.
+- `add_image` accepts a data URL, an absolute http(s) URL, or a local path.
+  Local files are embedded as data URLs after MIME and 8 MB checks; remote
+  URLs are validated but never fetched. Keep assets self-contained.
 
 ## Round-trip rules
 

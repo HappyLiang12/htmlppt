@@ -442,14 +442,17 @@ function renderPie(data: ChartData, palette: string[], plot: Plot): string {
 
 export function chartSizeOf(figure: Element): { width: number; height: number } {
   const html = figure as HTMLElement;
-  const parsePx = (value: string): number | null => {
+  // Charts may be as small as 160x120, so width and height have different
+  // minimums. Using the width minimum for both silently resized valid short
+  // charts (120-159 px high) to the 360 px fallback on the next update.
+  const parsePx = (value: string, minimum: number): number | null => {
     const match = /^([0-9.]+)px$/.exec(value.trim());
     if (!match) return null;
     const parsed = Number(match[1]);
-    return Number.isFinite(parsed) && parsed >= 160 ? parsed : null;
+    return Number.isFinite(parsed) && parsed >= minimum ? parsed : null;
   };
-  const styleWidth = html.style ? parsePx(html.style.width) : null;
-  const styleHeight = html.style ? parsePx(html.style.height) : null;
+  const styleWidth = html.style ? parsePx(html.style.width, 160) : null;
+  const styleHeight = html.style ? parsePx(html.style.height, 120) : null;
   const viewBox = figure
     .querySelector('svg')
     ?.getAttribute('viewBox')

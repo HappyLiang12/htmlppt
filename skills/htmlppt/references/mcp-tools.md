@@ -1,6 +1,6 @@
 # htmlppt MCP tools and resources
 
-The htmlppt MCP server exposes 22 tools and 3 resources over stdio. Start it with
+The htmlppt MCP server exposes 25 tools and 3 resources over stdio. Start it with
 `htmlppt-mcp` or `htmlppt mcp`. Tool names and arguments below are the complete
 supported surface; there are no other deck tools in this milestone.
 
@@ -178,6 +178,82 @@ child of the slide. Returns `{ path, revision, elementId }`; `elementId` is the
 `data-ppt-el` value (added when missing) or `null` for non-object tags such as
 `script` or `style`.
 
+### `add_image`
+
+Arguments: `{ path, slideId, source, width?, target? }`.
+
+Inserts one top-level `<img>` and returns `{ path, revision, elementId }`.
+`source` is required, and a missing or empty-string value is rejected by the
+SDK as `InvalidParams` before the handler runs. A supplied value is one of:
+
+- a supported image data URL (`data:image/...`);
+- an absolute `http:`/`https:` URL, validated but never fetched;
+- a local image path resolved against the server working directory.
+  Protocol-relative and UNC values (`//server/share/x.png` or
+  `\\server\share\x.png`) are not local: they fail URL validation as
+  `invalid-image` without being resolved, so a remote share is never
+  contacted. Single-letter drive paths such as `C:foo.png` are local.
+
+A whitespace-only `source` reaches the handler and fails with `invalid-image`.
+Local files must be PNG, JPEG, GIF, WebP, AVIF, or SVG and at most 8 MB. The
+file is opened once, measured through that same descriptor, required to be a
+regular non-empty file, and read only up to its measured size. If the path is
+not a regular file or the file cannot be opened, measured, or read (including
+a file that shrinks during the read), the call fails with `invalid-image`
+naming the image path; it never reports the deck as `file-not-found` or
+`file-unreadable`. Local bytes are embedded as a data URL, so the deck stays
+self-contained. Remote images keep their URL and are not downloaded.
+
+The default box is `x: 100`, `y: 100`, `width: 480`, height `270` (16:9). A
+supplied `width` must be a finite number of at least 1 pixel; the height is
+`max(1, Math.round(width * 9 / 16))`. `target` is an optional insertion
+anchor: it must resolve inside the slide and be a direct child, and the image
+is inserted after it; without `target` the image is appended. Failures use
+`invalid-image`, `target-not-found`, `target-ambiguous`, `target-invalid`, or
+`invalid-insert` from the core insertion checks.
+
+### `add_table`
+
+Arguments: `{ path, slideId, rows, columns, target? }`.
+
+Inserts a real `<table>` with a header row and returns
+`{ path, revision, elementId }`. `rows` (including the header row, 1-50) and
+`columns` (1-20) must be integers. Missing arguments or non-integer values are
+`InvalidParams`; values outside the core bounds fail with `invalid-table`.
+The default box is `x: 100`, `y: 100`, width `960`. `target` follows the same
+direct-child insertion anchor rules as `add_image` and can fail with
+`target-not-found`, `target-ambiguous`, or `target-invalid`.
+
+### `update_chart`
+
+Arguments: `{ path, slideId, target, chart }`.
+
+`target` must resolve to an existing chart: a `<figure>` carrying
+`data-ppt-chart`. A target that matches nothing or several elements fails with
+`target-not-found` or `target-ambiguous`; anything that resolves but is not a
+chart fails with `not-a-chart`. `chart` is required (a missing or wrongly
+typed value is `InvalidParams`) and is a JSON string or object:
+
+```json
+{
+  "type": "bar",
+  "title": "Revenue",
+  "labels": ["Q1", "Q2"],
+  "series": [{ "name": "USD", "values": [12, 18] }]
+}
+```
+
+`type` is `bar`, `line`, or `pie`; optional fields are `colors`, `legend`, and
+`valueLabels`. Labels and every series must be non-empty, values must be finite
+numbers with one value per label, and pie charts need exactly one non-negative
+series with a positive total. Malformed JSON or invalid data fails with
+`invalid-chart` and does not write the deck. The tool normalizes the JSON,
+stores it in `data-ppt-chart`, and regenerates the SVG at the figure's
+persisted size: inline width at least 160 px and inline height at least 120 px,
+then the SVG `viewBox`, then 640x360. A valid short chart (for example 640x140)
+keeps its height instead of being resized to 360. Returns
+`{ path, revision, width, height }`.
+
 ### `set_element_html`
 
 Arguments: `{ path, slideId, target, html }`.
@@ -270,8 +346,13 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `slide-not-found` | The slide id is wrong. Use `get_outline`. |
 | `target-not-found` | No element matches the target. Re-read the slide. |
 | `target-ambiguous` | The target matches more than one element. Use an id or a narrower selector. |
-| `target-invalid` | The selector or path is invalid. |
+| `target-invalid` | The selector or path is invalid, or an insertion anchor is not a direct child of the slide. |
 | `invalid-fragment` | `add_element` HTML is not exactly one root element. |
+| `invalid-image` | `add_image` source is not a supported data/http(s) URL, or a local image cannot be opened, measured, or read, is not a regular file, is empty, has an unsupported type, or is larger than 8 MB. A missing or empty-string `source` is `InvalidParams` before the handler runs. |
+| `invalid-table` | `add_table` rows or columns are outside the 50x20 core bounds. |
+| `invalid-chart` | `update_chart` data is malformed or fails chart validation; the deck is unchanged. |
+| `invalid-insert` | A core insert rejected the geometry or content, for example a computed non-positive image size. |
+| `not-a-chart` | `update_chart` target is not a `<figure data-ppt-chart>`. |
 | `cannot-remove-slide` | The slide/body itself cannot be removed as an element. |
 | `last-slide` | The final slide cannot be deleted. |
 | `invalid-order` | `set_slide_order` must list every slide id exactly once. |
