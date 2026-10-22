@@ -399,7 +399,8 @@ export function App() {
           session.handle,
           session.siblingRects,
           threshold,
-          session.bounds
+          session.bounds,
+          MIN_RESIZE_DESIGN_PX
         );
         rect = snapped.rect;
         nextGuides = snapped.guides;
@@ -632,6 +633,13 @@ export function App() {
 
       const direction = ARROW_KEYS[event.key];
       if (!direction) return;
+
+      // A pointer gesture owns the transform until pointerup; keyboard nudges
+      // during it would add a second history entry and extra offset.
+      if (sessionRef.current) {
+        event.preventDefault();
+        return;
+      }
 
       if (current.selection) {
         event.preventDefault();

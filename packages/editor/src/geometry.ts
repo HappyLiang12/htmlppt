@@ -160,14 +160,17 @@ export function snapRect(
  * Snaps a resized rect on the edge(s) the handle actually moves. East/west
  * adjust one horizontal edge, north/south one vertical edge, and corners
  * both. The opposite edge never moves, so a guide near it cannot shift the
- * origin during a resize.
+ * origin during a resize. A snap that would shrink either side below
+ * `minSize` is discarded entirely, falling back to the unsnapped resized
+ * rect so the anchor edge stays fixed.
  */
 export function snapResizeRect(
   rect: Rect,
   handle: Handle,
   targets: Rect[],
   thresholdDesign: number,
-  bounds: Rect
+  bounds: Rect,
+  minSize: number
 ): SnapResult {
   const xLines = axisTargetLines(
     bounds.x,
@@ -201,21 +204,25 @@ export function snapResizeRect(
   const guides: Guide[] = [];
   if (xSnap) {
     if (east) {
-      next.width = Math.max(1, next.width + xSnap.delta);
+      next.width += xSnap.delta;
     } else {
       next.x += xSnap.delta;
-      next.width = Math.max(1, next.width - xSnap.delta);
+      next.width -= xSnap.delta;
     }
     guides.push({ axis: 'x', position: xSnap.position });
   }
   if (ySnap) {
     if (south) {
-      next.height = Math.max(1, next.height + ySnap.delta);
+      next.height += ySnap.delta;
     } else {
       next.y += ySnap.delta;
-      next.height = Math.max(1, next.height - ySnap.delta);
+      next.height -= ySnap.delta;
     }
     guides.push({ axis: 'y', position: ySnap.position });
+  }
+
+  if (next.width < minSize || next.height < minSize) {
+    return { rect, guides: [] };
   }
   return { rect: next, guides };
 }

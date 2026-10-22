@@ -8,6 +8,7 @@ import {
   type FrameLocator,
   type Locator,
   type Page,
+  type Request,
   type Response
 } from '@playwright/test';
 import { execa } from 'execa';
@@ -26,11 +27,15 @@ interface EditorHarness {
   frame: FrameLocator;
 }
 
-function isDeckSave(response: Response): boolean {
+function isDeckSaveRequest(request: Request): boolean {
   return (
-    response.request().method() === 'PUT' &&
-    new URL(response.url()).pathname === '/api/deck'
+    request.method() === 'PUT' &&
+    new URL(request.url()).pathname === '/api/deck'
   );
+}
+
+function isDeckSave(response: Response): boolean {
+  return isDeckSaveRequest(response.request());
 }
 
 async function createTemplate(
@@ -116,11 +121,17 @@ function waitForDeckSave(page: Page) {
 
 async function expectNoDeckSave(
   page: Page,
+  action: () => Promise<void>,
   timeout = NO_SAVE_TIMEOUT_MS
 ): Promise<void> {
-  await expect(
-    page.waitForResponse(isDeckSave, { timeout })
-  ).rejects.toThrow();
+  // Attach the waiter before the action so a save that completes during it
+  // cannot slip past. The waiter's own timeout is the bounded no-save window.
+  const saved = page.waitForResponse(isDeckSave, { timeout }).then(
+    () => true,
+    () => false
+  );
+  await action();
+  expect(await saved, 'a deck save was issued unexpectedly').toBe(false);
 }
 
 interface InlineGeometry {
@@ -285,6 +296,11 @@ function rotationDegrees(transform: string): number {
   return match?.[1] === undefined ? Number.NaN : Number(match[1]);
 }
 
+function distanceToAngleStep(degrees: number, step: number): number {
+  const remainder = normalizeAngle(degrees) % step;
+  return Math.min(remainder, step - remainder);
+}
+
 async function transformOf(
   frame: FrameLocator,
   selector: string
@@ -293,6 +309,17 @@ async function transformOf(
     return (
       element as unknown as { style: { transform: string } }
     ).style.transform;
+  });
+}
+
+async function transformOriginOf(
+  frame: FrameLocator,
+  selector: string
+): Promise<string> {
+  return frame.locator(selector).evaluate((element) => {
+    return (
+      element as unknown as { style: { transformOrigin: string } }
+    ).style.transformOrigin;
   });
 }
 
@@ -401,8 +428,7 @@ test(
       expect(await slideInnerGeometry(editor.frame)).toEqual(wrapperBefore);
 
       // Arrow keys neither nudge the nested element nor change slides.
-      await page.keyboard.press('ArrowRight');
-      await expectNoDeckSave(page);
+      await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
       expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
       await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
       await expect(page.getByTestId('save-status')).toHaveText('已載入');
@@ -459,6 +485,56 @@ test(
       expect(html).not.toContain('data-testid');
       expect(html).not.toContain('data-ppt-frame-slide');
       expect(html).not.toContain('contenteditable');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'arrow keys are ignored during a pointer gesture',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      const box = await heading.boundingBox();
+      if (!box) throw new Error('Heading has no bounding box.');
+      const scale = await frameScale(page);
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
+
+      await heading.click();
+      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+        'data-selected-path',
+        '0'
+      );
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        const save = waitForDeckSave(page);
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+        // A live keyboard handler would nudge and commit mid-gesture, adding a
+        // second save and another design pixel of offset.
+        await page.keyboard.press('ArrowRight');
+        await page.mouse.up();
+        expect((await save).ok()).toBeTruthy();
+        await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+        expect(saveRequests).toHaveLength(1);
+        const geometry = await slideInnerGeometry(editor.frame);
+        expect(geometry.position).toBe('absolute');
+        expect(geometry.left).toBeCloseTo(100 / scale, 0);
+        expect(geometry.top).toBeCloseTo(50 / scale, 0);
+      } finally {
+        page.off('request', countSave);
+      }
     } finally {
       await closeEditor(editor);
     }
@@ -559,6 +635,9 @@ test(
       );
       expect(Math.abs(raw - expectedRaw)).toBeLessThanOrEqual(2);
       expect(raw % 15).toBeGreaterThan(1);
+      expect(await transformOriginOf(editor.frame, '.slide-inner')).toBe(
+        '50% 50%'
+      );
 
       const handleBoxAfter = await rotate.boundingBox();
       if (!handleBoxAfter) {
@@ -605,7 +684,7 @@ test(
       if (!handleBoxAlt) {
         throw new Error('Rotation handle has no bounding box for alt drag.');
       }
-      const altTarget = pointAt(center, radius, 47);
+      const altTarget = pointAt(center, radius, 37);
       const expectedAltRaw = normalizeAngle(
         snapped +
           angleDelta(
@@ -635,7 +714,9 @@ test(
         await transformOf(editor.frame, '.slide-inner')
       );
       expect(Math.abs(altRaw - expectedAltRaw)).toBeLessThanOrEqual(2);
-      expect(altRaw % 15).toBeGreaterThan(1);
+      // 127 degrees sits in the middle of a 15 degree bucket, so layout or
+      // rounding shifts cannot turn this into a snapped-looking angle.
+      expect(distanceToAngleStep(altRaw, 15)).toBeGreaterThanOrEqual(5);
 
       const finalTransform = await transformOf(
         editor.frame,
@@ -821,8 +902,7 @@ test(
       const headingBefore = await headingGeometry(editor.frame);
       const wrapperBefore = await slideInnerGeometry(editor.frame);
 
-      await page.keyboard.press('ArrowRight');
-      await expectNoDeckSave(page);
+      await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
 
       expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
       expect(await slideInnerGeometry(editor.frame)).toEqual(wrapperBefore);
@@ -851,21 +931,22 @@ test(
       // Escape cancels: live inline styles are replaced from the master.
       await heading.click();
       await expect(outline).toHaveAttribute('data-selected-path', '0');
-      await page.mouse.move(startX, startY);
-      await page.mouse.down();
-      await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
-      await expect
-        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
-        .toBe('absolute');
+      await expectNoDeckSave(page, async () => {
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
+        await expect
+          .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+          .toBe('absolute');
 
-      await page.keyboard.press('Escape');
-      await expect
-        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
-        .toBe('');
+        await page.keyboard.press('Escape');
+        await expect
+          .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+          .toBe('');
+        await page.mouse.up();
+      });
       await expect(outline).toHaveCount(0);
       await expect(heading).toHaveText('Untitled deck');
-      await expectNoDeckSave(page);
-      await page.mouse.up();
       await expect(page.getByTestId('save-status')).toHaveText('已載入');
 
       // pointercancel uses the same cancellation path.
@@ -887,43 +968,44 @@ test(
         );
       });
 
-      await page.mouse.move(startX, startY);
-      await page.mouse.down();
-      const pointerId = await frameHandle.evaluate((iframe) => {
-        const view = (
-          iframe as unknown as {
-            contentDocument: { defaultView: FrameDomWindow | null } | null;
-          }
-        ).contentDocument?.defaultView;
-        return view?.__pptPointerId ?? -1;
+      await expectNoDeckSave(page, async () => {
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        const pointerId = await frameHandle.evaluate((iframe) => {
+          const view = (
+            iframe as unknown as {
+              contentDocument: { defaultView: FrameDomWindow | null } | null;
+            }
+          ).contentDocument?.defaultView;
+          return view?.__pptPointerId ?? -1;
+        });
+        expect(pointerId).toBeGreaterThan(0);
+        await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
+        await expect
+          .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+          .toBe('absolute');
+
+        await frameHandle.evaluate((iframe, id) => {
+          const view = (
+            iframe as unknown as {
+              contentDocument: { defaultView: FrameDomWindow | null } | null;
+            }
+          ).contentDocument?.defaultView;
+          if (!view) throw new Error('Frame view is unavailable.');
+          view.document.dispatchEvent(
+            new view.PointerEvent('pointercancel', {
+              pointerId: id,
+              bubbles: true
+            })
+          );
+        }, pointerId);
+
+        await expect
+          .poll(async () => (await slideInnerGeometry(editor.frame)).position)
+          .toBe('');
+        await page.mouse.up();
       });
-      expect(pointerId).toBeGreaterThan(0);
-      await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
-      await expect
-        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
-        .toBe('absolute');
-
-      await frameHandle.evaluate((iframe, id) => {
-        const view = (
-          iframe as unknown as {
-            contentDocument: { defaultView: FrameDomWindow | null } | null;
-          }
-        ).contentDocument?.defaultView;
-        if (!view) throw new Error('Frame view is unavailable.');
-        view.document.dispatchEvent(
-          new view.PointerEvent('pointercancel', {
-            pointerId: id,
-            bubbles: true
-          })
-        );
-      }, pointerId);
-
-      await expect
-        .poll(async () => (await slideInnerGeometry(editor.frame)).position)
-        .toBe('');
       await expect(outline).toHaveCount(0);
-      await expectNoDeckSave(page);
-      await page.mouse.up();
       await expect(page.getByTestId('save-status')).toHaveText('已載入');
     } finally {
       await closeEditor(editor);

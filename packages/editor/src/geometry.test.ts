@@ -183,7 +183,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const oppositeLeft = rect(102, 300, 50, 40);
 
-    const result = snapResizeRect(start, 'e', [oppositeLeft], 4, SLIDE);
+    const result = snapResizeRect(start, 'e', [oppositeLeft], 4, SLIDE, 4);
 
     expect(result).toEqual({ rect: start, guides: [] });
   });
@@ -192,7 +192,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const target = rect(302, 300, 50, 40);
 
-    const result = snapResizeRect(start, 'e', [target], 4, SLIDE);
+    const result = snapResizeRect(start, 'e', [target], 4, SLIDE, 4);
 
     expect(result.rect).toEqual(rect(100, 100, 202, 100));
     expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 302 }]);
@@ -202,7 +202,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const target = rect(98, 300, 50, 40);
 
-    const result = snapResizeRect(start, 'w', [target], 4, SLIDE);
+    const result = snapResizeRect(start, 'w', [target], 4, SLIDE, 4);
 
     expect(result.rect).toEqual(rect(98, 100, 202, 100));
     expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 98 }]);
@@ -212,7 +212,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const oppositeRight = rect(248, 300, 50, 40);
 
-    const result = snapResizeRect(start, 'w', [oppositeRight], 4, SLIDE);
+    const result = snapResizeRect(start, 'w', [oppositeRight], 4, SLIDE, 4);
 
     expect(result.rect).toEqual(rect(100, 100, 200, 100));
     expect(result.guides).toEqual<Guide[]>([]);
@@ -222,7 +222,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const oppositeBottom = rect(400, 162, 40, 40);
 
-    const result = snapResizeRect(start, 'n', [oppositeBottom], 4, SLIDE);
+    const result = snapResizeRect(start, 'n', [oppositeBottom], 4, SLIDE, 4);
 
     expect(result).toEqual({ rect: start, guides: [] });
   });
@@ -231,7 +231,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const oppositeTop = rect(400, 102, 40, 40);
 
-    const result = snapResizeRect(start, 's', [oppositeTop], 4, SLIDE);
+    const result = snapResizeRect(start, 's', [oppositeTop], 4, SLIDE, 4);
 
     expect(result).toEqual({ rect: start, guides: [] });
   });
@@ -240,7 +240,7 @@ describe('snapResizeRect', () => {
     const start = rect(100, 100, 200, 100);
     const target = rect(302, 201, 50, 40);
 
-    const result = snapResizeRect(start, 'se', [target], 4, SLIDE);
+    const result = snapResizeRect(start, 'se', [target], 4, SLIDE, 4);
 
     expect(result.rect).toEqual(rect(100, 100, 202, 101));
     expect(result.guides).toEqual<Guide[]>([
@@ -255,11 +255,77 @@ describe('snapResizeRect', () => {
       'w',
       [],
       4,
-      SLIDE
+      SLIDE,
+      4
     );
 
     expect(result.rect).toEqual(rect(0, 100, 302, 100));
     expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 0 }]);
+  });
+
+  it('keeps a near-minimum east resize at the minimum without moving the origin', () => {
+    const start = rect(100, 100, 5, 100);
+    const target = rect(102, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'e', [target], 4, SLIDE, 4);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+    expect(result.rect.width).toBeGreaterThanOrEqual(4);
+    expect(result.rect.x).toBe(100);
+  });
+
+  it('keeps a near-minimum west resize at the minimum without moving the east edge', () => {
+    const start = rect(100, 100, 5, 100);
+    const target = rect(103, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'w', [target], 4, SLIDE, 4);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+    expect(result.rect.width).toBeGreaterThanOrEqual(4);
+    expect(result.rect.x + result.rect.width).toBe(105);
+  });
+
+  it('falls back instead of letting a west clamp move the east edge', () => {
+    const start = rect(100, 100, 5, 100);
+    const target = rect(110, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'w', [target], 10, SLIDE, 4);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+    expect(result.rect.width).toBeGreaterThanOrEqual(4);
+    expect(result.rect.x + result.rect.width).toBe(105);
+  });
+
+  it('keeps a near-minimum north resize at the minimum without moving the bottom edge', () => {
+    const start = rect(100, 100, 200, 5);
+    const target = rect(400, 103, 40, 40);
+
+    const result = snapResizeRect(start, 'n', [target], 4, SLIDE, 4);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+    expect(result.rect.height).toBeGreaterThanOrEqual(4);
+    expect(result.rect.y + result.rect.height).toBe(105);
+  });
+
+  it('keeps a near-minimum south resize at the minimum without moving the top edge', () => {
+    const start = rect(100, 100, 200, 5);
+    const target = rect(400, 102, 40, 40);
+
+    const result = snapResizeRect(start, 's', [target], 4, SLIDE, 4);
+
+    expect(result).toEqual({ rect: start, guides: [] });
+    expect(result.rect.height).toBeGreaterThanOrEqual(4);
+    expect(result.rect.y).toBe(100);
+  });
+
+  it('still snaps when the snapped size stays at the minimum', () => {
+    const start = rect(100, 100, 5, 100);
+    const target = rect(104, 300, 50, 40);
+
+    const result = snapResizeRect(start, 'e', [target], 4, SLIDE, 4);
+
+    expect(result.rect).toEqual(rect(100, 100, 4, 100));
+    expect(result.guides).toEqual<Guide[]>([{ axis: 'x', position: 104 }]);
   });
 });
 
