@@ -113,6 +113,12 @@ structure stays readable: replace the placeholder with the runtime from
 </html>
 ```
 
+**The runtime marker must contain the real runtime source.** Validation only
+checks for a `<script data-ppt-runtime="1">` marker; it does not inspect the
+script body. A deck saved with the comment above still passes validation but
+will not present. Create decks with `htmlppt new` or MCP `create_deck`, or copy
+the full runtime from [examples/basic.html](examples/basic.html).
+
 ## MCP workflow
 
 1. Learn the contract. Call `get_deck_contract` or read the
@@ -163,13 +169,17 @@ htmlppt mcp                           # same stdio server as htmlppt-mcp
 recorded host is alive but not answering health checks, `open` refuses to start
 a second host and exits 1; retry or stop the recorded session first.
 
+`stop --all` prunes registry entries whose recorded process has exited. When it
+cleans only stale entries it prints `Removed <n> stale editor session(s).` and
+exits 0; a truly empty registry still exits 1 with `No live editor sessions.`
+
 ## Examples
 
 All examples are complete decks validated by the CLI and contain the real
 runtime script.
 
 - [examples/basic.html](examples/basic.html) - text objects, speaker notes,
-  fade and slide transitions, runtime.
+  `fade` and `slide` transition attributes, runtime.
 - [examples/table-chart.html](examples/table-chart.html) - a real table and a
   chart whose JSON lives in `data-ppt-chart`.
 - [examples/notes-transitions.html](examples/notes-transitions.html) - notes
@@ -183,9 +193,11 @@ htmlppt validate skills/htmlppt/examples/basic.html
 
 ## Authoring rules that prevent rework
 
-- Use a fixed canvas and absolutely position top-level objects. Do not use
-  `position: fixed` or viewport-height (`vh`) layouts; they warn because they
-  do not export reliably.
+- Use a fixed canvas and absolutely position top-level objects. Validation
+  warns (`fixed-layout`) for `position: fixed` and full-height `100vh`,
+  `100dvh`, `100svh`, or `100lvh`; those may not export reliably. Other
+  viewport units are not detected but still scale with the browser window, so
+  avoid them for layout.
 - Put styling in a `<style>` block or inline `style` attributes. CSS
   animations, inline SVG, flex/grid inside an object, and web fonts via
   absolute URLs are welcome.

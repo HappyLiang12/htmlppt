@@ -1109,6 +1109,29 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('cleans a dead-pid registry entry with --all and exits 0', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port: await closedPort()
+    });
+
+    const result = await runCliProcess(['stop', '--all'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Removed 1 stale editor session(s).');
+    expect(result.stderr).not.toContain('No live editor sessions.');
+    await expect(
+      readFile(sessionFilePath(workspace, deckPath), 'utf8')
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await sessionCount(workspace)).toBe(0);
+  });
+
   it('never kills a registered pid when the host fails the health check', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);

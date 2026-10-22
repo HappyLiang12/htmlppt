@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { constants, type Dirent } from 'node:fs';
+import { access, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -55,12 +56,41 @@ function sessionFilePath(filePath: string): string {
   return join(sessionsDirectory(), `${sessionKey(filePath)}.json`);
 }
 
-async function sessionFileExists(filePath: string): Promise<boolean> {
+type SessionFileState = 'present' | 'missing' | 'unreadable';
+
+/**
+ * Lists the registry files currently on disk. `listSessions` silently drops
+ * entries whose process is gone, so `stop --all` snapshots the directory first
+ * to tell a real empty registry apart from a cleanup.
+ */
+async function registrySessionNames(): Promise<string[]> {
+  let dirents: Dirent[];
   try {
-    await access(sessionFilePath(filePath));
-    return true;
-  } catch {
-    return false;
+    dirents = await readdir(sessionsDirectory(), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  return dirents
+    .filter((dirent) => dirent.isFile() && dirent.name.endsWith('.json'))
+    .map((dirent) => dirent.name)
+    .sort();
+}
+
+/**
+ * Only ENOENT proves that the registry entry is gone. Any other access failure
+ * means the entry may still exist, so callers must not report it as cleaned.
+ */
+async function sessionFileState(filePath: string): Promise<SessionFileState> {
+  try {
+    await access(sessionFilePath(filePath), constants.R_OK);
+    return 'present';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? 'missing'
+      : 'unreadable';
   }
 }
 
@@ -497,10 +527,49 @@ export async function runCli(
           exitCode = 1;
           return;
         }
+        let registrySnapshot: string[];
+        try {
+          // Snapshot before listing: listSessions prunes entries whose process
+          // has exited, so an empty list alone cannot tell cleanup from an
+          // empty registry.
+          registrySnapshot = await registrySessionNames();
+        } catch (error) {
+          io.stderr(
+            `Could not read the editor session registry at ${sessionsDirectory()}: ${error instanceof Error ? error.message : String(error)}. Check permissions and retry "htmlppt stop --all".`
+          );
+          exitCode = 1;
+          return;
+        }
         const sessions = await listSessions();
         if (sessions.length === 0) {
-          io.stderr('No live editor sessions.');
-          exitCode = 1;
+          if (registrySnapshot.length === 0) {
+            io.stderr('No live editor sessions.');
+            exitCode = 1;
+            return;
+          }
+          let remaining: string[];
+          try {
+            const after = new Set(await registrySessionNames());
+            remaining = registrySnapshot.filter((name) => after.has(name));
+          } catch (error) {
+            io.stderr(
+              `Could not read the editor session registry at ${sessionsDirectory()}: ${error instanceof Error ? error.message : String(error)}. Check permissions and retry "htmlppt stop --all".`
+            );
+            exitCode = 1;
+            return;
+          }
+          if (remaining.length > 0) {
+            // Some registry entries survived the prune: they exist but could
+            // not be read or removed. Never report those as cleaned.
+            io.stderr(
+              `Could not verify ${remaining.length} editor session ${remaining.length === 1 ? 'entry' : 'entries'} that are still in the registry at ${sessionsDirectory()}. Check permissions, then retry "htmlppt stop --all".`
+            );
+            exitCode = 1;
+            return;
+          }
+          io.stdout(
+            `Removed ${registrySnapshot.length} stale editor session(s).`
+          );
           return;
         }
         let stopped = 0;
@@ -509,11 +578,19 @@ export async function runCli(
         for (const session of sessions) {
           const live = await findLiveSession(session.path);
           if (!live) {
-            if (!(await sessionFileExists(session.path))) {
+            const entryState = await sessionFileState(session.path);
+            if (entryState === 'missing') {
               // The health check definitively proved the entry stale and
               // already removed it; there is no live host left to fail.
               cleaned += 1;
               io.stdout(`Removed stale editor session for ${session.path}.`);
+              continue;
+            }
+            if (entryState === 'unreadable') {
+              io.stderr(
+                `Could not read the editor session entry for ${session.path}. Check permissions on ${sessionsDirectory()}, then retry "htmlppt stop --all".`
+              );
+              failed += 1;
               continue;
             }
             io.stderr(

@@ -54,9 +54,11 @@ Example object:
 - CSS custom properties, gradients, shadows, filters, masks, transforms,
   flexbox, grid, inline SVG, and CSS animations are all allowed.
 - Web fonts must use a `data:` or absolute URL.
-- Keep the fixed canvas in mind. Do not use `position: fixed` or viewport
-  units; validation warns because they do not export reliably. Use absolute
-  positioning inside the 1600x900 (or chosen) canvas instead.
+- Keep the fixed canvas in mind. Do not use `position: fixed` or full-height
+  `100vh`/`100dvh`/`100svh`/`100lvh` layouts; validation warns (`fixed-layout`)
+  because they may not export reliably. Other viewport units are not detected
+  by the validator but still scale with the browser window, so avoid them for
+  layout. Use absolute positioning inside the 1600x900 (or chosen) canvas.
 - Animations that run on their own are preserved. There is no animation
   timeline or trigger authoring in v1.
 

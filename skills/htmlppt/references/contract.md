@@ -59,8 +59,11 @@ Minimal explicit slide:
   invent content.
 - A `data-ppt-group` wrapper groups objects. Nested group wrappers are not
   supported (`unsupported-group-nesting` warning).
-- Objects are edited through inline styles and CSS classes. The editor does not
-  write classes or attributes into the slide while you are editing it.
+- Objects are edited through inline styles and CSS classes. While a deck is
+  open, the editor's live frame may carry transient editor-only attributes
+  (`data-ppt-editing`, `data-ppt-frame-slide`). They are stripped before save
+  and never persist in saved output; see the artifacts rule under
+  [Round-trip and writes](#round-trip-and-writes).
 
 ## Speaker notes
 
@@ -80,7 +83,9 @@ Minimal explicit slide:
   the deck is still valid HTML but cannot present itself.
 - The runtime body must be the real runtime script, not an empty marker.
   `create_deck` and `htmlppt new` write it. Copy it from
-  `../examples/basic.html` when hand-authoring.
+  `../examples/basic.html` when hand-authoring. Validation checks only that a
+  marker exists on a `<script>` with value `1`; it does not inspect the body,
+  so a comment or an empty script still validates but cannot present.
 - More than one runtime marker is an error (`duplicate-runtime`). A
   `data-ppt-runtime` attribute whose value is not `1`, or on an element other
   than `<script>`, is an error (`invalid-runtime-marker`).
@@ -112,8 +117,10 @@ Minimal explicit slide:
   `relative-asset` warning. They do not travel with an exported file.
 - Arbitrary CSS is allowed: custom properties, flex/grid inside objects,
   inline SVG, CSS animations, shadows, gradients, and absolute web fonts.
-- `position: fixed` and viewport-height units (`vh`, `dvh`, `svh`, `lvh`)
-  produce the `fixed-layout` warning because they may not export reliably.
+- `position: fixed` and full-height units (`100vh`, `100dvh`, `100svh`,
+  `100lvh`) produce the `fixed-layout` warning because they may not export
+  reliably. Other viewport units (for example `50vh`) are not matched by the
+  validator but still scale with the browser window, so avoid them for layout.
 - A `<canvas>` produces the `canvas-content` warning: its drawing cannot be
   edited visually.
 - Scripts other than the runtime produce the `script-present` warning. The
@@ -158,7 +165,7 @@ Errors make a deck invalid; warnings do not.
 | warning | `missing-runtime` | Multiple slides but no runtime. |
 | warning | `script-present` | A non-runtime script is present. |
 | warning | `relative-asset` | A relative asset URL is present. |
-| warning | `fixed-layout` | Fixed or viewport-sized layout is present. |
+| warning | `fixed-layout` | `position: fixed` or a full-height `100vh` unit is present. |
 | warning | `mixed-canvas-sizes` | Slides use different canvas sizes. |
 | warning | `canvas-content` | A `<canvas>` cannot be edited visually. |
 | warning | `unsupported-group-nesting` | Groups are nested. |

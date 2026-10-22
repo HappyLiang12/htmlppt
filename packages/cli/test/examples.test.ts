@@ -125,6 +125,10 @@ describe('skill example decks', () => {
 
       expect(result.code).toBe(0);
       expect(result.stdout).toContain('Deck is valid.');
+      const diagnosticLines = result.stderr
+        .split(/\r?\n/)
+        .filter((line) => /^(WARN|ERROR) /.test(line));
+      expect(diagnosticLines).toEqual([]);
 
       const html = await readFile(examplePath, 'utf8');
       expect(html).toContain('data-ppt-runtime="1"');

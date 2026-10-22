@@ -41,7 +41,7 @@ Warnings do not block saving or export but usually predict a broken round trip.
 | `missing-runtime` | Copy the real runtime script from `examples/basic.html`, or regenerate with `create_deck`/`htmlppt new`. |
 | `script-present` | Remove non-runtime scripts or accept that they do not run in the editor. |
 | `relative-asset` | Use a `data:` URI or an absolute URL for images, fonts, and `url(...)` values. |
-| `fixed-layout` | Replace `position: fixed` and viewport units with fixed-canvas absolute positioning. |
+| `fixed-layout` | Replace `position: fixed` and full-height `100vh` units with fixed-canvas absolute positioning. Other viewport units are not detected but still scale with the window. |
 | `mixed-canvas-sizes` | Use one `data-width`/`data-height` for every slide. |
 | `canvas-content` | Replace `<canvas>` drawing with editable markup or embed an image. |
 | `unsupported-group-nesting` | Flatten nested `data-ppt-group` wrappers. |
@@ -120,7 +120,8 @@ CLI failures print a message to stderr and exit 1.
 | `No live editor session for <file>. Start one with "htmlppt open <file>".` | `stop` found nothing to stop for that deck. |
 | `Specify a deck file to stop or pass --all.` | `stop` needs a target. |
 | `Pass either a deck file or --all, not both.` | Use one form. |
-| `No live editor sessions.` | The registry is empty. |
+| `No live editor sessions.` | The registry is empty (no session files at all). |
+| `Removed <n> stale editor session(s).` | Success: `stop --all` cleaned entries whose process had exited. Exit 0. |
 | `Removed stale editor session for <path>.` | Success: a definitively stale entry was cleaned. |
 | `Could not verify a live editor for <path>; leaving it running. Retry "htmlppt stop <path>" when it responds.` | The PID is alive but health is unknown. The entry was kept. Retry later. |
 | `No live editor sessions were stopped.` | Nothing was live or cleanable. |
@@ -140,8 +141,10 @@ automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
 - Scripts other than the runtime do not run inside the editor. Layout and
   interaction must work from HTML/CSS alone.
 - All slides stacked on one page usually means the runtime is missing or the
-  runtime script was replaced with an empty marker. Copy the real runtime from
-  `examples/basic.html`; the `missing-runtime` warning points at this.
+  runtime script body is empty/placeholder text. Copy the real runtime from
+  `examples/basic.html`. Note that validation only checks the
+  `<script data-ppt-runtime="1">` marker, so an empty body still validates;
+  the `missing-runtime` warning fires only when the marker is absent.
 - The editor receives host revision events over SSE. If another writer changed
   the file, save can return 409/conflict; reload and merge.
 - A relative image or font may load on the author's machine but disappear in
@@ -149,9 +152,10 @@ automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
   URL.
 - Text overflow is usually a missing width on the object. Set an explicit
   `width` inline; do not rely on viewport sizing.
-- Notes are hidden in presentation. If they appear on the slide, remove the
-  `hidden` attribute only for editing; keep notes in a direct-child aside.
-- Transitions only animate between slides when presenting, not while editing.
+- Notes are hidden in presentation. If they appear on the slide, add the
+  `hidden` attribute to the note aside; edit notes in the inspector.
+- `data-ppt-transition` values are validated and preserved, but the v1 runtime
+  does not animate them yet; play-mode transitions arrive in a later milestone.
   `none` is a valid choice, not an omission.
 
 ## When to regenerate rather than repair
