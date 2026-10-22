@@ -4,7 +4,7 @@
 
 **Goal:** Finish v1: PDF/PNG export with a system Chromium, visual round-trip coverage, security and accessibility hardening, real release documentation, cross-platform CI, and the final acceptance pass. This milestone prepares the project for publishing but does not push or publish without explicit user authorization.
 
-**Architecture:** A renderer module in `packages/core`/`packages/host` uses `playwright-core` with a detected system Chromium to turn deck HTML into PDF (one page per slide) or per-slide PNGs at 2× scale. The host exposes `POST /api/export`; the CLI and MCP call the same renderer. Visual tests compare standalone-rendered slides with editor/export rendering using pixelmatch/pngjs. Security and accessibility tests exercise the real host and editor. Release work adds README/LICENSE/CONTRIBUTING/SECURITY, contract and MCP docs, package smoke, and Ubuntu/Windows CI on Node 20/22.
+**Architecture:** A `packages/renderer` workspace uses `playwright-core` with a detected system Chromium to turn deck HTML into PDF (one page per slide) or per-slide PNGs at 2× scale. The host exposes `POST /api/export`; the CLI and MCP call the same renderer. Visual tests compare standalone-rendered slides with editor/export rendering using pixelmatch/pngjs. Security and accessibility tests exercise the real host and editor. Release work adds README/LICENSE/CONTRIBUTING/SECURITY, contract and MCP docs, package smoke, and Ubuntu/Windows CI on Node 20/22.
 
 **Tech Stack:** `playwright-core` (system Chromium), `pixelmatch`, `pngjs` (dev), Playwright, Vitest, tsup, GitHub Actions.
 
@@ -45,15 +45,20 @@ scripts/package-smoke.mjs
 
 ### Task 1: Chromium discovery and PDF/PNG renderer
 
-**Files:** `packages/renderer/*` (new), root build scripts, dependencies.
+**Files:** `packages/renderer/*` (new), root `package.json`, `package-lock.json`, `tsconfig.json`, and `dependency-cruiser.cjs` only for renderer wiring.
 
 **Interfaces:**
-- `findChromium(env?): Promise<{ executablePath: string; source: 'env'|'chrome'|'edge'|'chromium' } | null>` — checks `HTMLPPT_CHROMIUM`, then platform default Chrome/Edge/Chromium locations and `playwright` browser caches; returns null when none.
-- `renderPdf({ html, width, height, outPath }): Promise<void>` — sandboxed browser context (`javaScriptEnabled: true`, no network beyond the deck), `page.setContent(html)`, wait for fonts/images (`document.fonts.ready` + `networkidle` best effort), emulate print media, PDF at `width × height` CSS px, print backgrounds, no margins.
-- `renderPngs({ html, width, height, outDir, basename }): Promise<string[]>` — one screenshot per `[data-slide-id]` at 2× scale; hide others; restore; deterministic names.
-- Errors: `RendererUnavailableError` with install instructions; `RenderError` with the failing slide.
-- Tests: with a real installed Chromium in CI/local, render a 2-slide deck → PDF exists, 2 pages, page size matches; PNGs count 2, dimensions 2× canvas; a missing browser executable returns `RendererUnavailableError` (test via `HTMLPPT_CHROMIUM=/nonexistent` and no fallback detection override; no mocks of Chromium itself).
-- If no Chromium is available on the machine, the test must still assert the actionable error path and mark the rendering case as environment-unavailable explicitly (documented, not skipped silently; use a conditional inside one test that asserts the error message when unavailable).
+- New workspace `@htmlppt/renderer` owns browser-only rendering; core remains browser-independent. Build renderer after core and before host; wire renderer tests into `test:integration`. Runtime dependency `playwright-core` is `^1.64.1`; PDF assertions use a Node-20-compatible `pdfjs-dist` dev dependency as specified by the test-framework design, and PNG assertions may use the planned `pngjs` dev dependency.
+- `findChromium(env?): Promise<{ executablePath: string; source: 'env'|'chrome'|'edge'|'chromium' } | null>` — checks `HTMLPPT_CHROMIUM`, then platform default Chrome/Edge/Chromium locations and Playwright browser caches; returns null when none. A supplied invalid `HTMLPPT_CHROMIUM` is authoritative and never falls through to another browser.
+- `renderPdf({ html, width, height, outPath }): Promise<void>` — local Chromium with its sandbox enabled, isolated context with `javaScriptEnabled: false`, no service workers, no file access or navigation from authored content. Load with `page.setContent(html)`. Only HTTP(S) image/font/stylesheet asset requests declared by the document/CSS are permitted; no scripts, fetch/XHR, frames, workers, WebSockets, or arbitrary document requests. Trusted Playwright evaluation may prepare layout; authored scripts remain inert and original HTML is unchanged.
+- Prepare all detected slides for print independently of the runtime: expose slides hidden by navigation CSS, preserve intended flex/grid display, page-break after each except the last, first-canvas page size, backgrounds and zero margins. Wait for fonts/images with a finite deadline; timeout must close resources and return an actionable RenderError, not hang or silently report fidelity.
+- `renderPngs({ html, width, height, outDir, basename }): Promise<string[]>` — one screenshot per detected slide at 2× scale, including decks without explicit slide-id markers supported by core detection; isolate each slide, preserve authored layout, use per-slide canvas dimensions with provided dimensions as fallback; deterministic `<basename>-sN.png` names. Validate basename as a filename, not a path.
+- Errors: exported `RendererUnavailableError` with install/HTMLPPT_CHROMIUM instructions; exported `RenderError` with the failing slide where applicable. Always close page/context/browser in finally, including output failures. Outputs must not expose partial files; stage each output locally before atomic placement. Host output-directory confinement belongs to Task 2.
+- Tests use real installed Chromium and real files: a 2-slide deck yields a PDF parsed by pdfjs-dist with 2 pages of width*72/96 by height*72/96 points and two PNGs of 2× canvas dimensions; test flex layout, runtime-hidden slides, background content, mixed slide dimensions, no source mutation, output failures and invalid basename. A missing executable via authoritative env override returns RendererUnavailableError even when another browser is installed.
+- Assert renderer isolation with a real local HTTP asset server: an image/font may load, authored script cannot trigger a side effect, iframe/file/navigation/fetch requests do not reach forbidden endpoints. Do not disable Chromium's sandbox in tests.
+- A machine lacking Chromium must report the renderer test environment as blocked and assert the error path; it cannot claim rendering acceptance. No skipped tests, fake Chromium, or replacing successful-render expectations with weaker missing-browser assertions.
+
+**Steps:** renderer tests first and observed RED; implement; run renderer tests, typecheck, lint, dependency gate and build with preserved command exit codes. Do not edit host/CLI/MCP/editor integration in this task.
 
 **Commit:** `feat(renderer): add system Chromium PDF and PNG export`.
 
