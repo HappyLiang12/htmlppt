@@ -547,6 +547,24 @@ describe('findLiveSession', () => {
     }
   });
 
+  it('removes a session when the health endpoint returns 404', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const missing = await stubHost((response) => {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'not-found' }));
+    });
+    try {
+      await writeSession(staleEntry({ port: missing.port }));
+
+      expect(await findLiveSession(deckPath)).toBeNull();
+      await expect(
+        readFile(sessionFilePath(deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await missing.close();
+    }
+  });
+
   it('removes a session whose health payload is malformed', async () => {
     deckPath = await copyFixture('basic.deck.html', dir);
     const malformed = await stubHost((response) => {

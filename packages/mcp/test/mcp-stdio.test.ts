@@ -173,6 +173,24 @@ interface ProcessResult {
   stderr: string;
 }
 
+/**
+ * Bounds only the wait for response headers. Clearing the timer afterwards
+ * leaves the SSE body readable for the rest of the test.
+ */
+async function fetchEventStream(
+  url: string,
+  timeoutMs = 5_000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref();
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function runProcess(
   command: string,
   args: string[],
@@ -477,10 +495,10 @@ describe('htmlppt MCP stdio server', () => {
     const hostedDir = join(dir, 'hosted');
     await mkdir(hostedDir, { recursive: true });
     const deckPath = await copyFixture('basic.deck.html', hostedDir);
-    const editorDir = join(dir, 'hosted-editor');
-    await mkdir(editorDir, { recursive: true });
+    const hostedEditorDir = join(dir, 'hosted-editor');
+    await mkdir(hostedEditorDir, { recursive: true });
     await writeFile(
-      join(editorDir, 'index.html'),
+      join(hostedEditorDir, 'index.html'),
       '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
       'utf8'
     );
@@ -488,7 +506,7 @@ describe('htmlppt MCP stdio server', () => {
     const host = await startHost({
       filePath: deckPath,
       token,
-      editorDir,
+      editorDir: hostedEditorDir,
       port: 0
     });
     const base = new URL(host.url).origin;
@@ -509,9 +527,8 @@ describe('htmlppt MCP stdio server', () => {
         revision: initial.revision
       });
 
-      const eventsResponse = await fetch(
-        `${base}/api/events?token=${encodeURIComponent(token)}`,
-        { signal: AbortSignal.timeout(5_000) }
+      const eventsResponse = await fetchEventStream(
+        `${base}/api/events?token=${encodeURIComponent(token)}`
       );
       expect(eventsResponse.status).toBe(200);
       events = openEventStream(eventsResponse);

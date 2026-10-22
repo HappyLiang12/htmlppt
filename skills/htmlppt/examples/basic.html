@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Basic deck</title>
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; background: #0b0d12; }
+  .slide {
+    width: 1600px;
+    height: 900px;
+    position: relative;
+    overflow: hidden;
+    background: #f7f5ef;
+    color: #17181c;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+  @media screen {
+    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }
+  }
+  @media print {
+    [data-ppt-deck] > [data-slide-id] { break-after: page; }
+  }
+  .kicker { margin: 0 0 18px; font-size: 22px; letter-spacing: .18em; text-transform: uppercase; color: #9a6b1f; }
+  .title { margin: 0; font-size: 96px; line-height: 1.05; }
+  .body { margin: 28px 0 0; font-size: 32px; line-height: 1.5; color: #4a4f59; }
+  .accent { width: 200px; height: 10px; background: #e8a33d; }
+  .list { margin: 0; padding-left: 40px; font-size: 34px; line-height: 1.7; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #9a6b1f; }
+</style>
+</head>
+<body>
+<main data-ppt-deck>
+  <section class="slide" data-slide-id="s1" data-width="1600" data-height="900" data-ppt-transition="fade">
+    <div data-ppt-el="e1" style="position: absolute; left: 140px; top: 160px; width: 1200px;">
+      <p class="kicker" data-ppt-el="e1-kicker">htmlppt &middot; htmldeck/v1</p>
+      <h1 class="title" data-ppt-el="e1-title">A deck your agent can edit</h1>
+      <p class="body" data-ppt-el="e1-body">Every object is plain HTML with a stable id. Change text, styles, or structure, then validate before saving.</p>
+    </div>
+    <div class="accent" data-ppt-el="e2" style="position: absolute; left: 140px; top: 620px;"></div>
+    <aside data-ppt-notes hidden>Open with the promise: the deck is ordinary HTML, so an agent and a person can edit the same file.</aside>
+  </section>
+
+  <section class="slide" data-slide-id="s2" data-width="1600" data-height="900" data-ppt-transition="none">
+    <h2 data-ppt-el="e3" style="position: absolute; left: 140px; top: 130px; margin: 0; font-size: 64px;">How a deck is built</h2>
+    <ul class="list" data-ppt-el="e4" style="position: absolute; left: 140px; top: 280px; width: 1180px;">
+      <li>One <code>&lt;section&gt;</code> per slide with a unique <code>data-slide-id</code>.</li>
+      <li>Every top-level object carries <code>data-ppt-el</code>.</li>
+      <li>Speaker notes are a direct-child <code>&lt;aside data-ppt-notes hidden&gt;</code>.</li>
+    </ul>
+    <aside data-ppt-notes hidden>Keep object ids stable. The editor and MCP tools address objects by these ids.</aside>
+  </section>
+
+  <section class="slide" data-slide-id="s3" data-width="1600" data-height="900" data-ppt-transition="slide">
+    <h2 data-ppt-el="e5" style="position: absolute; left: 140px; top: 130px; margin: 0; font-size: 64px;">Next step</h2>
+    <p data-ppt-el="e6" style="position: absolute; left: 140px; top: 280px; width: 1180px; margin: 0; font-size: 32px; line-height: 1.5; color: #4a4f59;">Validate with <code>htmlppt validate deck.html</code>, then open the editor or export a self-contained file.</p>
+    <aside data-ppt-notes hidden>Point people to the validate command before they share the deck.</aside>
+  </section>
+</main>
+<script data-ppt-runtime="1">
+(() => {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('[data-slide-id]'));
+  if (!slides.length) return;
+  var index = 0;
+  var runtimeStyle = 'data-ppt-runtime-style';
+  var originalDisplay = slides.map(function (slide) { return slide.style.display; });
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
+    deck.setAttribute('data-ppt-ready', '1');
+  });
+
+  function isEditing(target) {
+    var element = target;
+    while (element) {
+      var tag = element.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      if (element === document.body) return false;
+      element = element.parentElement;
+    }
+    return false;
+  }
+
+  function show(next) {
+    index = Math.max(0, Math.min(slides.length - 1, next));
+    slides.forEach(function (slide, i) {
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
+    });
+    history.replaceState(null, '', '#/' + (index + 1));
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
+    if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
+      event.preventDefault();
+      show(index + 1);
+    } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+      event.preventDefault();
+      show(index - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      show(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      show(slides.length - 1);
+    }
+  });
+
+  window.addEventListener('hashchange', function () {
+    var match = /#\/(\d+)/.exec(location.hash);
+    if (match) show(Number(match[1]) - 1);
+  });
+
+  if (!document.querySelector('[' + runtimeStyle + ']')) {
+    var style = document.createElement('style');
+    style.setAttribute(runtimeStyle, '1');
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
+    document.head.appendChild(style);
+  }
+
+  var printState = null;
+  window.addEventListener('beforeprint', function () {
+    if (printState) return;
+    printState = slides.map(function (slide) { return slide.style.display; });
+    slides.forEach(function (slide, i) { slide.style.display = originalDisplay[i]; });
+  });
+  window.addEventListener('afterprint', function () {
+    printState = null;
+    show(index);
+  });
+
+  var initial = /#\/(\d+)/.exec(location.hash);
+  show(initial ? Number(initial[1]) - 1 : 0);
+})();
+</script>
+</body>
+</html>

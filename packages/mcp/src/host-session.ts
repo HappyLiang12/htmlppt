@@ -17,10 +17,11 @@ type HealthStatus = 'healthy' | 'unhealthy' | 'unknown';
  * Finds the host serving a deck, if any. A registry entry is only trusted while
  * the recorded process is alive and its authenticated health endpoint answers
  * within a bounded time. Definitive failures (dead process, refused connection,
- * rejected token, malformed payload, or a different deck path) remove the entry
- * so later calls do not retry a dead host. A health timeout or 5xx response
- * means the host may be busy rather than stale: the entry is kept, and the
- * caller falls back to direct mode for this call only.
+ * a non-5xx health response such as 401 or 404, malformed payload, or a
+ * different deck path) remove the entry so later calls do not retry a dead
+ * host. A health timeout or 5xx response means the host may be busy rather than
+ * stale: the entry is kept, and the caller falls back to direct mode for this
+ * call only.
  */
 export async function findLiveSession(
   filePath: string
@@ -65,11 +66,10 @@ async function checkHost(entry: SessionEntry): Promise<HealthStatus> {
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      // A rejected token is definitive; other statuses, including 5xx, do not
-      // prove the host is gone and must not orphan a live session.
-      return response.status === 401 || response.status === 403
-        ? 'unhealthy'
-        : 'unknown';
+      // A 5xx can mean a busy host, so keep its entry. Every other status,
+      // including 401/403 and 404/400/405, is a definitive rejection or a
+      // different service on the recorded port.
+      return response.status >= 500 ? 'unknown' : 'unhealthy';
     }
     let payload: { ok?: unknown } | null;
     try {

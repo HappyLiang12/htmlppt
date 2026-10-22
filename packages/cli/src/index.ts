@@ -20,7 +20,6 @@ import {
   writeSession,
   type SessionEntry
 } from '@htmlppt/host';
-import { findLiveSession, startStdio } from '@htmlppt/mcp';
 import { Command, CommanderError } from 'commander';
 
 export interface CliIO {
@@ -50,6 +49,50 @@ function delay(milliseconds: number): Promise<void> {
 
 function sessionUrl(session: Pick<SessionEntry, 'port' | 'token'>): string {
   return `http://127.0.0.1:${session.port}/?token=${encodeURIComponent(session.token)}`;
+}
+
+function sessionFilePath(filePath: string): string {
+  return join(sessionsDirectory(), `${sessionKey(filePath)}.json`);
+}
+
+async function sessionFileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(sessionFilePath(filePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A health timeout or 5xx keeps the registry entry even though no live session
+ * can be confirmed. Starting another host would overwrite that entry and orphan
+ * the process that may still own the socket, so a recorded live pid blocks the
+ * new host until the user retries or stops it.
+ */
+async function hasUnresponsiveRegisteredHost(
+  filePath: string
+): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await readFile(sessionFilePath(filePath), 'utf8');
+  } catch {
+    return false;
+  }
+  let entry: { path?: unknown; pid?: unknown };
+  try {
+    entry = JSON.parse(raw) as { path?: unknown; pid?: unknown };
+  } catch {
+    return false;
+  }
+  return (
+    typeof entry.path === 'string' &&
+    resolve(entry.path) === filePath &&
+    typeof entry.pid === 'number' &&
+    Number.isInteger(entry.pid) &&
+    entry.pid > 0 &&
+    processIsAlive(entry.pid)
+  );
 }
 
 async function openBrowser(url: string, io: CliIO): Promise<void> {
@@ -349,6 +392,7 @@ export async function runCli(
       }
       const filePath = resolve(io.cwd, file);
 
+      const { findLiveSession } = await import('@htmlppt/mcp');
       const existing = await findLiveSession(filePath);
       if (existing) {
         const url = sessionUrl(existing);
@@ -356,6 +400,14 @@ export async function runCli(
         if (options.browser) {
           await openBrowser(url, io);
         }
+        return;
+      }
+
+      if (await hasUnresponsiveRegisteredHost(filePath)) {
+        io.stderr(
+          `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop ${file}" to stop it.`
+        );
+        exitCode = 1;
         return;
       }
 
@@ -438,6 +490,7 @@ export async function runCli(
     .description('Stop a running editor session')
     .option('--all', 'stop every live editor session')
     .action(async (file: string | undefined, options: { all?: boolean }) => {
+      const { findLiveSession } = await import('@htmlppt/mcp');
       if (options.all) {
         if (file !== undefined) {
           io.stderr('Pass either a deck file or --all, not both.');
@@ -451,10 +504,18 @@ export async function runCli(
           return;
         }
         let stopped = 0;
+        let cleaned = 0;
         let failed = 0;
         for (const session of sessions) {
           const live = await findLiveSession(session.path);
           if (!live) {
+            if (!(await sessionFileExists(session.path))) {
+              // The health check definitively proved the entry stale and
+              // already removed it; there is no live host left to fail.
+              cleaned += 1;
+              io.stdout(`Removed stale editor session for ${session.path}.`);
+              continue;
+            }
             io.stderr(
               `Could not verify a live editor for ${session.path}; leaving it running. Retry "htmlppt stop ${session.path}" when it responds.`
             );
@@ -467,7 +528,7 @@ export async function runCli(
             failed += 1;
           }
         }
-        if (stopped === 0) {
+        if (stopped === 0 && cleaned === 0) {
           io.stderr('No live editor sessions were stopped.');
           exitCode = 1;
         } else if (failed > 0) {
@@ -499,6 +560,8 @@ export async function runCli(
     .command('mcp')
     .description('Run the MCP stdio server for AI agents')
     .action(async () => {
+      // Loaded lazily so validate/export/outline never import the MCP SDK.
+      const { startStdio } = await import('@htmlppt/mcp');
       await startStdio();
     });
 

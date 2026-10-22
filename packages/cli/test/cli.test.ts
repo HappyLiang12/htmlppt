@@ -5,7 +5,7 @@ import {
 } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { createServer } from 'node:net';
+import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionKey } from '@htmlppt/host';
@@ -689,6 +689,77 @@ function spawnKeepalive(): Promise<ChildProcess> {
   });
 }
 
+async function exitedPid(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('The short-lived process did not expose a pid.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', () => resolve());
+  });
+  return pid;
+}
+
+interface SilentHost {
+  port: number;
+  close: () => Promise<void>;
+}
+
+/** Accepts TCP connections but never answers, so health checks time out. */
+async function silentHost(): Promise<SilentHost> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The silent server did not expose a TCP port.');
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+}
+
+interface StaleSessionOptions {
+  pid: number;
+  port: number;
+}
+
+async function writeStaleSession(
+  workspace: CliWorkspace,
+  deckPath: string,
+  options: StaleSessionOptions
+): Promise<string> {
+  await mkdir(join(workspace.home, 'sessions'), { recursive: true });
+  const raw = `${JSON.stringify(
+    {
+      path: deckPath,
+      port: options.port,
+      token: 'stale-token',
+      pid: options.pid,
+      startedAt: new Date().toISOString(),
+      revision: 'a'.repeat(64)
+    },
+    null,
+    2
+  )}\n`;
+  await writeFile(sessionFilePath(workspace, deckPath), raw, 'utf8');
+  return raw;
+}
+
 describe('htmlppt cli as a real process', () => {
   beforeAll(async () => {
     await buildWorkspace();
@@ -706,7 +777,7 @@ describe('htmlppt cli as a real process', () => {
         env: cliEnvironment(workspace)
       });
       processes.push(first);
-      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)/);
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
       const url = new URL(firstMatch[1]);
       expect(url.protocol).toBe('http:');
       expect(url.hostname).toBe('127.0.0.1');
@@ -736,7 +807,7 @@ describe('htmlppt cli as a real process', () => {
         { cwd: workspace.cwd, env: cliEnvironment(workspace) }
       );
       processes.push(second);
-      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)/);
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
       expect(secondMatch[1]).toBe(url.href);
       expect(await second.waitForExit(10_000)).toBe(0);
       expect(await sessionCount(workspace)).toBe(1);
@@ -763,7 +834,7 @@ describe('htmlppt cli as a real process', () => {
     let stopProcess: CliProcess | undefined;
 
     try {
-      await open.waitForOutput(/HTMLPPT_URL=(\S+)/);
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
       const entry = JSON.parse(
         await readFile(sessionFilePath(workspace, deckPath), 'utf8')
       ) as { pid: number };
@@ -818,7 +889,7 @@ describe('htmlppt cli as a real process', () => {
 
     try {
       for (const open of opens) {
-        await open.waitForOutput(/HTMLPPT_URL=(\S+)/);
+        await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
       }
       expect(await sessionCount(workspace)).toBe(2);
 
@@ -843,6 +914,197 @@ describe('htmlppt cli as a real process', () => {
     } finally {
       for (const open of opens) {
         open.kill();
+      }
+    }
+  });
+
+  it('requires a deck file or --all for stop', async () => {
+    const workspace = await createCliWorkspace();
+
+    const result = await runCliProcess(['stop'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Specify a deck file to stop or pass --all.');
+  });
+
+  it('rejects stop with both a deck file and --all', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+
+    const result = await runCliProcess(
+      ['stop', 'basic.deck.html', '--all'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      'Pass either a deck file or --all, not both.'
+    );
+  });
+
+  it('starts a new host after removing a stale dead entry', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port: await closedPort()
+    });
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+      expect(url.hostname).toBe('127.0.0.1');
+      const pid = open.child.pid;
+      if (pid === undefined) {
+        throw new Error('The CLI process did not expose a pid.');
+      }
+      const entry = JSON.parse(
+        await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ) as { pid: number; port: number; token: string };
+      expect(entry.pid).toBe(pid);
+      expect(entry.port).toBe(Number(url.port));
+      expect(entry.token).toBe(url.searchParams.get('token'));
+      expect(await sessionCount(workspace)).toBe(1);
+    } finally {
+      open.kill();
+    }
+  });
+
+  it('refuses to orphan a busy host that fails the health check', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+    const silent = await silentHost();
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid,
+        port: silent.port
+      });
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stderr).toContain('htmlppt stop');
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      open?.kill();
+      await silent.close();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('treats a definitively stale --all entry as success', async () => {
+    const workspace = await createCliWorkspace();
+    const liveDir = join(workspace.cwd, 'live');
+    const staleDir = join(workspace.cwd, 'stale');
+    await mkdir(liveDir, { recursive: true });
+    await mkdir(staleDir, { recursive: true });
+    const liveDeck = await copyFixture('basic.deck.html', liveDir);
+    const staleDeck = await copyFixture('basic.deck.html', staleDir);
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+    const open = new CliProcess(['open', 'live/basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let stop: CliProcess | undefined;
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      await writeStaleSession(workspace, staleDeck, {
+        pid,
+        port: await closedPort()
+      });
+
+      stop = new CliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      stop.child.stdin.end();
+      const [stopCode] = await Promise.all([
+        stop.waitForExit(15_000),
+        open.waitForExit(5_000)
+      ]);
+
+      expect(stopCode).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stdout).toContain('Removed stale editor session');
+      await expect(
+        readFile(sessionFilePath(workspace, liveDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(
+        readFile(sessionFilePath(workspace, staleDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      open.kill();
+      stop?.kill();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('treats a stale-only --all as success', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid,
+        port: await closedPort()
+      });
+
+      const result = await runCliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('Removed stale editor session');
+      expect(await sessionCount(workspace)).toBe(0);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
       }
     }
   });
