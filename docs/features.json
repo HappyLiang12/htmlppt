@@ -2,6 +2,7 @@
   "features": [
     { "id": "skeleton", "spec": "16", "status": "active", "tests": ["@feature:skeleton"] },
     { "id": "runtime", "spec": "Runtime", "status": "active", "tests": ["@feature:runtime"] },
+    { "id": "editor-core", "spec": "10", "status": "planned", "tests": ["@feature:editor-core"] },
     { "id": "slides", "spec": "4.Slides", "status": "planned", "tests": ["@feature:slides"] },
     { "id": "objects-transform", "spec": "4.Objects", "status": "planned", "tests": ["@feature:objects-transform"] },
     { "id": "rich-text", "spec": "4.Text", "status": "planned", "tests": ["@feature:rich-text"] },

@@ -85,6 +85,18 @@ function findFrameSlide(
   return candidate?.tagName === slide.element.tagName ? candidate : null;
 }
 
+/**
+ * Resolves the slide element rendered inside the preview iframe. The returned
+ * element lives in the iframe realm, which is what selection and geometry
+ * helpers require.
+ */
+export function frameSlideElement(
+  slide: SlideInfo,
+  frameDocument: Document
+): Element | null {
+  return findFrameSlide(slide, frameDocument);
+}
+
 export function commitSlide(
   doc: Document,
   slideIndex: number,
