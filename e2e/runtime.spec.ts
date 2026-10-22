@@ -9,6 +9,19 @@ import { serveHtml } from './helpers';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = join(repoRoot, 'packages/cli/dist/bin.js');
 
+const readDisplay = (element: unknown) => {
+  const scope = element as {
+    ownerDocument: {
+      defaultView: {
+        getComputedStyle(node: unknown): { display: string };
+      } | null;
+    };
+  };
+  const view = scope.ownerDocument.defaultView;
+  if (!view) throw new Error('Slide has no window.');
+  return view.getComputedStyle(element).display;
+};
+
 test.describe('presentation runtime', () => {
   test('shows only the first slide without JavaScript', { tag: '@feature:runtime' }, async ({ browser }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
@@ -22,6 +35,7 @@ test.describe('presentation runtime', () => {
         await page.goto(server.url);
         await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
         await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+        await expect(page.locator('[data-slide-id]:visible')).toHaveCount(1);
       } finally {
         await context.close();
         await server.close();
@@ -31,20 +45,37 @@ test.describe('presentation runtime', () => {
     }
   });
 
-  test('prints every slide and restores screen state', { tag: '@feature:runtime' }, async ({ page }) => {
+  test('prints every slide while preserving stylesheet display', { tag: '@feature:runtime' }, async ({ page }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
     try {
       await execa('node', [cliPath, 'new', 'deck.html', '--slides', '2'], { cwd: directory });
-      const html = await readFile(join(directory, 'deck.html'), 'utf8');
+      const file = join(directory, 'deck.html');
+      const html = (await readFile(file, 'utf8')).replace(
+        '.slide {',
+        '.slide { display: flex;'
+      );
       const server = await serveHtml(html);
       try {
         await page.goto(server.url);
         await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
-        await page.emulateMedia({ media: 'print' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
-        await page.emulateMedia({ media: 'screen' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+
         await page.keyboard.press('ArrowRight');
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page.locator('[data-slide-id="s2"]').evaluate(readDisplay)
+        ).toBe('flex');
+
+        await page.emulateMedia({ media: 'print' });
+        await page.evaluate("window.dispatchEvent(new Event('beforeprint'))");
+        await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page.locator('[data-slide-id="s2"]').evaluate(readDisplay)
+        ).toBe('flex');
+
+        await page.evaluate("window.dispatchEvent(new Event('afterprint'))");
+        await page.emulateMedia({ media: 'screen' });
+        await expect(page.locator('[data-slide-id="s1"]')).toBeHidden();
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
       } finally {
         await server.close();
@@ -65,13 +96,38 @@ test.describe('presentation runtime', () => {
       const server = await serveHtml(withInput);
       try {
         await page.goto(server.url);
+        await expect(page.locator('style[data-ppt-runtime-style="1"]')).toHaveCount(1);
         await page.locator('#probe').focus();
         await page.keyboard.press('ArrowRight');
         expect(page.url()).toContain('#/1');
         await page.locator('body').click({ position: { x: 10, y: 10 } });
+        await page.keyboard.press('Shift+ArrowRight');
+        expect(page.url()).toContain('#/1');
         await page.keyboard.press('ArrowRight');
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
         expect(page.url()).toContain('#/2');
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores navigation when the body is editable', { tag: '@feature:runtime' }, async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
+    try {
+      await execa('node', [cliPath, 'new', 'deck.html', '--slides', '2'], { cwd: directory });
+      const html = await readFile(join(directory, 'deck.html'), 'utf8');
+      const withEditableBody = html.replace('<body>', '<body contenteditable="true">');
+      expect(withEditableBody).toContain('<body contenteditable="true">');
+      const server = await serveHtml(withEditableBody);
+      try {
+        await page.goto(server.url);
+        await page.locator('[data-slide-id="s1"]').click({ position: { x: 10, y: 10 } });
+        await page.keyboard.press('ArrowRight');
+        expect(page.url()).toContain('#/1');
+        await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
       } finally {
         await server.close();
       }

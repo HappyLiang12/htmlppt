@@ -127,9 +127,10 @@ describe('createDeckHtml', () => {
     const html = createDeckHtml({ slides: 2 });
 
     expect(html).toContain(
-      '[data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }'
+      '@media screen {\n    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }\n  }'
     );
     expect(html).toContain('@media print');
     expect(html).toContain('break-after: page');
+    expect(html).not.toContain('display: block !important');
   });
 });

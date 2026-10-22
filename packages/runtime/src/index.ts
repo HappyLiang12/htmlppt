@@ -6,11 +6,16 @@ export const RUNTIME_SOURCE = String.raw`
   var runtimeStyle = 'data-ppt-runtime-style';
   var originalDisplay = slides.map(function (slide) { return slide.style.display; });
 
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
+    deck.setAttribute('data-ppt-ready', '1');
+  });
+
   function isEditing(target) {
     var element = target;
-    while (element && element !== document.body) {
+    while (element) {
       var tag = element.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      if (element === document.body) return false;
       element = element.parentElement;
     }
     return false;
@@ -19,13 +24,13 @@ export const RUNTIME_SOURCE = String.raw`
   function show(next) {
     index = Math.max(0, Math.min(slides.length - 1, next));
     slides.forEach(function (slide, i) {
-      slide.style.display = i === index ? (originalDisplay[i] || 'block') : 'none';
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
     history.replaceState(null, '', '#/' + (index + 1));
   }
 
   document.addEventListener('keydown', function (event) {
-    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target)) return;
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
     if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
       event.preventDefault();
       show(index + 1);
@@ -49,7 +54,7 @@ export const RUNTIME_SOURCE = String.raw`
   if (!document.querySelector('[' + runtimeStyle + ']')) {
     var style = document.createElement('style');
     style.setAttribute(runtimeStyle, '1');
-    style.textContent = '@media print{[data-slide-id]{display:block !important;break-after:page;page-break-after:always}}';
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
     document.head.appendChild(style);
   }
 
