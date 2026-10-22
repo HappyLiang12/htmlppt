@@ -27,13 +27,16 @@ import {
   buildSlideSrcDoc,
   commitSlide,
   EDITING_ATTRIBUTE,
+  FRAME_SLIDE_ATTRIBUTE,
   frameSlideElement
 } from './slide-doc';
+import type { PastedObjectGeometry } from './object-ops';
 import {
   angleDelta,
   applyRect,
   applyRotation,
   centerOf,
+  containingBlockOffset,
   moveTargets,
   pinToAbsolute,
   rectOf,
@@ -62,6 +65,7 @@ import {
   type SelectionBox
 } from './components/CanvasOverlay';
 import { Inspector } from './components/Inspector';
+import { PlayView } from './components/PlayView';
 import { SorterView } from './components/SorterView';
 import { ThumbnailRail } from './components/ThumbnailRail';
 import { Toolbar, type EditorView } from './components/Toolbar';
@@ -197,7 +201,36 @@ function slideOffsetOf(slide: Element): Point {
 export function App() {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const canvas = useRef<HTMLElement | null>(null);
-  const { state, actions } = useDeckController();
+
+  /**
+   * Measures a pasted copy in the rendered preview. The master document is
+   * inert, so class-supplied positioning and coordinates only resolve here.
+   * The staging clone is removed in the same synchronous task.
+   */
+  const measurePastedObject = useCallback(
+    (element: Element): PastedObjectGeometry | null => {
+      const frameDocument = frame.current?.contentDocument;
+      if (!frameDocument) return null;
+      const liveSlide: Element | null =
+        frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}]`) ??
+        frameDocument.body;
+      if (!liveSlide) return null;
+      const clone = liveSlide.ownerDocument.importNode(element, true) as Element;
+      liveSlide.appendChild(clone);
+      try {
+        const view = liveSlide.ownerDocument.defaultView;
+        const position = view?.getComputedStyle(clone).position ?? '';
+        const rect = rectOf(clone, liveSlide);
+        const block = containingBlockOffset(clone, liveSlide);
+        return { x: rect.x - block.x, y: rect.y - block.y, position };
+      } finally {
+        clone.remove();
+      }
+    },
+    []
+  );
+
+  const { state, actions } = useDeckController({ measurePastedObject });
   const {
     slides,
     activeIndex,
@@ -214,12 +247,14 @@ export function App() {
   const activeSlide = slides[activeIndex];
 
   const [view, setView] = useState<EditorView>('normal');
+  const [playing, setPlaying] = useState(false);
   const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
   const [frameEpoch, setFrameEpoch] = useState(0);
   const [slideOpError, setSlideOpError] = useState('');
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   const sessionRef = useRef<TransformSession | null>(null);
   const detachSessionRef = useRef<(() => void) | null>(null);
@@ -448,10 +483,40 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const element = canvas.current;
+    if (!element) return;
+    const measure = () => {
+      const bounds = element.getBoundingClientRect();
+      setCanvasSize((previous) =>
+        previous.width === bounds.width && previous.height === bounds.height
+          ? previous
+          : { width: bounds.width, height: bounds.height }
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [view, playing]);
+
+  useEffect(() => {
+    // Fit only when the slide identity or the canvas size changes. Depending
+    // on the SlideInfo object would refit after every commit, because commits
+    // re-detect the slide list and a user zoom would be lost.
     computeFitScale();
-    window.addEventListener('resize', computeFitScale);
-    return () => window.removeEventListener('resize', computeFitScale);
-  }, [activeSlide, computeFitScale, view]);
+  }, [
+    activeSlide?.id,
+    activeSlide?.width,
+    activeSlide?.height,
+    canvasSize.width,
+    canvasSize.height,
+    computeFitScale,
+    view
+  ]);
 
   const frameSlideNow = useCallback((): Element | null => {
     const frameDocument = frame.current?.contentDocument;
@@ -980,15 +1045,70 @@ export function App() {
     (event: KeyboardEvent, activeDocument: Document | null) => {
       if (event.defaultPrevented) return;
       const active = activeDocument ?? document;
-      if (
+      const editable =
         isEditableTarget(active.activeElement) ||
-        isEditableShortcutTarget(event.target)
-      ) {
-        return;
+        isEditableShortcutTarget(event.target);
+      const current = stateRef.current;
+
+      if (playing) {
+        // F5 restarts at slide 1 while presenting; Shift+F5 is a no-op but
+        // must not reach the browser refresh.
+        if (event.key === 'F5') {
+          event.preventDefault();
+          if (
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey
+          ) {
+            actionsRef.current.showSlide(0);
+          }
+          return;
+        }
+        // Escape is the exit hatch even when a deck control owns focus.
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setPlaying(false);
+          return;
+        }
+        if (editable) return;
+        if (
+          event.altKey ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey
+        ) {
+          return;
+        }
+        switch (event.key) {
+          case 'ArrowLeft':
+          case 'PageUp':
+            event.preventDefault();
+            actionsRef.current.showSlide(current.activeIndex - 1);
+            return;
+          case 'ArrowRight':
+          case ' ':
+          case 'Spacebar':
+          case 'PageDown':
+            event.preventDefault();
+            actionsRef.current.showSlide(current.activeIndex + 1);
+            return;
+          case 'Home':
+            event.preventDefault();
+            actionsRef.current.showSlide(0);
+            return;
+          case 'End':
+            event.preventDefault();
+            actionsRef.current.showSlide(current.slides.length - 1);
+            return;
+          default:
+            return;
+        }
       }
+
+      if (editable) return;
       const action = mapShortcut(event);
       if (!action) return;
-      const current = stateRef.current;
 
       if (action.type === 'escape') {
         if (cancelSession()) {
@@ -1080,8 +1200,12 @@ export function App() {
         }
         case 'play':
         case 'play-from-current':
-          // Play mode shell is Task 7; keep the browser default suppressed.
           event.preventDefault();
+          if (current.slides.length === 0) return;
+          actionsRef.current.clearSelection();
+          clearOverlay();
+          if (action.type === 'play') actionsRef.current.showSlide(0);
+          setPlaying(true);
           return;
         case 'nudge': {
           if (current.selections.length > 0) {
@@ -1108,6 +1232,7 @@ export function App() {
       clearOverlay,
       computeFitScale,
       nudgeSelection,
+      playing,
       startTextEditing,
       zoomBy
     ]
@@ -1267,6 +1392,22 @@ export function App() {
   const goTo = (index: number) => {
     actions.showSlide(index);
   };
+
+  if (playing && activeSlide) {
+    return (
+      <PlayView
+        slide={activeSlide}
+        srcDoc={
+          master
+            ? buildSlideSrcDoc(master, activeSlide, { markFrame: false })
+            : srcDoc
+        }
+        onKeyDown={(event, playDocument) =>
+          keyDownRef.current(event, playDocument)
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen flex-col bg-[#0f1115] text-zinc-100">

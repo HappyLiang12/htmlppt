@@ -16,7 +16,8 @@ import { topLevelObjects, type SelectionTarget } from './selection';
 import {
   collectObjectHtml,
   deleteObjectPaths,
-  pasteObjectHtml
+  pasteObjectHtml,
+  type PastedObjectMeasure
 } from './object-ops';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
 import { clampSlideIndex } from './slide-index';
@@ -96,6 +97,12 @@ export interface DeckController {
 
 export interface DeckControllerOptions {
   token?: string;
+  /**
+   * Bridges pasted-object measurement to the rendered preview. The master
+   * document is inert, so class-supplied positions require live layout; when
+   * absent, paste falls back to master-document geometry.
+   */
+  measurePastedObject?: PastedObjectMeasure;
 }
 
 // Authored editor-only attributes are a contract error under the M1 host rules
@@ -168,6 +175,8 @@ export function useDeckController(
   const historyRef = useRef(new History<string, number>());
   const clipboardRef = useRef<string[]>([]);
   const tokenRef = useRef(options.token ?? tokenFromLocation());
+  const measurePastedRef = useRef(options.measurePastedObject);
+  measurePastedRef.current = options.measurePastedObject;
 
   const update = useCallback((patch: Partial<DeckControllerState>) => {
     const next = { ...stateRef.current, ...patch };
@@ -463,14 +472,20 @@ export function useDeckController(
       if (html.length === 0 || !masterRef.current) return;
       if (!slidesRef.current[slideIndex]) return;
 
-      let pasted: SelectionTarget[] = [];
-      try {
-        await commitMaster((master) => {
-          pasted = pasteObjectHtml(master, slideIndex, html);
-        });
-      } finally {
-        if (pasted.length > 0) applySelections(pasted);
-      }
+      // Select the pasted objects inside the mutation, before the save is
+      // awaited. Reconciling after a slow save would retarget the selection
+      // when the user switched slides or selected something else meanwhile.
+      await commitMaster((master) => {
+        const pasted = pasteObjectHtml(
+          master,
+          slideIndex,
+          html,
+          measurePastedRef.current
+        );
+        if (pasted.length > 0 && activeIndexRef.current === slideIndex) {
+          applySelections(pasted);
+        }
+      });
     },
     [applySelections, commitMaster]
   );
@@ -508,14 +523,14 @@ export function useDeckController(
       .map((target) => target.path);
     if (paths.length === 0) return;
 
-    let removed = 0;
-    try {
-      await commitMaster((master) => {
-        removed = deleteObjectPaths(master, slideIndex, paths);
-      });
-    } finally {
-      if (removed > 0) applySelections([]);
-    }
+    // Clear the selection inside the mutation, before the save is awaited, so
+    // a slow save cannot clear a newer selection made after a slide switch.
+    await commitMaster((master) => {
+      const removed = deleteObjectPaths(master, slideIndex, paths);
+      if (removed > 0 && activeIndexRef.current === slideIndex) {
+        applySelections([]);
+      }
+    });
   }, [applySelections, commitMaster]);
 
   const saveNow = useCallback(async () => {

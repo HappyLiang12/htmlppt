@@ -7,13 +7,17 @@ export interface HistoryEntry<T, M = undefined> {
   meta: M;
 }
 
-export interface HistoryPushOptions<M = undefined> {
+export interface HistoryPushOptions<M> {
   /**
    * Consecutive pushes with the same key inside the coalescing window replace
    * the previous entry instead of adding a new one.
    */
   coalesceKey?: string;
-  meta?: M;
+  /**
+   * Caller state captured with the value. Required so a push can never store
+   * an undefined context entry.
+   */
+  meta: M;
 }
 
 interface StoredEntry<T, M> extends HistoryEntry<T, M> {
@@ -36,7 +40,7 @@ export class History<T, M = undefined> {
     return this.index >= 0 && this.index < this.entries.length - 1;
   }
 
-  push(entry: T, options: HistoryPushOptions<M> = {}): void {
+  push(entry: T, options: HistoryPushOptions<M>): void {
     const pushedAt = Date.now();
     const branched = this.index < this.entries.length - 1;
     if (branched) {
@@ -52,14 +56,14 @@ export class History<T, M = undefined> {
       pushedAt - previous.pushedAt <= COALESCE_WINDOW_MS
     ) {
       previous.value = entry;
-      if ('meta' in options) previous.meta = options.meta as M;
+      previous.meta = options.meta;
       previous.pushedAt = pushedAt;
       return;
     }
 
     this.entries.push({
       value: entry,
-      meta: options.meta as M,
+      meta: options.meta,
       coalesceKey: options.coalesceKey,
       pushedAt
     });

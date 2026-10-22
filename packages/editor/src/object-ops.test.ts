@@ -1,12 +1,55 @@
 import { detectSlides } from '@htmlppt/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { elementAtPath } from './selection.js';
 import { parseDeck } from './slide-doc.js';
 import {
   collectObjectHtml,
   deleteObjectPaths,
-  pasteObjectHtml
+  pasteObjectHtml,
+  type PastedObjectGeometry
 } from './object-ops.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/**
+ * jsdom has no layout engine, so a pasted class-positioned object would
+ * otherwise measure as a zero rect. The stub gives the pasted element a
+ * measured box while every other element (including the slide) stays at zero.
+ */
+function stubMeasuredRect(
+  text: string,
+  measured: { x: number; y: number; width: number; height: number }
+): void {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: Element): DOMRect {
+      const zero = {
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({})
+      } as DOMRect;
+      if (this.textContent !== text) return zero;
+      return {
+        x: measured.x,
+        y: measured.y,
+        left: measured.x,
+        top: measured.y,
+        right: measured.x + measured.width,
+        bottom: measured.y + measured.height,
+        width: measured.width,
+        height: measured.height,
+        toJSON: () => ({})
+      } as DOMRect;
+    }
+  );
+}
 
 const DECK_HTML = `<!doctype html>
 <html lang="en">
@@ -118,6 +161,77 @@ describe('pasteObjectHtml', () => {
     expect(styleOf(pasted).position).toBe('relative');
     expect(styleOf(pasted).left).toBe('25px');
     expect(styleOf(pasted).top).toBe('27px');
+  });
+
+  it('falls back to the measured rect for unitless absolute offsets', () => {
+    const { master } = fixture();
+    stubMeasuredRect('Unitless', { x: 120, y: 160, width: 100, height: 60 });
+
+    const targets = pasteObjectHtml(master, 0, [
+      '<div data-ppt-el="unitless" style="position:absolute;left:10;top:20;width:100px;height:60px">Unitless</div>'
+    ]);
+    const pasted = elementAtPath(slideOf(master), targets[0]?.path ?? []);
+    if (!pasted) throw new Error('Missing pasted unitless element.');
+
+    expect(styleOf(pasted).position).toBe('absolute');
+    expect(styleOf(pasted).left).toBe('140px');
+    expect(styleOf(pasted).top).toBe('180px');
+  });
+
+  it('falls back to the measured rect for class-positioned absolute objects', () => {
+    const { master } = fixture();
+    stubMeasuredRect('Placed', { x: 300, y: 200, width: 100, height: 80 });
+
+    const targets = pasteObjectHtml(master, 0, [
+      '<div data-ppt-el="placed" class="placed" style="position:absolute;width:100px;height:80px">Placed</div>'
+    ]);
+    const pasted = elementAtPath(slideOf(master), targets[0]?.path ?? []);
+    if (!pasted) throw new Error('Missing pasted placed element.');
+
+    // The class supplies left/top, so the authored position is only available
+    // from layout: the paste lands 20 px down-right of the measured box.
+    expect(styleOf(pasted).left).toBe('320px');
+    expect(styleOf(pasted).top).toBe('220px');
+  });
+
+  it('replaces percentage offsets with a measured pixel fallback', () => {
+    const { master } = fixture();
+    stubMeasuredRect('Percent', { x: 240, y: 90, width: 50, height: 50 });
+
+    const targets = pasteObjectHtml(master, 0, [
+      '<div data-ppt-el="pct" style="position:absolute;left:25%;top:10%;width:50px;height:50px">Percent</div>'
+    ]);
+    const pasted = elementAtPath(slideOf(master), targets[0]?.path ?? []);
+    if (!pasted) throw new Error('Missing pasted percentage element.');
+
+    expect(styleOf(pasted).left).toBe('260px');
+    expect(styleOf(pasted).top).toBe('110px');
+    expect(styleOf(pasted).left).not.toContain('calc');
+    expect(styleOf(pasted).top).not.toContain('calc');
+  });
+
+  it('uses the live measurement for class-positioned objects', () => {
+    const { master } = fixture();
+    const measure = vi.fn(
+      (element: Element): PastedObjectGeometry | null =>
+        element.textContent === 'Class placed'
+          ? { x: 300, y: 200, position: 'absolute' }
+          : null
+    );
+
+    const targets = pasteObjectHtml(
+      master,
+      0,
+      ['<div data-ppt-el="classed" class="placed">Class placed</div>'],
+      measure
+    );
+    const pasted = elementAtPath(slideOf(master), targets[0]?.path ?? []);
+    if (!pasted) throw new Error('Missing class-positioned element.');
+
+    expect(measure).toHaveBeenCalledTimes(1);
+    expect(styleOf(pasted).position).toBe('absolute');
+    expect(styleOf(pasted).left).toBe('320px');
+    expect(styleOf(pasted).top).toBe('220px');
   });
 
   it('allocates unique fresh ids across every pasted object', () => {

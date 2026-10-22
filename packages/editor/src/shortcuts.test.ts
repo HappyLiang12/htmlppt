@@ -102,6 +102,16 @@ describe('mapShortcut unmodified shortcuts', () => {
     expect(mapShortcut(press('Backspace'))).toEqual({ type: 'delete' });
   });
 
+  it('keeps Backspace as delete for the dispatcher to gate on a selection', () => {
+    // Backspace deleting a selected object is intentional; the dispatcher
+    // must only consume it when a selection exists, leaving browser
+    // navigation untouched otherwise.
+    expect(mapShortcut(press('Backspace'))).toEqual({ type: 'delete' });
+    expect(mapShortcut(press('Backspace', { target: elementTarget('<p>x</p>') }))).toEqual({
+      type: 'delete'
+    });
+  });
+
   it('maps escape, enter, play, and help', () => {
     expect(mapShortcut(press('Escape'))).toEqual({ type: 'escape' });
     expect(mapShortcut(press('Enter'))).toEqual({ type: 'edit' });

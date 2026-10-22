@@ -3,6 +3,7 @@ import {
   topLevelObjects,
   type SelectionTarget
 } from './selection.js';
+import { containingBlockOffset, rectOf } from './transform.js';
 
 const PIXEL_VALUE = /^(-?(?:\d+|\d*\.\d+))px$/;
 
@@ -11,34 +12,80 @@ function parsePixels(value: string): number | null {
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
+export interface PastedObjectGeometry {
+  /** Inline-space coordinates relative to the object's containing block. */
+  x: number;
+  y: number;
+  /** Computed position in the rendered preview, including class rules. */
+  position: string;
+}
+
 /**
- * Shifts a pasted object by 20 design pixels on both axes. Absolute objects
- * move their inline coordinates; flow objects switch to relative positioning
- * so the offset applies without measuring the target in the destination slide.
+ * Reads the rendered geometry of a pasted object. The editor master document
+ * is inert, so class-positioned objects only have real coordinates in the live
+ * preview; callers pass a reader bridged to that iframe.
  */
-function offsetPastedObject(element: Element): void {
+export type PastedObjectMeasure = (
+  element: Element
+) => PastedObjectGeometry | null;
+
+/**
+ * Shifts a pasted object by 20 design pixels on both axes. Positioned objects
+ * with finite inline pixel coordinates move those values; an axis without a
+ * usable pixel value (unitless, percentage, auto, or a class-supplied
+ * coordinate) falls back to the measured box so the copy lands 20 px
+ * down-right of where it renders. Flow objects switch to relative positioning
+ * so the offset applies without measuring the destination slide.
+ */
+function offsetPastedObject(
+  element: Element,
+  slide: Element,
+  measured: PastedObjectGeometry | null
+): void {
   const style = (element as HTMLElement).style;
   if (!style) return;
-  const positioned =
-    style.position === 'absolute' ||
-    style.position === 'fixed' ||
-    style.position === 'relative';
-  if (!positioned) {
+  const position = measured?.position || style.position;
+  if (
+    position !== 'absolute' &&
+    position !== 'fixed' &&
+    position !== 'relative'
+  ) {
     style.position = 'relative';
     style.left = '20px';
     style.top = '20px';
     return;
   }
-  style.left = offsetValue(style.left);
-  style.top = offsetValue(style.top);
-}
+  if (style.position !== position) {
+    // A class positions the object; materialize it inline so the saved copy
+    // keeps its placement independent of the authored class.
+    style.position = position;
+  }
 
-function offsetValue(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === 'auto') return '20px';
-  const pixels = parsePixels(trimmed);
-  if (pixels !== null) return `${pixels + 20}px`;
-  return `calc(${trimmed} + 20px)`;
+  const left = parsePixels(style.left);
+  const top = parsePixels(style.top);
+  if (position === 'relative') {
+    // Relative left/top are offsets from the normal position, so the measured
+    // rect is an absolute coordinate rather than an offset. A missing authored
+    // offset starts at zero; the copy still shifts by 20 px.
+    style.left = `${(left ?? 0) + 20}px`;
+    style.top = `${(top ?? 0) + 20}px`;
+    return;
+  }
+
+  if (left !== null && top !== null) {
+    style.left = `${left + 20}px`;
+    style.top = `${top + 20}px`;
+    return;
+  }
+
+  let origin = measured;
+  if (!origin) {
+    const rect = rectOf(element, slide);
+    const block = containingBlockOffset(element, slide);
+    origin = { x: rect.x - block.x, y: rect.y - block.y, position };
+  }
+  style.left = `${(left ?? origin.x) + 20}px`;
+  style.top = `${(top ?? origin.y) + 20}px`;
 }
 
 function elementIdOf(element: Element): string | null {
@@ -95,7 +142,8 @@ function nextIdFactory(slide: Element): () => string {
 export function pasteObjectHtml(
   master: Document,
   slideIndex: number,
-  html: readonly string[]
+  html: readonly string[],
+  measure?: PastedObjectMeasure
 ): SelectionTarget[] {
   const slide = detectSlides(master)[slideIndex]?.element;
   if (!slide || html.length === 0) return [];
@@ -114,8 +162,8 @@ export function pasteObjectHtml(
     for (const nested of nestedIds) {
       nested.setAttribute('data-ppt-el', nextId());
     }
-    offsetPastedObject(element);
     slide.appendChild(element);
+    offsetPastedObject(element, slide, measure?.(element) ?? null);
 
     targets.push({
       slideIndex,
