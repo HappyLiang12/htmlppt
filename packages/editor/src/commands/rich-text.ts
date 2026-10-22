@@ -236,8 +236,10 @@ function applyStyle(
       caret.insertNode(span);
       const next = document.createRange();
       next.selectNodeContents(span);
-      caret.setStart(next.startContainer, next.startOffset);
-      caret.setEnd(next.endContainer, next.endOffset);
+      next.collapse(false);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(next);
       return;
     }
   }

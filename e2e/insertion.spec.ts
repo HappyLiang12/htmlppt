@@ -93,6 +93,9 @@ async function replaceSelectionText(
   });
   await page.keyboard.type(text);
   await page.keyboard.press('Escape');
+  // Ending the session is deferred so keyboard focus can reach the toolbar;
+  // wait for the commit to start before watching the save status.
+  await expect(target).not.toHaveAttribute('contenteditable', 'true');
   await waitForSaved(page);
 }
 
@@ -191,6 +194,22 @@ test.describe('object insertion @feature:shapes-images', () => {
       expect(html).toContain('opacity: 0.8');
       expect(html).toContain('data-ppt-crop="10 0 0 0"');
 
+      // A script URL is rejected inside the replace command, which the editor
+      // reports only by leaving the image and the saved deck untouched.
+      let replacePrompt = '';
+      const rejectedReplace = new Promise<void>((resolve) => {
+        page.once('dialog', (dialog) => {
+          replacePrompt = dialog.message();
+          void dialog.accept('javascript:alert(1)').then(() => resolve());
+        });
+      });
+      await page.getByTestId('image-replace-url').click();
+      await rejectedReplace;
+      expect(replacePrompt).toBe('圖片網址（https:// 或 data:image/...）');
+      await expect(image).toHaveAttribute('src', PNG_URL);
+      html = await deckHtml(harness);
+      expect(html).not.toContain('javascript:');
+
       page.once('dialog', (dialog) => dialog.accept(GIF_URL));
       await page.getByTestId('image-replace-url').click();
       await waitForSaved(page);
@@ -199,6 +218,18 @@ test.describe('object insertion @feature:shapes-images', () => {
       html = await deckHtml(harness);
       expect(html).toContain(GIF_URL);
       expect(html).not.toContain('javascript:');
+
+      // The insertion prompt is a separate path and surfaces the rejection in
+      // the editor error banner without adding a second image.
+      page.once('dialog', (dialog) => dialog.accept('javascript:alert(1)'));
+      await page.getByTestId('insert-image').click();
+      await page.getByTestId('insert-image-url').click();
+      await expect(page.getByTestId('editor-error')).toContainText(
+        'Image URLs must use http: or https:.'
+      );
+      await expect(harness.frame.locator('img[data-ppt-el]')).toHaveCount(1);
+      await expect(image).toHaveAttribute('src', GIF_URL);
+      expect(await deckHtml(harness)).not.toContain('javascript:');
 
       await page.reload();
       const reloaded = page.frameLocator(FRAME_SELECTOR);

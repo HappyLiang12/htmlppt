@@ -1279,6 +1279,44 @@ test(
 );
 
 test(
+  'keyboard focus in the text toolbar keeps editing and applies bold',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      await heading.dblclick();
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('Toolbar focus bold');
+      await page.keyboard.press('Control+Shift+ArrowLeft');
+
+      // Simulates keyboard focus leaving the iframe for a toolbar button.
+      await page.getByTestId('text-bold').focus();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Enter');
+
+      await expect(heading.locator('span[style*="font-weight"]')).toHaveCSS(
+        'font-weight',
+        '700'
+      );
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      const saved = await savedDocument(editor);
+      expect(saved).toMatch(/font-weight:\s*bold/);
+      expect(saved).not.toContain('contenteditable');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
   'escape and pointercancel cancel a drag without saving',
   { tag: '@feature:editor-core' },
   async ({ page }) => {

@@ -210,6 +210,7 @@ export const RUNTIME_SOURCE = String.raw`
     var slides = [];
     var headHtml = '';
     var bodyFallback = false;
+    var previewKey = '';
     var index = 0;
     var total = 0;
     var lastState = 0;
@@ -234,8 +235,11 @@ export const RUNTIME_SOURCE = String.raw`
     }
     function renderPreview() {
       if (!preview) return;
-      while (preview.firstChild) preview.removeChild(preview.firstChild);
       var next = slides[index + 1];
+      var key = index + '|' + bodyFallback + '|' + headHtml + '|' + (next ? next.outerHTML : '');
+      if (key === previewKey) return;
+      previewKey = key;
+      while (preview.firstChild) preview.removeChild(preview.firstChild);
       if (!next) {
         preview.appendChild(document.createTextNode('（最後一頁）'));
         return;
@@ -380,11 +384,15 @@ export const RUNTIME_SOURCE = String.raw`
     var client = win.document.createElement('script');
     client.textContent = '(' + PRESENTER_CLIENT.toString() + ')();';
     win.document.body.appendChild(client);
+    var sentSnapshot = false;
     channel.onmessage = function (event) {
       var message = event.data;
       if (!message || message.sessionId !== sessionId) return;
       if (message.type === 'request') {
-        sendSnapshot();
+        if (!sentSnapshot) {
+          sentSnapshot = true;
+          sendSnapshot();
+        }
         postState();
       } else if (message.type === 'slide') {
         var requested = message.index;
@@ -398,6 +406,7 @@ export const RUNTIME_SOURCE = String.raw`
     presentation.closedTimer = window.setInterval(function () {
       if (win.closed) closePresenter(false);
     }, 1000);
+    sentSnapshot = true;
     sendSnapshot();
     postState();
   }

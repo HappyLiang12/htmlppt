@@ -156,7 +156,10 @@ import {
   type SlideOpsContext
 } from './slide-ops';
 import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
-import { useDeckController } from './use-deck-controller';
+import {
+  useDeckController,
+  type DeckControllerState
+} from './use-deck-controller';
 
 const TEXT_EDITABLE_SELECTOR =
   'h1, h2, h3, p, li, span, td, th, blockquote, figcaption, div';
@@ -431,6 +434,8 @@ export function App() {
   const editingElementRef = useRef<HTMLElement | null>(null);
   const lastTextRangeRef = useRef<Range | null>(null);
   const toolbarInteractionRef = useRef(false);
+  const textFocusTimerRef = useRef<number | null>(null);
+  const toolbarFocusTimerRef = useRef<number | null>(null);
   const textPendingRef = useRef<(editable: HTMLElement) => void>(
     () => undefined
   );
@@ -445,6 +450,20 @@ export function App() {
   const framePointerDownRef = useRef<
     (event: PointerEvent, frameDocument: Document) => void
   >(() => undefined);
+
+  useEffect(
+    () => () => {
+      if (textFocusTimerRef.current !== null) {
+        window.clearTimeout(textFocusTimerRef.current);
+        textFocusTimerRef.current = null;
+      }
+      if (toolbarFocusTimerRef.current !== null) {
+        window.clearTimeout(toolbarFocusTimerRef.current);
+        toolbarFocusTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const slideOpsContext = useCallback(
     (): SlideOpsContext => ({
@@ -620,16 +639,22 @@ export function App() {
     const presenter = { sessionId, channel, window: popup, closeTimer: 0 };
     presentationRef.current = presenter;
 
+    let snapshotSlides: DeckControllerState['slides'] | null = null;
+    let snapshotHtml = '';
     const sendSnapshot = () => {
       const current = stateRef.current;
       if (!current.master) return;
-      channel.postMessage({
-        sessionId,
-        type: 'snapshot',
-        html: serializeDeck(current.master),
-        index: current.activeIndex,
-        total: current.slides.length
-      });
+      if (snapshotSlides !== current.slides) {
+        snapshotHtml = serializeDeck(current.master);
+        snapshotSlides = current.slides;
+        channel.postMessage({
+          sessionId,
+          type: 'snapshot',
+          html: snapshotHtml,
+          index: current.activeIndex,
+          total: current.slides.length
+        });
+      }
       channel.postMessage({
         sessionId,
         type: 'state',
@@ -657,7 +682,9 @@ export function App() {
     presenter.closeTimer = window.setInterval(() => {
       if (popup.closed) closePresenter(false);
     }, 1_000);
-    sendSnapshot();
+    // The popup sends its first request once its channel listener is live;
+    // broadcasting before that would be dropped and the cache would suppress
+    // the retry.
     setPresenterError('');
   }, [closePresenter, playing]);
 
@@ -747,6 +774,7 @@ export function App() {
       const frameDocument = frame.current?.contentDocument;
       if (
         !selected ||
+        selected.slideIndex !== current.activeIndex ||
         current.selections.length !== 1 ||
         !slideInfo ||
         !frameDocument
@@ -918,6 +946,7 @@ export function App() {
       const slideInfo = current.slides[current.activeIndex];
       if (
         !selection ||
+        selection.slideIndex !== current.activeIndex ||
         current.selections.length !== 1 ||
         !slideInfo
       ) {
@@ -960,7 +989,14 @@ export function App() {
     const current = stateRef.current;
     const selection = current.selection;
     const slideInfo = current.slides[current.activeIndex];
-    if (!selection || current.selections.length !== 1 || !slideInfo) return;
+    if (
+      !selection ||
+      selection.slideIndex !== current.activeIndex ||
+      current.selections.length !== 1 ||
+      !slideInfo
+    ) {
+      return;
+    }
     const slideId = slideInfo.id;
     const path = [...selection.path];
     void (async () => {
@@ -987,7 +1023,14 @@ export function App() {
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
       const selection = current.selection;
-      if (!selection || !slideInfo || !current.master) return;
+      if (
+        !selection ||
+        selection.slideIndex !== current.activeIndex ||
+        !slideInfo ||
+        !current.master
+      ) {
+        return;
+      }
       const context = tableContext(slideInfo.element, selection.path);
       if (!context) return;
       const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
@@ -1029,10 +1072,18 @@ export function App() {
 
   const handleTableCellStyle = useCallback(
     (styles: Record<string, string>): boolean => {
+      if (!actionsRef.current.settlePendingEdits()) return false;
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
       const selection = current.selection;
-      if (!selection || !slideInfo || !current.master) return false;
+      if (
+        !selection ||
+        selection.slideIndex !== current.activeIndex ||
+        !slideInfo ||
+        !current.master
+      ) {
+        return false;
+      }
       const context = tableContext(slideInfo.element, selection.path);
       if (!context) return false;
       const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
@@ -1062,7 +1113,9 @@ export function App() {
     const current = stateRef.current;
     const slideInfo = current.slides[current.activeIndex];
     const selection = current.selection;
-    if (!selection || !slideInfo) return;
+    if (!selection || selection.slideIndex !== current.activeIndex || !slideInfo) {
+      return;
+    }
     const element = elementAtPath(slideInfo.element, selection.path);
     if (!chartFigure(element)) return;
     try {
@@ -1079,7 +1132,12 @@ export function App() {
     const current = stateRef.current;
     const slideInfo = current.slides[current.activeIndex];
     const selection = current.selection;
-    if (!selection || !slideInfo || !current.master) {
+    if (
+      !selection ||
+      selection.slideIndex !== current.activeIndex ||
+      !slideInfo ||
+      !current.master
+    ) {
       setChartEditor(null);
       return;
     }
@@ -1747,9 +1805,69 @@ export function App() {
     setTextToolbar(null);
   }, []);
 
+  const finishTextEditing = useCallback(
+    (editable: HTMLElement) => {
+      if (
+        !editable.isConnected ||
+        !editable.hasAttribute(EDITING_ATTRIBUTE) ||
+        editingElementRef.current !== editable
+      ) {
+        return;
+      }
+      if (editable.innerHTML !== textBaselineRef.current.get(editable)) {
+        textPendingRef.current(editable);
+      }
+      actionsRef.current.settlePendingEdits('text');
+      editable.removeAttribute(EDITING_ATTRIBUTE);
+      editable.removeAttribute('contenteditable');
+      endTextEditing();
+    },
+    [endTextEditing]
+  );
+
+  // Focus parked in the parent toolbar still belongs to the text session;
+  // finish it only once focus leaves the toolbar.
+  useEffect(() => {
+    const onFocusOut = (event: FocusEvent) => {
+      if (toolbarInteractionRef.current) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const toolbar = target.closest('[data-testid="text-toolbar"]');
+      if (!toolbar) return;
+      const related = event.relatedTarget;
+      if (related instanceof Node && toolbar.contains(related)) return;
+      if (toolbarFocusTimerRef.current !== null) {
+        window.clearTimeout(toolbarFocusTimerRef.current);
+      }
+      toolbarFocusTimerRef.current = window.setTimeout(() => {
+        toolbarFocusTimerRef.current = null;
+        const editable = editingElementRef.current;
+        if (!editable) return;
+        const active = document.activeElement;
+        if (active === frame.current) return;
+        if (
+          active instanceof Element &&
+          active.closest('[data-testid="text-toolbar"]')
+        ) {
+          return;
+        }
+        finishTextEditing(editable);
+      }, 0);
+    };
+    document.addEventListener('focusout', onFocusOut, true);
+    return () => {
+      document.removeEventListener('focusout', onFocusOut, true);
+      if (toolbarFocusTimerRef.current !== null) {
+        window.clearTimeout(toolbarFocusTimerRef.current);
+        toolbarFocusTimerRef.current = null;
+      }
+    };
+  }, [finishTextEditing]);
+
   const startTextEditing = useCallback((): boolean => {
     const current = stateRef.current;
     if (current.selections.length !== 1 || !current.selection) return false;
+    if (current.selection.slideIndex !== current.activeIndex) return false;
     if (current.selection.path.length < 1) return false;
     const slideInfo = current.slides[current.activeIndex];
     const frameDocument = frame.current?.contentDocument;
@@ -2367,13 +2485,22 @@ export function App() {
     frameDocument.addEventListener('focusout', (event) => {
       if (toolbarInteractionRef.current) return;
       const target = event.target as HTMLElement | null;
-      if (target?.hasAttribute(EDITING_ATTRIBUTE)) {
-        if (target.innerHTML !== textBaselineRef.current.get(target)) recordTextInput(target);
-        actionsRef.current.settlePendingEdits('text');
-        target.removeAttribute(EDITING_ATTRIBUTE);
-        target.removeAttribute('contenteditable');
-        endTextEditing();
+      if (!target?.hasAttribute(EDITING_ATTRIBUTE)) return;
+      if (textFocusTimerRef.current !== null) {
+        window.clearTimeout(textFocusTimerRef.current);
       }
+      // Focus may be moving to the parent toolbar; decide after focus settles.
+      textFocusTimerRef.current = window.setTimeout(() => {
+        textFocusTimerRef.current = null;
+        const active = document.activeElement;
+        if (
+          active instanceof Element &&
+          active.closest('[data-testid="text-toolbar"]')
+        ) {
+          return;
+        }
+        finishTextEditing(target);
+      }, 0);
     });
 
     frameDocument.addEventListener('click', (event) => {
@@ -2384,7 +2511,7 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
-  }, [beginTextEditing, commit, endTextEditing]);
+  }, [beginTextEditing, commit, endTextEditing, finishTextEditing]);
 
   const applyTextToolbarCommand = useCallback(
     (command: TextCommand) => {
@@ -2496,17 +2623,30 @@ export function App() {
         width: slideInfo.width,
         height: slideInfo.height
       });
+      const after = stateRef.current;
+      if (
+        after.activeIndex !== slideIndex ||
+        after.slides[slideIndex]?.id !== slideInfo.id
+      ) {
+        return;
+      }
       await actionsRef.current.commitMaster((master) => {
         const target = findSlide(master, slideInfo.id);
         const element = prepared.apply(target.element);
         const path = [Array.from(target.element.children).indexOf(element)];
-        actionsRef.current.selectTargets([
-          {
-            slideIndex,
-            path,
-            elementId: element.getAttribute('data-ppt-el')
-          }
-        ]);
+        const activeIndex = stateRef.current.activeIndex;
+        if (
+          activeIndex === slideIndex &&
+          stateRef.current.slides[slideIndex]?.id === slideInfo.id
+        ) {
+          actionsRef.current.selectTargets([
+            {
+              slideIndex: activeIndex,
+              path,
+              elementId: element.getAttribute('data-ppt-el')
+            }
+          ]);
+        }
         return true;
       });
     } catch (error) {

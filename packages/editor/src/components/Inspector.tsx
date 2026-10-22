@@ -1126,7 +1126,7 @@ export function Inspector({
         <div className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>文字</h3>
           <p data-testid="text-placeholder" className="text-xs text-zinc-500">
-            文字格式工具將於 M4 提供。
+            選取文字後，使用上方的浮動工具列調整格式。
           </p>
         </div>
       </div>

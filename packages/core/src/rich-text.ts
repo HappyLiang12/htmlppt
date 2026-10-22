@@ -139,14 +139,28 @@ export function toggleList(
 
   const listElement = document.createElement(type);
   const listItem = document.createElement('li');
-  const style = block.getAttribute('style');
-  if (style) listItem.setAttribute('style', style);
+  copyObjectAttributes(block, listItem);
   while (block.firstChild) {
     listItem.appendChild(block.firstChild);
   }
   listElement.appendChild(listItem);
   block.replaceWith(listElement);
   return listItem;
+}
+
+/**
+ * Copies the attributes that define a presentation object, leaving
+ * editor-only state such as contenteditable behind.
+ */
+function copyObjectAttributes(source: Element, target: Element): void {
+  for (const attribute of Array.from(source.attributes)) {
+    const { name, value } = attribute;
+    if (name === 'style' || name === 'class') {
+      target.setAttribute(name, value);
+    } else if (name.startsWith('data-ppt-') && name !== 'data-ppt-editing') {
+      target.setAttribute(name, value);
+    }
+  }
 }
 
 function removeListItem(
@@ -163,8 +177,7 @@ function removeListItem(
   const before = children.slice(0, index);
   const after = children.slice(index + 1);
   const paragraph = document.createElement('p');
-  const style = item.getAttribute('style');
-  if (style) paragraph.setAttribute('style', style);
+  copyObjectAttributes(item, paragraph);
   while (item.firstChild) {
     paragraph.appendChild(item.firstChild);
   }

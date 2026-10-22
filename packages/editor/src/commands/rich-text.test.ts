@@ -77,6 +77,37 @@ describe('rich-text editor commands', () => {
     expect(paragraph.textContent).toBe('Entire line');
   });
 
+  it('puts the caret inside the new span when styling an empty block', () => {
+    const paragraph = mount('<p></p>');
+    selectText(paragraph, 0, 0);
+
+    applyTextCommand(document, paragraph, { type: 'bold' });
+
+    const span = paragraph.querySelector('span')!;
+    expect(span.style.fontWeight).toBe('bold');
+    const selection = document.getSelection()!;
+    expect(selection.rangeCount).toBe(1);
+    const range = selection.getRangeAt(0);
+    expect(range.collapsed).toBe(true);
+    expect(range.startContainer === span || span.contains(range.startContainer))
+      .toBe(true);
+    expect(range.startOffset).toBe(0);
+  });
+
+  it('puts the caret inside the new span in an empty table cell', () => {
+    const cell = mount('<table><tbody><tr><td></td></tr></tbody></table>').querySelector('td')!;
+    selectText(cell, 0, 0);
+
+    applyTextCommand(document, cell, { type: 'color', value: 'red' });
+
+    const span = cell.querySelector('span')!;
+    expect(span.style.color).toBe('red');
+    const range = document.getSelection()!.getRangeAt(0);
+    expect(range.collapsed).toBe(true);
+    expect(range.startContainer === span || span.contains(range.startContainer))
+      .toBe(true);
+  });
+
   it('applies color, size, and line height', () => {
     const paragraph = mount('<p>Styled</p>');
     selectText(paragraph.firstChild!, 0, 6);

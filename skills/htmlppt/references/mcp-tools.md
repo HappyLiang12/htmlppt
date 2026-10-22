@@ -188,11 +188,13 @@ SDK as `InvalidParams` before the handler runs. A supplied value is one of:
 
 - a supported image data URL (`data:image/...`);
 - an absolute `http:`/`https:` URL, validated but never fetched;
-- a local image path resolved against the server working directory.
-  Protocol-relative and UNC values (`//server/share/x.png` or
-  `\\server\share\x.png`) are not local: they fail URL validation as
-  `invalid-image` without being resolved, so a remote share is never
-  contacted. Single-letter drive paths such as `C:foo.png` are local.
+- a local image path read from the MCP server process's own filesystem exactly
+  as given: an absolute path is used as-is, and a relative path resolves
+  against the server working directory. The file is embedded into the deck, so
+  pass only assets you intend to embed. Protocol-relative and UNC values
+  (`//server/share/x.png` or `\\server\share\x.png`) are not local: they fail
+  URL validation as `invalid-image` without being resolved, so a remote share
+  is never contacted. Single-letter drive paths such as `C:foo.png` are local.
 
 A whitespace-only `source` reaches the handler and fails with `invalid-image`.
 Local files must be PNG, JPEG, GIF, WebP, AVIF, or SVG and at most 8 MB. The

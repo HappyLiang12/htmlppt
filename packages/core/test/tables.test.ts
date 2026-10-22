@@ -221,3 +221,53 @@ describe('header toggling and cell access', () => {
     expect(() => toggleTableHeaderRow(element)).toThrow(/Nested tables/);
   });
 });
+
+describe('merged cells', () => {
+  const MERGED = 'Tables with merged cells do not support row or column changes.';
+
+  function mergedTable(attribute: 'colspan' | 'rowspan'): HTMLTableElement {
+    const root = slide();
+    root.innerHTML =
+      attribute === 'colspan'
+        ? '<table><tbody><tr><td colspan="2">A</td><td>B</td></tr><tr><td>C</td><td>D</td><td>E</td></tr></tbody></table>'
+        : '<table><tbody><tr><td rowspan="2">A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>';
+    return root.querySelector('table')!;
+  }
+
+  function expectRejected(element: HTMLTableElement, run: () => void): void {
+    const before = element.outerHTML;
+    let message = '';
+    try {
+      run();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toBe(MERGED);
+    expect(element.outerHTML).toBe(before);
+    expect(element.isConnected).toBe(true);
+  }
+
+  it('rejects row and column changes on a table with a colspan cell', () => {
+    for (const run of [
+      (element: HTMLTableElement) => insertTableRow(element, 0, 'below'),
+      (element: HTMLTableElement) => deleteTableRow(element, 0),
+      (element: HTMLTableElement) => insertTableColumn(element, 0, 'right'),
+      (element: HTMLTableElement) => deleteTableColumn(element, 0)
+    ]) {
+      const element = mergedTable('colspan');
+      expectRejected(element, () => run(element));
+    }
+  });
+
+  it('rejects row and column changes on a table with a rowspan cell', () => {
+    for (const run of [
+      (element: HTMLTableElement) => insertTableRow(element, 0, 'below'),
+      (element: HTMLTableElement) => deleteTableRow(element, 0),
+      (element: HTMLTableElement) => insertTableColumn(element, 0, 'right'),
+      (element: HTMLTableElement) => deleteTableColumn(element, 0)
+    ]) {
+      const element = mergedTable('rowspan');
+      expectRejected(element, () => run(element));
+    }
+  });
+});

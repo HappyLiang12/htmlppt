@@ -235,6 +235,59 @@ describe('toggleList', () => {
 
     expect(item.getAttribute('style')).toBe('color: red');
   });
+
+  it('keeps object identity and layout attributes on the list item', () => {
+    mount(
+      '<p class="layout object" data-ppt-el="obj-1" data-ppt-title="T" style="color: red" contenteditable="true" data-ppt-editing="true">One</p>'
+    );
+    const paragraph = document.querySelector('p')!;
+
+    const item = toggleList(document, paragraph, 'ul');
+
+    expect(item.getAttribute('class')).toBe('layout object');
+    expect(item.getAttribute('data-ppt-el')).toBe('obj-1');
+    expect(item.getAttribute('data-ppt-title')).toBe('T');
+    expect(item.getAttribute('style')).toBe('color: red');
+    expect(item.hasAttribute('contenteditable')).toBe(false);
+    expect(item.hasAttribute('data-ppt-editing')).toBe(false);
+
+    const back = toggleList(document, item, 'ul');
+
+    expect(back.tagName).toBe('P');
+    expect(back.getAttribute('class')).toBe('layout object');
+    expect(back.getAttribute('data-ppt-el')).toBe('obj-1');
+    expect(back.getAttribute('data-ppt-title')).toBe('T');
+    expect(back.getAttribute('style')).toBe('color: red');
+    expect(back.hasAttribute('contenteditable')).toBe(false);
+    expect(back.hasAttribute('data-ppt-editing')).toBe(false);
+  });
+
+  it('restores object attributes when removing one item from a list', () => {
+    mount(
+      '<ul><li>A</li><li class="layout" data-ppt-el="obj-2" data-ppt-title="T">B</li><li>C</li></ul>'
+    );
+    const middle = document.querySelectorAll('li')[1]!;
+
+    const paragraph = toggleList(document, middle, 'ul');
+
+    expect(paragraph.tagName).toBe('P');
+    expect(paragraph.getAttribute('class')).toBe('layout');
+    expect(paragraph.getAttribute('data-ppt-el')).toBe('obj-2');
+    expect(paragraph.getAttribute('data-ppt-title')).toBe('T');
+    expect(paragraph.textContent).toBe('B');
+  });
+
+  it('keeps item attributes when switching the list type', () => {
+    mount('<ul><li class="layout" data-ppt-el="obj-3">A</li></ul>');
+    const item = document.querySelector('li')!;
+
+    const result = toggleList(document, item, 'ol');
+
+    expect(result).toBe(item);
+    expect(result.parentElement?.tagName).toBe('OL');
+    expect(result.getAttribute('class')).toBe('layout');
+    expect(result.getAttribute('data-ppt-el')).toBe('obj-3');
+  });
 });
 
 describe('setBlockAlignment', () => {

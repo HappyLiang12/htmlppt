@@ -70,6 +70,21 @@ function columnCount(table: HTMLTableElement): number {
   );
 }
 
+/**
+ * Structural edits index cells by position, so merged cells would be
+ * corrupted. Reject them before any mutation instead.
+ */
+function requireNoMergedCells(table: HTMLTableElement): void {
+  for (const cell of Array.from(table.querySelectorAll('td, th'))) {
+    for (const name of ['colspan', 'rowspan']) {
+      const value = cell.getAttribute(name);
+      if (value !== null && Number(value) > 1) {
+        fail('Tables with merged cells do not support row or column changes.');
+      }
+    }
+  }
+}
+
 function checkRow(table: HTMLTableElement, at: number): HTMLTableRowElement[] {
   const rows = rowsOf(table);
   if (!Number.isInteger(at) || at < 0 || at >= rows.length) {
@@ -169,6 +184,7 @@ export function insertTableRow(
   position: 'above' | 'below'
 ): void {
   const element = requireTable(table);
+  requireNoMergedCells(element);
   const rows = checkRow(element, at);
   const index = position === 'above' ? at : at + 1;
   const columns = columnCount(element);
@@ -210,6 +226,7 @@ export function insertTableRow(
 
 export function deleteTableRow(table: Element, at: number): void {
   const element = requireTable(table);
+  requireNoMergedCells(element);
   const rows = checkRow(element, at);
   if (rows.length === 1) {
     fail('A table must keep at least one row.');
@@ -223,6 +240,7 @@ export function insertTableColumn(
   position: 'left' | 'right'
 ): void {
   const element = requireTable(table);
+  requireNoMergedCells(element);
   checkColumn(element, at);
   const index = position === 'left' ? at : at + 1;
   const rows = rowsOf(element);
@@ -238,6 +256,7 @@ export function insertTableColumn(
 
 export function deleteTableColumn(table: Element, at: number): void {
   const element = requireTable(table);
+  requireNoMergedCells(element);
   const columns = checkColumn(element, at);
   if (columns === 1) {
     fail('A table must keep at least one column.');
