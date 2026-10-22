@@ -8,7 +8,7 @@
     { "id": "tables", "spec": "4.Tables", "status": "planned", "tests": ["@feature:tables"] },
     { "id": "charts", "spec": "4.Charts", "status": "planned", "tests": ["@feature:charts"] },
     { "id": "presenter", "spec": "4.Presentation", "status": "planned", "tests": ["@feature:presenter"] },
-    { "id": "mcp", "spec": "6", "status": "planned", "tests": ["@feature:mcp"] },
+    { "id": "mcp", "spec": "6", "status": "active", "tests": ["@feature:mcp"] },
     { "id": "live-sync", "spec": "9", "status": "planned", "tests": ["@feature:live-sync"] },
     { "id": "export-pdf-png", "spec": "9.Export", "status": "planned", "tests": ["@feature:export-pdf-png"] }
   ]

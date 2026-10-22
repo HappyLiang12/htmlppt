@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Example deck</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0d12; }
+  .slide {
+    width: 1600px;
+    height: 900px;
+    position: relative;
+    overflow: hidden;
+    background: #f7f5ef;
+    color: #17181c;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+  h1 { margin: 0; font-size: 96px; }
+  h2 { margin: 0; font-size: 64px; }
+  img { position: absolute; right: 160px; top: 120px; }
+  table { border-collapse: collapse; font-size: 28px; }
+  th, td { border: 1px solid #b9b2a3; padding: 10px 18px; text-align: left; }
+</style>
+</head>
+<body>
+<main data-ppt-deck>
+  <section class="slide" data-slide-id="s1" data-width="1600" data-height="900" data-ppt-transition="fade">
+    <div data-ppt-el="e1" style="position: absolute; left: 160px; top: 120px; width: 1100px;">
+      <h1 data-ppt-el="e1-title">Example deck</h1>
+      <p data-ppt-el="e1-body">Text, an image, a shape, a table, and a chart on one slide.</p>
+    </div>
+    <img data-ppt-el="e2" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Crect width='120' height='120' fill='%23e8a33d'/%3E%3C/svg%3E" width="120" height="120" alt="Example graphic">
+    <div data-ppt-el="e3" style="position: absolute; left: 160px; top: 380px; width: 240px; height: 120px; background: #e8a33d;"></div>
+    <table data-ppt-el="e4" style="position: absolute; left: 480px; top: 380px;">
+      <thead>
+        <tr><th>Item</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Slides</td><td>3</td></tr>
+        <tr><td>Runtime</td><td>present</td></tr>
+      </tbody>
+    </table>
+    <div data-ppt-el="e5" data-ppt-chart='{"type":"bar","data":[4,8,12],"labels":["A","B","C"]}' style="position: absolute; left: 160px; top: 560px; width: 600px; height: 220px; background: #ffffff; border: 2px solid #b9b2a3;"></div>
+    <aside data-ppt-notes hidden>Speaker notes for the first slide.</aside>
+  </section>
+  <section class="slide" data-slide-id="s2" data-width="1600" data-height="900">
+    <h2 data-ppt-el="e6" style="position: absolute; left: 160px; top: 120px;">Authoring rules</h2>
+    <ul data-ppt-el="e7" style="position: absolute; left: 160px; top: 260px; font-size: 32px; line-height: 1.6;">
+      <li>Use unique data-slide-id values.</li>
+      <li>Keep notes in a direct-child aside.</li>
+      <li>Validate before writing.</li>
+    </ul>
+    <aside data-ppt-notes hidden>Keep edits small and validate.</aside>
+  </section>
+  <section class="slide" data-slide-id="s3" data-width="1600" data-height="900" data-ppt-transition="slide">
+    <h2 data-ppt-el="e8" style="position: absolute; left: 160px; top: 120px;">Thank you</h2>
+    <p data-ppt-el="e9" style="position: absolute; left: 160px; top: 260px; font-size: 32px;">Export this deck with format "html".</p>
+  </section>
+</main>
+<script data-ppt-runtime="1"></script>
+</body>
+</html>

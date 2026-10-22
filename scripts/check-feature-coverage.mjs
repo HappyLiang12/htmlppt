@@ -5,25 +5,48 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('..', import.meta.url);
 const e2eDir = fileURLToPath(new URL('e2e/', root));
+const packagesDir = fileURLToPath(new URL('packages/', root));
 const manifestPath = fileURLToPath(new URL('docs/features.json', root));
 const tagPattern = /@feature:([a-z0-9-]+)/g;
 
-async function collectFiles(directory) {
+async function collectFiles(directory, suffix) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await collectFiles(path)));
-    else if (entry.isFile() && entry.name.endsWith('.spec.ts')) files.push(path);
+    if (entry.isDirectory()) files.push(...(await collectFiles(path, suffix)));
+    else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(path);
   }
   return files;
 }
 
+/**
+ * Feature tags may live in E2E specs (user-visible behavior) or package
+ * integration tests (for example the MCP stdio server). Package sources,
+ * fixtures, and node_modules are never scanned.
+ */
+async function collectTaggedSources() {
+  const sources = [];
+  if (existsSync(e2eDir)) {
+    sources.push(...(await collectFiles(e2eDir, '.spec.ts')));
+  }
+  if (existsSync(packagesDir)) {
+    for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const testDir = join(packagesDir, entry.name, 'test');
+      if (existsSync(testDir)) {
+        sources.push(...(await collectFiles(testDir, '.test.ts')));
+      }
+    }
+  }
+  return sources;
+}
+
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-const files = existsSync(e2eDir) ? await collectFiles(e2eDir) : [];
+const sources = await collectTaggedSources();
 const tags = new Set();
 
-for (const file of files) {
+for (const file of sources) {
   const source = await readFile(file, 'utf8');
   for (const match of source.matchAll(tagPattern)) tags.add(match[1]);
 }

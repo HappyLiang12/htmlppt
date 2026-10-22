@@ -19,9 +19,17 @@ export default tseslint.config(
     }
   },
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['**/scripts/**/*.mjs'],
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly', URL: 'readonly' }
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        fetch: 'readonly',
+        AbortSignal: 'readonly'
+      }
     }
   },
   {
@@ -36,6 +44,7 @@ export default tseslint.config(
       'packages/host/**/*.ts',
       'packages/core/**/*.ts',
       'packages/runtime/**/*.ts',
+      'packages/htmlppt/**/*.ts',
       'test-utils/**/*.ts',
       'e2e/**/*.ts'
     ],
