@@ -6,6 +6,8 @@ export interface Diagnostic {
   message: string;
   /** Generated (`sN`) or sentinel (`body`) ids are used when a slide has no data-slide-id. */
   slideId?: string;
+  /** Short human-readable path such as `s2 > figure#chart`. */
+  location?: string;
 }
 
 export interface ValidationResult {

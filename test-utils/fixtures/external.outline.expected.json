@@ -1,0 +1,49 @@
+{
+  "title": "External deck",
+  "width": 1600,
+  "height": 900,
+  "slideCount": 2,
+  "runtime": false,
+  "slides": [
+    {
+      "id": "s1",
+      "index": 0,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "img",
+          "path": [
+            0
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "index": 1,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "img",
+          "path": [
+            0
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        }
+      ]
+    }
+  ]
+}

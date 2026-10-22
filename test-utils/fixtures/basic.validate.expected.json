@@ -1,0 +1,18 @@
+{
+  "errors": [],
+  "warnings": [
+    {
+      "severity": "warning",
+      "code": "missing-runtime",
+      "message": "The deck has multiple slides but no presentation runtime."
+    }
+  ],
+  "info": [
+    {
+      "severity": "info",
+      "code": "slide-count",
+      "message": "2 slide(s) detected."
+    }
+  ],
+  "valid": true
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Messy deck</title>
+  <style>
+    section { position: static; }
+    .slide { width: 1280px; height: 720px; background: url(assets/bg.png); }
+    .deck-script-marker { color: red; }
+  </style>
+</head>
+<body>
+  <div data-ppt-deck="">
+    <section data-slide-id="s1" class="slide" style="width: 1280px; height: 720px">
+      <h1 data-ppt-el="e1">Messy <em>deck</em></h1>
+      <p data-ppt-el="e2" style="position: fixed; top: 0">Fixed copy</p>
+      <div data-ppt-el="e3"><aside data-ppt-notes="" hidden>Nested note</aside></div>
+      <img data-ppt-el="e4" src="assets/photo.png" alt="Relative">
+    </section>
+    <section data-slide-id="s2" class="slide" data-width="1920" data-height="1080">
+      <h2 data-ppt-el="e1">Second</h2>
+      <canvas data-ppt-el="e2" width="100" height="100"></canvas>
+      <div data-ppt-el="e3" data-ppt-group=""><div data-ppt-group="">Nested group</div></div>
+    </section>
+  </div>
+  <script>window.messy = true;</script>
+  <script type="application/json">{"ok":true}</script>
+</body>
+</html>

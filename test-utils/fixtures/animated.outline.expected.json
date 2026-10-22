@@ -1,0 +1,53 @@
+{
+  "title": "Animated deck",
+  "width": 1600,
+  "height": 900,
+  "slideCount": 2,
+  "runtime": true,
+  "slides": [
+    {
+      "id": "s1",
+      "index": 0,
+      "width": 1600,
+      "height": 900,
+      "transition": "slide",
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "h1",
+          "path": [
+            0
+          ],
+          "text": "Animated",
+          "classes": [
+            "rise"
+          ],
+          "group": false
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "index": 1,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "p",
+          "path": [
+            0
+          ],
+          "text": "Second",
+          "classes": [
+            "rise"
+          ],
+          "group": false
+        }
+      ]
+    }
+  ]
+}

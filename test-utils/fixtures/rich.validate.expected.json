@@ -1,0 +1,12 @@
+{
+  "errors": [],
+  "warnings": [],
+  "info": [
+    {
+      "severity": "info",
+      "code": "slide-count",
+      "message": "2 slide(s) detected."
+    }
+  ],
+  "valid": true
+}

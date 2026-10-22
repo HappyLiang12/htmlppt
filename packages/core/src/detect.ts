@@ -1,3 +1,10 @@
+export interface CanvasSize {
+  width: number;
+  height: number;
+  widthValid: boolean;
+  heightValid: boolean;
+}
+
 export interface SlideInfo {
   id: string;
   hasId: boolean;
@@ -5,31 +12,37 @@ export interface SlideInfo {
   index: number;
   width: number;
   height: number;
+  widthValid: boolean;
+  heightValid: boolean;
 }
 
 const SLIDE_SELECTORS = ['[data-slide-id]', '.slide', '.page', '.slide-page'];
 const DEFAULT_WIDTH = 1600;
 const DEFAULT_HEIGHT = 900;
+const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+const ATTRIBUTE_SIZE = new RegExp(`^${NUMBER}(?:px)?$`, 'i');
 
 function positiveNumber(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
 function readAttributeSize(value: string | null): number {
-  const match = value?.trim().match(/^([\d.]+)(?:px)?$/i);
-  return match ? Number.parseFloat(match[1]) : Number.NaN;
+  const match = value?.trim().match(ATTRIBUTE_SIZE);
+  return match ? Number.parseFloat(match[0]) : Number.NaN;
 }
 
 function readStyleSize(style: string, property: 'width' | 'height'): number {
-  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([\\d.]+)px`, 'gi');
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*(${NUMBER})px`, 'gi');
   const matches = Array.from(style.matchAll(pattern));
   const value = matches.at(-1)?.[1];
   return value === undefined ? Number.NaN : Number.parseFloat(value);
 }
 
-function readSize(element: Element): { width: number; height: number } {
-  const attributeWidth = readAttributeSize(element.getAttribute('data-width'));
-  const attributeHeight = readAttributeSize(element.getAttribute('data-height'));
+export function readCanvasSize(element: Element): CanvasSize {
+  const rawWidth = element.getAttribute('data-width');
+  const rawHeight = element.getAttribute('data-height');
+  const attributeWidth = readAttributeSize(rawWidth);
+  const attributeHeight = readAttributeSize(rawHeight);
   const inlineStyle = element.getAttribute('style') ?? '';
   const styleWidth = readStyleSize(inlineStyle, 'width');
   const styleHeight = readStyleSize(inlineStyle, 'height');
@@ -44,7 +57,9 @@ function readSize(element: Element): { width: number; height: number } {
       ? attributeHeight
       : positiveNumber(styleHeight)
         ? styleHeight
-        : DEFAULT_HEIGHT
+        : DEFAULT_HEIGHT,
+    widthValid: rawWidth === null || positiveNumber(attributeWidth),
+    heightValid: rawHeight === null || positiveNumber(attributeHeight)
   };
 }
 
@@ -52,11 +67,11 @@ function toSlideInfo(element: Element, index: number): SlideInfo {
   const rawId = element.getAttribute('data-slide-id');
   const hasId = rawId !== null && rawId.trim() !== '';
   return {
-    id: hasId ? rawId : `s${index + 1}`,
+    id: hasId ? rawId.trim() : `s${index + 1}`,
     hasId,
     element,
     index,
-    ...readSize(element)
+    ...readCanvasSize(element)
   };
 }
 

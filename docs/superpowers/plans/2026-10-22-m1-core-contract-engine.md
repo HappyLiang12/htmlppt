@@ -695,9 +695,9 @@ const deck = (body: string) =>
   );
 
 describe('normalizeDeck', () => {
-  it('assigns missing slide ids in order without colliding', () => {
+  it('assigns missing slide ids in order', () => {
     const doc = deck(
-      '<section class="slide" data-slide-id="s2"></section><section class="slide"></section><section class="slide"></section>'
+      '<section class="slide"></section><section class="slide"></section><section class="slide"></section>'
     );
 
     const result = normalizeDeck(doc);
@@ -707,7 +707,32 @@ describe('normalizeDeck', () => {
       Array.from(doc.querySelectorAll('[data-slide-id]')).map((slide) =>
         slide.getAttribute('data-slide-id')
       )
-    ).toEqual(['s2', 's1', 's3']);
+    ).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('follows detection precedence for partially annotated decks', () => {
+    // Detection lets [data-slide-id] shadow classed siblings. Normalization
+    // must not silently promote those siblings into slides.
+    const doc = deck(
+      '<section class="slide" data-slide-id="s2"></section><section class="slide">Ignored by detection</section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides.map((slide) => slide.id)).toEqual(['s2']);
+    expect(doc.querySelectorAll('[data-slide-id]')).toHaveLength(1);
+    expect(doc.querySelectorAll('.slide')[1].hasAttribute('data-ppt-el')).toBe(false);
+  });
+
+  it('avoids collisions with existing ids', () => {
+    const doc = deck(
+      '<section class="slide"><h1 data-ppt-el="e3">A</h1><p>B</p></section><section class="slide"><h2>C</h2></section>'
+    );
+
+    const result = normalizeDeck(doc);
+
+    expect(result.slides[0].elementIds).toEqual(['e3', 'e1']);
+    expect(result.slides[1].elementIds).toEqual(['e1']);
   });
 
   it('assigns top-level object ids per slide and skips notes and scripts', () => {
@@ -1983,8 +2008,8 @@ git commit -m "feat(core): add validated slide mutations"
 - Modify: `docs/features.json`
 
 **Interfaces:**
-- Template output: slides after the first are hidden in normal media by a `[data-ppt-deck] > [data-slide-id]:not(:first-of-type)` rule; print media shows all slides and breaks pages.
-- Runtime: active slide uses its original inline display or `block`, the initial CSS hide is overridden on navigation, print CSS is injected once, `beforeprint`/`afterprint` restore display, and navigation keys are ignored in editable controls or with modifiers.
+- Template output: the deck root starts without `data-ppt-ready`; a screen-only rule hides every slide that follows another slide while the root is not ready. Print media never hides slides and only adds page breaks.
+- Runtime: marks deck roots ready, hides inactive slides, restores each active slide's original inline display (never fabricates `block`), injects print page-break CSS once, restores display on `beforeprint`/`afterprint`, and ignores navigation keys in editable controls or with modifiers.
 
 - [ ] **Step 1: Write failing template test**
 
@@ -1995,10 +2020,11 @@ it('hides every slide after the first until the runtime runs', () => {
   const html = createDeckHtml({ slides: 2 });
 
   expect(html).toContain(
-    '[data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }'
+    '@media screen {\n    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }\n  }'
   );
   expect(html).toContain('@media print');
   expect(html).toContain('break-after: page');
+  expect(html).not.toContain('display: block !important');
 });
 ```
 
@@ -2012,13 +2038,15 @@ Expected: FAIL — rules absent.
 In `createDeckHtml`'s `<style>`, after the `.slide` rule, add:
 
 ```css
-  [data-ppt-deck] > [data-slide-id]:not(:first-of-type) { display: none; }
+  @media screen {
+    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }
+  }
   @media print {
-    [data-ppt-deck] > [data-slide-id] { display: block !important; break-after: page; }
+    [data-ppt-deck] > [data-slide-id] { break-after: page; }
   }
 ```
 
-Keep the runtime script and the rest of the template unchanged.
+The screen rule is gated on the absence of `data-ppt-ready`, which the runtime sets before its first `show`. That keeps arbitrary stylesheet display values intact: the runtime only writes `display:none` to inactive slides and restores the active slide's original inline value, never `block`. The print rule does not touch `display`, so authored flex/grid survives printing. Keep the runtime script and the rest of the template unchanged.
 
 - [ ] **Step 4: Run template GREEN**
 
@@ -2063,20 +2091,41 @@ test.describe('presentation runtime', () => {
     }
   });
 
-  test('prints every slide and restores screen state', { tag: '@feature:runtime' }, async ({ page }) => {
+  test('prints every slide while preserving stylesheet display', { tag: '@feature:runtime' }, async ({ page }) => {
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-runtime-'));
     try {
       await execa('node', [cliPath, 'new', 'deck.html', '--slides', '2'], { cwd: directory });
-      const html = await readFile(join(directory, 'deck.html'), 'utf8');
+      const file = join(directory, 'deck.html');
+      const html = (await readFile(file, 'utf8')).replace(
+        '.slide {',
+        '.slide { display: flex;'
+      );
       const server = await serveHtml(html);
       try {
         await page.goto(server.url);
         await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
-        await page.emulateMedia({ media: 'print' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
-        await page.emulateMedia({ media: 'screen' });
-        await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+
         await page.keyboard.press('ArrowRight');
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page
+            .locator('[data-slide-id="s2"]')
+            .evaluate((element) => getComputedStyle(element).display)
+        ).toBe('flex');
+
+        await page.emulateMedia({ media: 'print' });
+        await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+        await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+        await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+        expect(
+          await page
+            .locator('[data-slide-id="s2"]')
+            .evaluate((element) => getComputedStyle(element).display)
+        ).toBe('flex');
+
+        await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+        await page.emulateMedia({ media: 'screen' });
+        await expect(page.locator('[data-slide-id="s1"]')).toBeHidden();
         await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
       } finally {
         await server.close();
@@ -2132,11 +2181,16 @@ export const RUNTIME_SOURCE = String.raw`
   var runtimeStyle = 'data-ppt-runtime-style';
   var originalDisplay = slides.map(function (slide) { return slide.style.display; });
 
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
+    deck.setAttribute('data-ppt-ready', '1');
+  });
+
   function isEditing(target) {
     var element = target;
-    while (element && element !== document.body) {
+    while (element) {
       var tag = element.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable) return true;
+      if (element === document.body) return false;
       element = element.parentElement;
     }
     return false;
@@ -2145,13 +2199,13 @@ export const RUNTIME_SOURCE = String.raw`
   function show(next) {
     index = Math.max(0, Math.min(slides.length - 1, next));
     slides.forEach(function (slide, i) {
-      slide.style.display = i === index ? (originalDisplay[i] || 'block') : 'none';
+      slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
     history.replaceState(null, '', '#/' + (index + 1));
   }
 
   document.addEventListener('keydown', function (event) {
-    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target)) return;
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
     if (event.key === 'ArrowRight' || event.key === ' ' || event.key === 'PageDown') {
       event.preventDefault();
       show(index + 1);
@@ -2175,7 +2229,7 @@ export const RUNTIME_SOURCE = String.raw`
   if (!document.querySelector('[' + runtimeStyle + ']')) {
     var style = document.createElement('style');
     style.setAttribute(runtimeStyle, '1');
-    style.textContent = '@media print{[data-slide-id]{display:block !important;break-after:page;page-break-after:always}}';
+    style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}';
     document.head.appendChild(style);
   }
 
@@ -2197,7 +2251,7 @@ export const RUNTIME_SOURCE = String.raw`
 `;
 ```
 
-The active slide uses `originalDisplay[i] || 'block'` so the template's `:not(:first-of-type)` CSS cannot keep slide 2 hidden after navigation. `beforeprint` clears runtime inline display; the injected print CSS forces every slide visible. The runtime style is injected once.
+The runtime marks deck roots ready, which disables the screen-only initial-hide rule while the first `show` hides inactive slides inline. The active slide gets its original inline `display` back (possibly empty), so stylesheet flex/grid is preserved. The injected print style only adds page breaks; `beforeprint` removes runtime-added inline display so every slide prints with its authored layout, and `afterprint` restores the screen state. Keys are ignored in editable controls (including a contenteditable body) and with any modifier.
 
 - [ ] **Step 8: Activate the runtime feature**
 
@@ -2497,10 +2551,41 @@ git commit -m "test(core): add golden contract fixtures"
 
 ---
 
+### Task 9: Final hardening (follow-up batch)
+
+Scope: clear the Minors parked by the Task 2, 4, 6, 7, and 8 reviews. No new features.
+
+- **Core outline:** runtime presence uses the same trimmed `[data-ppt-runtime]` script check as validation; absent or whitespace-only notes return `null`; summaries exclude nested `script`, `style`, and `template` text; tag exclusion normalizes with `.toUpperCase()`.
+- **Core mutations:** `setNotes` and `addSlide` collapse duplicate direct notes asides; `addSlide`, `duplicateSlide`, and `setTransition` document that option values are validated only through `mutateDeck`.
+- **Runtime:** `afterprint` clears the print snapshot and calls `show(index)`, so a missed or duplicate event cannot leave every slide visible.
+- **Tests:** direct CRLF read-helper proof, active-slide `flex` and visible-count assertions after print restore, a second runtime execution proving the stylesheet is injected once, spacing-tolerant print CSS assertions, and validation negative rules (`application/ld+json`, `tel:`/`//` URLs, top-level script location, warnings keep `valid === true`).
+- **Docs and line endings:** root `.gitattributes` forces LF under `test-utils/fixtures/**` and `e2e/**`; the `basic` fixture is documented as 2 slides.
+
+Deferred beyond M1:
+
+- Partial-deck detection: partially annotated decks normalize only the detected slides.
+- Editor-artifact UX: artifacts are rejected by validation but have no guided repair flow.
+- beforeprint reliance for PDF export: export assumes browser print events fire reliably.
+
+---
+
+## Task 10: Whole-branch review fixes (executed)
+
+The final whole-branch review found one Critical and three Important integration defects that per-task reviews could not see:
+
+- `mutateDeck` now normalizes the clone **before** the callback as well as after, so class-only decks cannot collapse to a single slide when a mutation writes the first `data-slide-id`.
+- Nested slides are a validation error (`nested-slide`) and are rejected by the mutation gate; inserted HTML cannot create a slide inside a slide.
+- `beforeprint` restores each slide's original inline display instead of removing the property, so authored `display:none` stays hidden and authored flex prints as flex.
+- `addSlide` inherits the anchor slide's tag, class attribute, and canvas size, so non-1600 decks do not gain a mixed-canvas slide and plain-section decks do not shift detection precedence.
+- Slide ids are trimmed in detection; outline goldens exist for all six fixtures; the tautological gate test was replaced.
+
+These supersede the corresponding code in Tasks 5–8 where they differ.
+
 ## Self-Review
 
 - **Spec coverage:** §4 contract attributes are validated and preserved; §11 normalization (ids, position injectable, artifact cleanup), validation errors/warnings, diagnostics with slide id and location; §6 read models `getOutline`/`readSlide`; MCP mutation list minus assets/tables/charts/groups (M4) and background (editor settings, M3/M4), all slide ops, notes, transitions, and element ops covered; runtime §Runtime initial state, print, navigation guards; test framework §5 fixtures and golden files.
-- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
+- **Fixture counts:** `basic` is 2 slides (matches the M0 fixture); host tests depend on it.
+- **Deliberate deviations recorded:** `no-slides` error removed because detection always produces a body fallback; missing canvas attributes are allowed (defaults) while explicitly invalid values are errors; `update_slide_html` refuses the body fallback; duplicate slides keep per-slide object ids; missing-runtime warning suppressed when any runtime marker exists (invalid markers still error). Normalization follows detection precedence: partially annotated decks normalize only the detected slides; ignored classed siblings are a detection-semantics gap deferred to M2/M3, not silently promoted. Mutation functions are intended to run through `mutateDeck` (pre-normalization is what keeps class-only decks consistent); direct calls on raw class-only decks remain a documented limitation. `set_slide_background` and asset/table/chart/group mutations are deferred with their features.
 - **Type consistency:** `SlideInfo` gains `widthValid`/`heightValid`; every consumer uses `readCanvasSize`; `DeckMutationError` is exported from both `target.ts` and `mutations.ts` (same class); `Transition` is used by template-independent mutations only.
 - **No placeholders:** every task names exact files, codes, messages, test code, and commands. The only generated artifacts are golden files, with an explicit inspection checklist.
 

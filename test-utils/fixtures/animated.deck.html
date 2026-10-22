@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Animated deck</title>
+  <style>
+    .slide { width: 1600px; height: 900px; position: relative; overflow: hidden; }
+    @keyframes rise { from { transform: translateY(40px); opacity: 0 } to { transform: none; opacity: 1 } }
+    .rise { animation: rise 600ms ease-out both; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1" data-ppt-transition="slide"><h1 class="rise" data-ppt-el="e1">Animated</h1></section>
+    <section class="slide" data-slide-id="s2"><p class="rise" data-ppt-el="e1">Second</p></section>
+  </main>
+  <script data-ppt-runtime="1">(() => {})();</script>
+</body>
+</html>
