@@ -91,10 +91,13 @@ async function openDeck(
   }
 }
 
-function openTemplateDeck(page: Page): Promise<EditorHarness> {
+function openTemplateDeck(
+  page: Page,
+  slideCount = 2
+): Promise<EditorHarness> {
   return openDeck(
     page,
-    createTemplate,
+    (directory, file) => createTemplate(directory, file, slideCount),
     async (frame) => {
       await expect(frame.locator('h1')).toContainText('Untitled deck');
     }
@@ -1404,6 +1407,111 @@ test(
 
       await page.getByTestId('redo').click();
       await expect.poll(() => sorterSlideIds(page)).toEqual(reorderedIds);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'rapid double-click delete removes exactly one slide',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page, 3);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      await expect(thumbnails).toHaveCount(3);
+
+      const saveRequests: Request[] = [];
+      const countSave = (request: Request) => {
+        if (isDeckSaveRequest(request)) saveRequests.push(request);
+      };
+      page.on('request', countSave);
+      try {
+        const save = waitForDeckSave(page);
+        await page.getByTestId('delete-slide').dblclick();
+        expect((await save).ok()).toBeTruthy();
+        await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+        await expect(thumbnails).toHaveCount(2);
+        expect(await slideIds(page)).toEqual(['s2', 's3']);
+        expect(saveRequests).toHaveLength(1);
+      } finally {
+        page.off('request', countSave);
+      }
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'clicking the last thumbnail scrolls the rail to keep it in view',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page, 10);
+    try {
+      const thumbnails = page.getByTestId('thumbnail');
+      await expect(thumbnails).toHaveCount(10);
+      const last = thumbnails.last();
+      const inRailView = () =>
+        last.evaluate((element) => {
+          const rail = element.closest('[data-testid="thumbnail-rail"]');
+          if (!rail) return false;
+          const tile = element.getBoundingClientRect();
+          const bounds = rail.getBoundingClientRect();
+          return tile.top >= bounds.top - 1 && tile.bottom <= bounds.bottom + 1;
+        });
+
+      // The rail starts at the top, so the tenth tile overflows below it.
+      await expect.poll(inRailView).toBe(false);
+
+      // Activate through the DOM: a Playwright click auto-scrolls the target
+      // into view and would mask the rail's own scroll-into-view behaviour.
+      await last
+        .getByRole('button', { name: '第 10 頁：Untitled deck — 10' })
+        .evaluate((button) =>
+          (button as unknown as { click(): void }).click()
+        );
+
+      await expect(editor.frame.locator('h1')).toHaveText(
+        'Untitled deck — 10'
+      );
+      await expect(last).toHaveAttribute('aria-current', 'page');
+      await expect.poll(inRailView).toBe(true);
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'sorter drag handles backward and non-adjacent drops',
+  { tag: '@feature:slides' },
+  async ({ page }) => {
+    const editor = await openTemplateDeck(page, 4);
+    try {
+      await page.getByTestId('view-sorter').click();
+      const tiles = page.getByTestId('sorter-slide');
+      await expect(tiles).toHaveCount(4);
+      expect(await sorterSlideIds(page)).toEqual(['s1', 's2', 's3', 's4']);
+
+      const backwardSave = waitForDeckSave(page);
+      await dragSorterTile(page, 3, 1);
+      expect((await backwardSave).ok()).toBeTruthy();
+      await expect
+        .poll(() => sorterSlideIds(page))
+        .toEqual(['s1', 's4', 's2', 's3']);
+
+      const nonAdjacentSave = waitForDeckSave(page);
+      await dragSorterTile(page, 0, 2);
+      expect((await nonAdjacentSave).ok()).toBeTruthy();
+      await expect
+        .poll(() => sorterSlideIds(page))
+        .toEqual(['s4', 's2', 's1', 's3']);
+      await expect
+        .poll(async () => savedSlideOrder(await savedDocument(editor)))
+        .toEqual(['s4', 's2', 's1', 's3']);
     } finally {
       await closeEditor(editor);
     }

@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import type { SlideInfo } from '@htmlppt/core';
+import { reorderedIds } from '../slide-ops';
 import { SlideMiniature, slideTitle } from './ThumbnailRail';
 
 export interface SorterViewProps {
@@ -29,17 +30,6 @@ interface DragSession {
 
 const DRAG_THRESHOLD_SCREEN_PX = 4;
 const SORTER_PREVIEW_WIDTH = 320;
-
-function reorderedIds(
-  slides: readonly SlideInfo[],
-  from: number,
-  to: number
-): string[] {
-  const ids = slides.map((slide) => slide.id);
-  const [moved] = ids.splice(from, 1);
-  if (moved !== undefined) ids.splice(to, 0, moved);
-  return ids;
-}
 
 export function SorterView({
   master,
@@ -143,7 +133,11 @@ export function SorterView({
         <h2 className="text-sm font-semibold text-zinc-200">排序檢視</h2>
         <p className="text-xs text-zinc-500">拖曳投影片以重新排序</p>
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <div
+        role="listbox"
+        aria-label="投影片排序"
+        className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      >
         {slides.map((slide, index) => {
           const active = index === activeIndex;
           const title = slideTitle(slide);
@@ -152,19 +146,11 @@ export function SorterView({
           return (
             <div
               key={slide.id}
-              role="group"
-              tabIndex={0}
-              aria-label={`第 ${index + 1} 頁：${title}`}
-              aria-current={active ? 'page' : undefined}
-              data-testid="sorter-slide"
-              data-slide-id={slide.id}
-              data-slide-title={title}
               data-sorter-index={index}
               onPointerDown={(event) => handlePointerDown(event, index)}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={finishDrag}
-              onKeyDown={(event) => handleKeyDown(event, index)}
               className={`relative flex cursor-grab flex-col gap-2 rounded-lg border p-2 transition-colors ${
                 active
                   ? 'border-amber-400/70 bg-amber-400/10'
@@ -173,16 +159,27 @@ export function SorterView({
                 isDropTarget ? 'ring-2 ring-amber-400' : ''
               }`}
             >
-              <span className="absolute left-3 top-3 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
-                {index + 1}
-              </span>
-              <SlideMiniature
-                master={master}
-                slide={slide}
-                width={SORTER_PREVIEW_WIDTH}
-                className="rounded-[3px] shadow-md shadow-black/40"
-              />
-              <div className="flex items-center justify-between gap-2">
+              <div
+                role="option"
+                tabIndex={0}
+                aria-selected={active}
+                aria-current={active ? 'page' : undefined}
+                aria-label={`第 ${index + 1} 頁：${title}`}
+                data-testid="sorter-slide"
+                data-slide-id={slide.id}
+                data-slide-title={title}
+                onKeyDown={(event) => handleKeyDown(event, index)}
+                className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+              >
+                <span className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
+                  {index + 1}
+                </span>
+                <SlideMiniature
+                  master={master}
+                  slide={slide}
+                  width={SORTER_PREVIEW_WIDTH}
+                  className="rounded-[3px] shadow-md shadow-black/40"
+                />
                 <span
                   className={`truncate px-1 text-xs ${
                     active ? 'text-amber-200' : 'text-zinc-300'
@@ -190,27 +187,27 @@ export function SorterView({
                 >
                   {title}
                 </span>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    type="button"
-                    data-testid="sorter-duplicate"
-                    aria-label={`複製第 ${index + 1} 頁`}
-                    onClick={() => onDuplicate(index)}
-                    className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30"
-                  >
-                    複製
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="sorter-delete"
-                    aria-label={`刪除第 ${index + 1} 頁`}
-                    onClick={() => onDelete(index)}
-                    disabled={!canDelete}
-                    className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30 disabled:opacity-40"
-                  >
-                    刪除
-                  </button>
-                </div>
+              </div>
+              <div className="flex justify-end gap-1">
+                <button
+                  type="button"
+                  data-testid="sorter-duplicate"
+                  aria-label={`複製第 ${index + 1} 頁`}
+                  onClick={() => onDuplicate(index)}
+                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30"
+                >
+                  複製
+                </button>
+                <button
+                  type="button"
+                  data-testid="sorter-delete"
+                  aria-label={`刪除第 ${index + 1} 頁`}
+                  onClick={() => onDelete(index)}
+                  disabled={!canDelete}
+                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/30 disabled:opacity-40"
+                >
+                  刪除
+                </button>
               </div>
             </div>
           );

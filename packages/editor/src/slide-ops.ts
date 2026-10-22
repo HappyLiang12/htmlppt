@@ -3,10 +3,10 @@ import {
   deleteSlide,
   detectSlides,
   duplicateSlide,
-  moveSlide,
   setSlideOrder,
   type SlideInfo
 } from '@htmlppt/core';
+import { clampSlideIndex } from './slide-index';
 
 /** Content created by the editor for a new, blank slide. */
 export const NEW_SLIDE_HTML = '<h1>新投影片</h1>';
@@ -24,13 +24,24 @@ export interface SlideOpsContext {
   showSlide(index: number): void;
 }
 
-function clampIndex(index: number, length: number): number {
-  if (length <= 0) return 0;
-  return Math.max(0, Math.min(index, length - 1));
-}
-
 function indexOfSlide(master: Document, slideId: string): number {
   return detectSlides(master).findIndex((slide) => slide.id === slideId);
+}
+
+/**
+ * Sorter drag order: remove the dragged tile first, then insert it at the drop
+ * target's index in the shortened list. A forward drag therefore lands after
+ * the tile it was dropped on and a backward drag lands before it.
+ */
+export function reorderedIds(
+  slides: readonly Pick<SlideInfo, 'id'>[],
+  from: number,
+  to: number
+): string[] {
+  const ids = slides.map((slide) => slide.id);
+  const [moved] = ids.splice(from, 1);
+  if (moved !== undefined) ids.splice(to, 0, moved);
+  return ids;
 }
 
 /**
@@ -106,40 +117,16 @@ export async function deleteSlideAt(
   } catch {
     if (!applied) return false;
   }
+  // A commit that resolves without invoking the mutator (for example a busy
+  // or stale controller guard) has not changed the deck.
+  if (!applied) return false;
 
   const slides = detectSlides(master);
   const active = activeId
     ? slides.findIndex((candidate) => candidate.id === activeId)
     : -1;
-  ctx.showSlide(active >= 0 ? active : clampIndex(index, slides.length));
+  ctx.showSlide(active >= 0 ? active : clampSlideIndex(index, slides.length));
   return true;
-}
-
-export async function moveSlideTo(
-  ctx: SlideOpsContext,
-  fromIndex: number,
-  toIndex: number
-): Promise<number | null> {
-  const master = ctx.master;
-  const slide = ctx.slides[fromIndex];
-  if (!master || !slide) return null;
-  if (toIndex < 0 || toIndex >= ctx.slides.length) return null;
-  if (toIndex === fromIndex) return fromIndex;
-
-  let applied = false;
-  try {
-    await ctx.commit((draft) => {
-      moveSlide(draft, slide.id, toIndex);
-      applied = true;
-    });
-  } catch {
-    if (!applied) return null;
-  }
-
-  const index = indexOfSlide(master, slide.id);
-  if (index < 0) return null;
-  ctx.showSlide(index);
-  return index;
 }
 
 export async function reorderSlides(
@@ -159,11 +146,12 @@ export async function reorderSlides(
   } catch {
     if (!applied) return false;
   }
+  if (!applied) return false;
 
   const slides = detectSlides(master);
   const active = activeId
     ? slides.findIndex((candidate) => candidate.id === activeId)
     : -1;
-  ctx.showSlide(active >= 0 ? active : clampIndex(ctx.activeIndex, slides.length));
+  ctx.showSlide(active >= 0 ? active : clampSlideIndex(ctx.activeIndex, slides.length));
   return true;
 }

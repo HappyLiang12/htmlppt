@@ -209,29 +209,48 @@ export function App() {
     []
   );
 
+  const slideOpBusyRef = useRef(false);
+
+  /**
+   * Serializes toolbar and sorter slide operations. Each operation navigates
+   * only after its save resolves, so a second click while one is in flight
+   * would read a stale active index and act on the wrong slide.
+   */
+  const runSlideOp = useCallback(async (operation: () => Promise<unknown>) => {
+    if (slideOpBusyRef.current) return;
+    slideOpBusyRef.current = true;
+    try {
+      await operation();
+    } catch {
+      // The controller surfaces mutation and save errors through its state.
+    } finally {
+      slideOpBusyRef.current = false;
+    }
+  }, []);
+
   const handleAddSlide = useCallback(() => {
-    void addSlideAfterActive(slideOpsContext());
-  }, [slideOpsContext]);
+    void runSlideOp(() => addSlideAfterActive(slideOpsContext()));
+  }, [runSlideOp, slideOpsContext]);
 
   const handleDuplicateSlide = useCallback(
     (index?: number) => {
-      void duplicateActiveSlide(slideOpsContext(), index);
+      void runSlideOp(() => duplicateActiveSlide(slideOpsContext(), index));
     },
-    [slideOpsContext]
+    [runSlideOp, slideOpsContext]
   );
 
   const handleDeleteSlide = useCallback(
     (index?: number) => {
-      void deleteSlideAt(slideOpsContext(), index);
+      void runSlideOp(() => deleteSlideAt(slideOpsContext(), index));
     },
-    [slideOpsContext]
+    [runSlideOp, slideOpsContext]
   );
 
   const handleReorderSlides = useCallback(
     (slideIds: string[]) => {
-      void reorderSlides(slideOpsContext(), slideIds);
+      void runSlideOp(() => reorderSlides(slideOpsContext(), slideIds));
     },
-    [slideOpsContext]
+    [runSlideOp, slideOpsContext]
   );
 
   useEffect(() => {

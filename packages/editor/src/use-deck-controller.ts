@@ -14,6 +14,7 @@ import {
 import { History } from './history';
 import type { SelectionTarget } from './selection';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
+import { clampSlideIndex } from './slide-index';
 
 export type SaveStatus =
   | 'loading'
@@ -71,21 +72,8 @@ export interface DeckController {
   actions: DeckControllerActions;
 }
 
-/**
- * Save transport for the host deck endpoint. Production uses `saveDeck`; tests
- * inject a deterministic transport so slide operations can be unit-tested
- * without a network round trip. No host behavior is simulated.
- */
-export type DeckSaver = (
-  token: string,
-  html: string,
-  baseRevision: string,
-  options?: { force?: boolean }
-) => Promise<{ revision: string }>;
-
 export interface DeckControllerOptions {
   token?: string;
-  save?: DeckSaver;
 }
 
 // Authored editor-only attributes are a contract error under the M1 host rules
@@ -119,18 +107,13 @@ function toMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function clampIndex(index: number, length: number): number {
-  if (length <= 0) return 0;
-  return Math.max(0, Math.min(index, length - 1));
-}
-
 function sourceDocFor(master: Document, index: number): {
   slides: SlideInfo[];
   activeIndex: number;
   srcDoc: string;
 } {
   const slides = detectSlides(master);
-  const activeIndex = clampIndex(index, slides.length);
+  const activeIndex = clampSlideIndex(index, slides.length);
   const slide = slides[activeIndex];
   return {
     slides,
@@ -153,7 +136,6 @@ export function useDeckController(
   const editVersionRef = useRef(0);
   const historyRef = useRef(new History<string>());
   const tokenRef = useRef(options.token ?? tokenFromLocation());
-  const saveRef = useRef<DeckSaver>(options.save ?? saveDeck);
 
   const update = useCallback((patch: Partial<DeckControllerState>) => {
     const next = { ...stateRef.current, ...patch };
@@ -318,7 +300,7 @@ export function useDeckController(
       update({ slides, dirty: true, status: 'saving' });
 
       const task = enqueueSave((revision) =>
-        saveRef.current(tokenRef.current, html, revision)
+        saveDeck(tokenRef.current, html, revision)
       );
 
       try {
@@ -376,7 +358,7 @@ export function useDeckController(
     update({ status: 'saving', error: '' });
     try {
       await enqueueSave((revision) =>
-        saveRef.current(tokenRef.current, html, revision, { force: true })
+        saveDeck(tokenRef.current, html, revision, { force: true })
       );
     } catch (cause) {
       update({ status: 'error', error: toMessage(cause), dirty: true });

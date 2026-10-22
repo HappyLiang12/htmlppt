@@ -74,7 +74,7 @@ export function ThumbnailRail({
   activeIndex,
   onSelect
 }: ThumbnailRailProps) {
-  const activeRef = useRef<HTMLButtonElement | null>(null);
+  const activeRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest' });
@@ -90,17 +90,14 @@ export function ThumbnailRail({
         const active = index === activeIndex;
         const title = slideTitle(slide);
         return (
-          <button
+          <div
             key={slide.id}
             ref={active ? activeRef : undefined}
-            type="button"
             data-testid="thumbnail"
             data-slide-id={slide.id}
             data-slide-title={title}
             aria-current={active ? 'page' : undefined}
-            aria-label={`第 ${index + 1} 頁：${title}`}
-            onClick={() => onSelect(index)}
-            className={`flex flex-col gap-1 rounded border p-1 text-left transition-colors ${
+            className={`relative flex flex-col gap-1 rounded border p-1 transition-colors ${
               active
                 ? 'border-amber-400/70 bg-amber-400/10'
                 : 'border-white/10 hover:border-white/25'
@@ -120,7 +117,14 @@ export function ThumbnailRail({
               <span className="tabular-nums">{index + 1}</span>
               <span className="truncate">{title}</span>
             </span>
-          </button>
+            <button
+              type="button"
+              aria-label={`第 ${index + 1} 頁：${title}`}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => onSelect(index)}
+              className="absolute inset-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+            />
+          </div>
         );
       })}
     </aside>

@@ -1,311 +1,243 @@
-import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { serializeDeck } from '@htmlppt/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { DeckResponse } from './api.js';
+import { detectSlides, type SlideInfo } from '@htmlppt/core';
+import { describe, expect, it } from 'vitest';
+import { clampSlideIndex } from './slide-index.js';
+import { parseDeck } from './slide-doc.js';
 import {
   addSlideAfterActive,
   deleteSlideAt,
   duplicateActiveSlide,
-  moveSlideTo,
   reorderSlides,
-  NEW_SLIDE_HTML,
+  reorderedIds,
   type SlideOpsContext
 } from './slide-ops.js';
-import {
-  useDeckController,
-  type DeckController,
-  type DeckSaver
-} from './use-deck-controller.js';
 
-const DECK: DeckResponse = {
-  revision: 'revision-1',
-  filePath: 'fixture.html',
-  html: `<!doctype html>
+const DECK_HTML = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Fixture deck</title></head>
 <body>
 <main data-ppt-deck>
-<section class="slide"><h1>First slide</h1><p class="kicker">Kicker</p></section>
-<section class="slide"><h1>Second slide</h1></section>
+<section class="slide" data-slide-id="s1" data-width="1600" data-height="900">
+  <h1 data-ppt-el="e1">First slide</h1>
+  <p class="kicker" data-ppt-el="e2" style="color: #9a6b1f; letter-spacing: 0.18em">Kicker</p>
+</section>
+<section class="slide" data-slide-id="s2" data-width="1600" data-height="900">
+  <h1 data-ppt-el="e3">Second slide</h1>
+</section>
 </main>
 </body>
-</html>`
-};
+</html>`;
 
-const SINGLE_SLIDE_DECK: DeckResponse = {
-  revision: 'revision-single',
-  filePath: 'single.html',
-  html: `<!doctype html>
+const SINGLE_SLIDE_HTML = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Single deck</title></head>
 <body>
 <main data-ppt-deck>
-<section class="slide"><h1>Only slide</h1></section>
+<section class="slide" data-slide-id="s1" data-width="1600" data-height="900">
+  <h1 data-ppt-el="e1">Only slide</h1>
+</section>
 </main>
 </body>
-</html>`
-};
+</html>`;
 
-interface SavedDeck {
-  html: string;
-  baseRevision: string;
+/**
+ * A test-local controller double: commit applies the mutation synchronously
+ * against the master and every getter reads the current document, mirroring
+ * how the real controller refreshes its slide list after a commit. Save and
+ * history behaviour is controller/E2E territory and is not simulated here.
+ */
+class ControllerDouble implements SlideOpsContext {
+  readonly master: Document;
+  skipMutation = false;
+  commitCount = 0;
+  showCount = 0;
+  private active: number;
+
+  constructor(html: string, activeIndex = 0) {
+    this.master = parseDeck(html);
+    this.active = activeIndex;
+  }
+
+  get slides(): readonly SlideInfo[] {
+    return detectSlides(this.master);
+  }
+
+  get activeIndex(): number {
+    return this.active;
+  }
+
+  async commit(mutate: (master: Document) => void): Promise<void> {
+    this.commitCount += 1;
+    if (this.skipMutation) return;
+    mutate(this.master);
+  }
+
+  showSlide(index: number): void {
+    this.showCount += 1;
+    this.active = clampSlideIndex(index, detectSlides(this.master).length);
+  }
 }
 
-let container: HTMLDivElement;
-let root: Root;
-let controller!: DeckController;
-let saves: SavedDeck[] = [];
-
-const save: DeckSaver = async (_token, html, baseRevision) => {
-  saves.push({ html, baseRevision });
-  return { revision: `revision-${saves.length + 1}` };
-};
-
-function Probe() {
-  controller = useDeckController({ token: '', save });
-  return null;
+function slideIds(controller: ControllerDouble): string[] {
+  return controller.slides.map((slide) => slide.id);
 }
 
-function context(): SlideOpsContext {
-  return {
-    master: controller.state.master,
-    slides: controller.state.slides,
-    activeIndex: controller.state.activeIndex,
-    commit: controller.actions.commit,
-    showSlide: controller.actions.showSlide
-  };
-}
-
-function slideIds(): string[] {
-  return controller.state.slides.map((slide) => slide.id);
-}
-
-function masterSlideIds(): string[] {
-  const master = controller.state.master;
-  if (!master) throw new Error('Master document is missing.');
-  return Array.from(master.querySelectorAll('[data-slide-id]')).map(
+function masterSlideIds(controller: ControllerDouble): string[] {
+  return Array.from(
+    controller.master.querySelectorAll('[data-slide-id]'),
     (element) => element.getAttribute('data-slide-id') ?? ''
   );
 }
 
-async function loadDeck(deck: DeckResponse = DECK): Promise<void> {
-  await act(async () => {
-    await controller.actions.load(deck);
-  });
+function slideElementAt(controller: ControllerDouble, index: number): Element {
+  const slide = controller.slides[index]?.element;
+  if (!slide) throw new Error(`Slide ${index} is missing.`);
+  return slide;
 }
 
-beforeEach(async () => {
-  (
-    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
-  saves = [];
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  await act(async () => {
-    root.render(createElement(Probe));
-  });
-});
-
-afterEach(async () => {
-  await act(async () => {
-    root.unmount();
-  });
-  container.remove();
-});
-
 describe('slide operations', () => {
-  it('adds a slide after the active slide and keeps it as one history entry', async () => {
-    await loadDeck();
-    const originalOrder = masterSlideIds();
+  it('adds a slide after the active slide', async () => {
+    const controller = new ControllerDouble(DECK_HTML);
+    const originalOrder = masterSlideIds(controller);
     expect(originalOrder).toHaveLength(2);
 
-    let inserted: number | null = null;
-    await act(async () => {
-      inserted = await addSlideAfterActive(context());
-    });
+    expect(await addSlideAfterActive(controller)).toBe(1);
 
-    expect(inserted).toBe(1);
-    const addedId = controller.state.slides[1]?.id ?? '';
-    expect(slideIds()).toHaveLength(3);
-    expect(masterSlideIds()).toEqual([
+    const addedId = controller.slides[1]?.id ?? '';
+    expect(slideIds(controller)).toHaveLength(3);
+    expect(masterSlideIds(controller)).toEqual([
       originalOrder[0],
       addedId,
       originalOrder[1]
     ]);
-    expect(controller.state.activeIndex).toBe(1);
-    expect(controller.state.srcDoc).toContain('新投影片');
-    expect(saves).toHaveLength(1);
-    expect(saves[0]?.html).toContain('新投影片');
-    expect(saves[0]?.html).toMatch(/<h1[^>]*>新投影片<\/h1>/);
-    expect(NEW_SLIDE_HTML).toContain('新投影片');
-
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(slideIds()).toEqual(originalOrder);
-    expect(controller.state.master?.querySelectorAll('[data-slide-id]')).toHaveLength(2);
-    expect(controller.state.srcDoc).not.toContain('新投影片');
+    expect(controller.activeIndex).toBe(1);
+    expect(controller.commitCount).toBe(1);
+    const added = slideElementAt(controller, 1);
+    expect(added.querySelector('h1')?.textContent).toBe('新投影片');
+    expect(added.getAttribute('data-width')).toBe('1600');
   });
 
   it('adds a slide after a non-active sorter tile', async () => {
-    await loadDeck();
+    const controller = new ControllerDouble(DECK_HTML);
 
-    await act(async () => {
-      await addSlideAfterActive(context(), 1);
-    });
+    expect(await addSlideAfterActive(controller, 1)).toBe(2);
 
-    expect(slideIds()).toHaveLength(3);
-    expect(controller.state.activeIndex).toBe(2);
-    expect(controller.state.srcDoc).toContain('新投影片');
+    expect(slideIds(controller)).toHaveLength(3);
+    expect(controller.activeIndex).toBe(2);
+    expect(controller.commitCount).toBe(1);
   });
 
-  it('duplicates a slide with a fresh id and identical content', async () => {
-    await loadDeck();
-    const original = controller.state.slides[0];
+  it('duplicates a slide with a fresh id and copies its content', async () => {
+    const controller = new ControllerDouble(DECK_HTML);
+    const original = controller.slides[0];
     if (!original) throw new Error('First slide is missing.');
-    const originalHeading = controller.state.master
-      ?.querySelector('[data-slide-id="s1"] h1')
-      ?.textContent;
 
-    let duplicated: number | null = null;
-    await act(async () => {
-      duplicated = await duplicateActiveSlide(context());
-    });
+    expect(await duplicateActiveSlide(controller)).toBe(1);
 
-    expect(duplicated).toBe(1);
-    expect(slideIds()).toHaveLength(3);
-    const clone = controller.state.slides[1];
+    expect(slideIds(controller)).toHaveLength(3);
+    const clone = controller.slides[1];
     expect(clone?.id).toBeDefined();
     expect(clone?.id).not.toBe(original.id);
-    expect(controller.state.activeIndex).toBe(1);
-    expect(controller.state.srcDoc).toContain(originalHeading ?? 'First slide');
-    expect(saves).toHaveLength(1);
+    expect(controller.activeIndex).toBe(1);
+    expect(controller.commitCount).toBe(1);
 
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(controller.state.slides).toHaveLength(2);
-    expect(slideIds()).toEqual(['s1', 's2']);
+    const cloneElement = slideElementAt(controller, 1);
+    expect(cloneElement.querySelector('h1')?.textContent).toBe('First slide');
+    const kicker = cloneElement.querySelector('.kicker');
+    expect(kicker?.textContent).toBe('Kicker');
+    expect(kicker?.getAttribute('style')).toBe(
+      'color: #9a6b1f; letter-spacing: 0.18em'
+    );
+    expect(cloneElement.innerHTML).toBe(slideElementAt(controller, 0).innerHTML);
   });
 
-  it('deletes the active slide and undo restores the exact deck', async () => {
-    await loadDeck();
-    const before = serializeDeck(controller.state.master as Document);
+  it('deletes the active slide and selects its neighbor', async () => {
+    const controller = new ControllerDouble(DECK_HTML);
 
-    let deleted = false;
-    await act(async () => {
-      deleted = await deleteSlideAt(context(), 0);
-    });
+    expect(await deleteSlideAt(controller, 0)).toBe(true);
 
-    expect(deleted).toBe(true);
-    expect(slideIds()).toHaveLength(1);
-    expect(slideIds()).toEqual(['s2']);
-    expect(controller.state.srcDoc).toContain('Second slide');
-    expect(controller.state.srcDoc).not.toContain('First slide');
-    expect(saves).toHaveLength(1);
-
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(controller.state.slides).toHaveLength(2);
-    expect(slideIds()).toEqual(['s1', 's2']);
-    expect(serializeDeck(controller.state.master as Document)).toBe(before);
-    expect(controller.state.srcDoc).toContain('First slide');
+    expect(slideIds(controller)).toEqual(['s2']);
+    expect(controller.activeIndex).toBe(0);
+    expect(controller.commitCount).toBe(1);
+    expect(controller.showCount).toBe(1);
   });
 
   it('keeps the active slide selected when deleting another slide', async () => {
-    await loadDeck();
-    act(() => {
-      controller.actions.showSlide(1);
-    });
-    expect(controller.state.activeIndex).toBe(1);
+    const controller = new ControllerDouble(DECK_HTML, 1);
 
-    let deleted = false;
-    await act(async () => {
-      deleted = await deleteSlideAt(context(), 0);
-    });
+    expect(await deleteSlideAt(controller, 0)).toBe(true);
 
-    expect(deleted).toBe(true);
-    expect(slideIds()).toEqual(['s2']);
-    expect(controller.state.activeIndex).toBe(0);
-    expect(controller.state.srcDoc).toContain('Second slide');
+    expect(slideIds(controller)).toEqual(['s2']);
+    expect(controller.activeIndex).toBe(0);
+    expect(controller.showCount).toBe(1);
   });
 
-  it('refuses to delete the last slide without saving or recording history', async () => {
-    await loadDeck(SINGLE_SLIDE_DECK);
-    const before = serializeDeck(controller.state.master as Document);
+  it('refuses to delete the last slide without committing', async () => {
+    const controller = new ControllerDouble(SINGLE_SLIDE_HTML);
 
-    let deleted = true;
-    await act(async () => {
-      deleted = await deleteSlideAt(context(), 0);
-    });
+    expect(await deleteSlideAt(controller, 0)).toBe(false);
 
-    expect(deleted).toBe(false);
-    expect(controller.state.slides).toHaveLength(1);
-    expect(controller.state.activeIndex).toBe(0);
-    expect(saves).toHaveLength(0);
-    expect(serializeDeck(controller.state.master as Document)).toBe(before);
-
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(serializeDeck(controller.state.master as Document)).toBe(before);
+    expect(slideIds(controller)).toEqual(['s1']);
+    expect(controller.activeIndex).toBe(0);
+    expect(controller.commitCount).toBe(0);
+    expect(controller.showCount).toBe(0);
   });
 
-  it('moves a slide to an index and follows it with the active slide', async () => {
-    await loadDeck();
-    const before = serializeDeck(controller.state.master as Document);
+  it('reports a delete as failed when commit never applies the mutation', async () => {
+    const controller = new ControllerDouble(DECK_HTML);
+    controller.skipMutation = true;
 
-    let movedTo: number | null = null;
-    await act(async () => {
-      movedTo = await moveSlideTo(context(), 0, 1);
-    });
+    expect(await deleteSlideAt(controller, 0)).toBe(false);
 
-    expect(movedTo).toBe(1);
-    expect(slideIds()).toEqual(['s2', 's1']);
-    expect(controller.state.activeIndex).toBe(1);
-    expect(controller.state.srcDoc).toContain('First slide');
-    expect(saves).toHaveLength(1);
-
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(slideIds()).toEqual(['s1', 's2']);
-    expect(serializeDeck(controller.state.master as Document)).toBe(before);
+    expect(slideIds(controller)).toEqual(['s1', 's2']);
+    expect(controller.commitCount).toBe(1);
+    expect(controller.showCount).toBe(0);
   });
 
   it('reorders slides from a sorter drop and follows the active slide', async () => {
-    await loadDeck();
+    const controller = new ControllerDouble(DECK_HTML);
 
-    let reordered = false;
-    await act(async () => {
-      reordered = await reorderSlides(context(), ['s2', 's1']);
-    });
+    expect(await reorderSlides(controller, ['s2', 's1'])).toBe(true);
 
-    expect(reordered).toBe(true);
-    expect(slideIds()).toEqual(['s2', 's1']);
-    expect(controller.state.activeIndex).toBe(1);
-    expect(controller.state.srcDoc).toContain('First slide');
-    expect(saves).toHaveLength(1);
+    expect(slideIds(controller)).toEqual(['s2', 's1']);
+    expect(controller.activeIndex).toBe(1);
+    expect(controller.commitCount).toBe(1);
+  });
 
-    act(() => {
-      controller.actions.undo();
-    });
-    expect(slideIds()).toEqual(['s1', 's2']);
+  it('reports a reorder as failed when commit never applies the mutation', async () => {
+    const controller = new ControllerDouble(DECK_HTML);
+    controller.skipMutation = true;
+
+    expect(await reorderSlides(controller, ['s2', 's1'])).toBe(false);
+
+    expect(slideIds(controller)).toEqual(['s1', 's2']);
+    expect(controller.commitCount).toBe(1);
+    expect(controller.showCount).toBe(0);
   });
 
   it('ignores reorder requests that do not list every slide', async () => {
-    await loadDeck();
+    const controller = new ControllerDouble(DECK_HTML);
 
-    let reordered = true;
-    await act(async () => {
-      reordered = await reorderSlides(context(), ['s1']);
-    });
+    expect(await reorderSlides(controller, ['s1'])).toBe(false);
 
-    expect(reordered).toBe(false);
-    expect(slideIds()).toEqual(['s1', 's2']);
-    expect(saves).toHaveLength(0);
+    expect(slideIds(controller)).toEqual(['s1', 's2']);
+    expect(controller.commitCount).toBe(0);
+    expect(controller.showCount).toBe(0);
+  });
+});
+
+describe('sorter drag order', () => {
+  const slides = ['s1', 's2', 's3', 's4'].map((id) => ({ id }));
+
+  it('moves a tile forward one slot', () => {
+    expect(reorderedIds(slides, 0, 1)).toEqual(['s2', 's1', 's3', 's4']);
+  });
+
+  it('moves a tile backward', () => {
+    expect(reorderedIds(slides, 3, 1)).toEqual(['s1', 's4', 's2', 's3']);
+  });
+
+  it('removes the tile before inserting at a non-adjacent drop index', () => {
+    expect(reorderedIds(slides, 0, 2)).toEqual(['s2', 's3', 's1', 's4']);
+    expect(reorderedIds(slides, 2, 0)).toEqual(['s3', 's1', 's2', 's4']);
   });
 });
