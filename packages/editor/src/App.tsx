@@ -1,14 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { detectSlides, type SlideInfo } from '@htmlppt/core';
-import { fetchDeck, saveDeck, tokenFromLocation } from './api';
-import {
-  buildSlideSrcDoc,
-  commitSlide,
-  EDITING_ATTRIBUTE,
-  parseDeck
-} from './slide-doc';
-
-type SaveStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'load-error' | 'error';
+import { useCallback, useEffect, useRef } from 'react';
+import { commitSlide, EDITING_ATTRIBUTE } from './slide-doc';
+import { useDeckController, type SaveStatus } from './use-deck-controller';
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   loading: '載入中…',
@@ -20,48 +12,16 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
 };
 
 export function App() {
-  const token = useRef(tokenFromLocation());
-  const master = useRef<Document | null>(null);
-  const revision = useRef('');
   const frame = useRef<HTMLIFrameElement | null>(null);
   const canvas = useRef<HTMLElement | null>(null);
-  const saveChain = useRef<Promise<void>>(Promise.resolve());
-
-  const [slides, setSlides] = useState<SlideInfo[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [srcDoc, setSrcDoc] = useState('');
-  const [scale, setScale] = useState(1);
-  const [status, setStatus] = useState<SaveStatus>('loading');
-  const [error, setError] = useState('');
-  const [filePath, setFilePath] = useState('');
+  const { state, actions } = useDeckController();
+  const { slides, activeIndex, srcDoc, scale, status, error, filePath } = state;
 
   const activeSlide = slides[activeIndex];
 
-  const showSlide = useCallback((doc: Document, index: number) => {
-    const list = detectSlides(doc);
-    const clamped = Math.max(0, Math.min(index, list.length - 1));
-    setSlides(list);
-    setActiveIndex(clamped);
-    const slide = list[clamped];
-    setSrcDoc(slide ? buildSlideSrcDoc(doc, slide) : '');
-  }, []);
-
   useEffect(() => {
-    void (async () => {
-      try {
-        const deck = await fetchDeck(token.current);
-        const doc = parseDeck(deck.html);
-        master.current = doc;
-        revision.current = deck.revision;
-        setFilePath(deck.filePath);
-        setStatus('ready');
-        showSlide(doc, 0);
-      } catch (cause) {
-        setStatus('load-error');
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    })();
-  }, [showSlide]);
+    void actions.load();
+  }, [actions]);
 
   useEffect(() => {
     const updateScale = () => {
@@ -75,48 +35,33 @@ export function App() {
         0.1,
         (bounds.height - 96) / activeSlide.height
       );
-      setScale(Math.min(widthScale, heightScale, 1));
+      actions.setScale(Math.min(widthScale, heightScale, 1));
     };
     updateScale();
     window.addEventListener('resize', updateScale);
     return () => window.removeEventListener('resize', updateScale);
-  }, [activeSlide]);
+  }, [activeSlide, actions]);
 
   const commit = useCallback(
     async (editable: HTMLElement) => {
-      const doc = master.current;
-      const slide = slides[activeIndex];
       const frameDocument = frame.current?.contentDocument;
-      if (!doc || !slide || !frameDocument) return;
+      if (!frameDocument) return;
 
       // Drop the editing marker first: removing contenteditable from the
       // focused element can fire another focusout, which must not re-commit.
       editable.removeAttribute(EDITING_ATTRIBUTE);
       editable.removeAttribute('contenteditable');
       try {
-        const html = commitSlide(doc, slide.index, frameDocument);
-        setStatus('saving');
-        const task = saveChain.current.then(async () => {
-          const result = await saveDeck(
-            token.current,
-            html,
-            revision.current
-          );
-          revision.current = result.revision;
-          setSlides(detectSlides(doc));
-          setStatus('saved');
-          setError('');
-        });
-        saveChain.current = task.catch(() => undefined);
-        await task;
-      } catch (cause) {
+        await actions.commit((master, slide) =>
+          commitSlide(master, slide.index, frameDocument)
+        );
+      } catch {
+        // The controller already surfaced the status and message.
         editable.setAttribute('contenteditable', 'true');
         editable.setAttribute(EDITING_ATTRIBUTE, 'true');
-        setStatus('error');
-        setError(cause instanceof Error ? cause.message : String(cause));
       }
     },
-    [activeIndex, slides]
+    [actions]
   );
 
   const onFrameLoad = useCallback(() => {
@@ -158,8 +103,7 @@ export function App() {
   }, [commit]);
 
   const goTo = (index: number) => {
-    if (!master.current) return;
-    showSlide(master.current, index);
+    actions.showSlide(index);
   };
 
   return (

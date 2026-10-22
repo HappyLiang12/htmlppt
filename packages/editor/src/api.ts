@@ -18,10 +18,15 @@ export async function fetchDeck(token: string): Promise<DeckResponse> {
   return (await response.json()) as DeckResponse;
 }
 
+export interface SaveDeckOptions {
+  force?: boolean;
+}
+
 export async function saveDeck(
   token: string,
   html: string,
-  baseRevision: string
+  baseRevision: string,
+  options: SaveDeckOptions = {}
 ): Promise<{ revision: string }> {
   const response = await fetch('/api/deck', {
     method: 'PUT',
@@ -29,7 +34,11 @@ export async function saveDeck(
       authorization: `Bearer ${token}`,
       'content-type': 'application/json'
     },
-    body: JSON.stringify({ html, baseRevision })
+    body: JSON.stringify({
+      html,
+      baseRevision,
+      ...(options.force ? { force: true } : {})
+    })
   });
   if (!response.ok) {
     const detail = await response.text();
