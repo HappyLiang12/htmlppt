@@ -41,6 +41,21 @@ describe('validateDeck', () => {
     );
   });
 
+  it('reports duplicate slide ids after trimming whitespace', () => {
+    const result = validateDeck(
+      deck(`<section data-slide-id="s1"></section><section data-slide-id=" s1 "></section>`)
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'duplicate-slide-id',
+        slideId: 's1',
+        message: 'Slide id "s1" is used 2 times.'
+      })
+    );
+  });
+
   it('warns when a slide has no id', () => {
     const result = validateDeck(deck(`<section class="slide"></section>`));
 
@@ -130,12 +145,44 @@ describe('validateDeck error rules', () => {
     expect(across.errors).toEqual([]);
   });
 
+  it('rejects slides nested inside other slides', () => {
+    const result = run(
+      '<section data-slide-id="s1"><section data-slide-id="s9">Nested</section></section>'
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual([
+      {
+        severity: 'error',
+        code: 'nested-slide',
+        message: 'Slide "s9" is nested inside slide "s1".',
+        slideId: 's9',
+        location: 's1 > section'
+      }
+    ]);
+  });
+
+  it('reports one nested-slide error per nested slide', () => {
+    const result = run(
+      '<section data-slide-id="s1"><section data-slide-id="s8"></section><section data-slide-id="s9"></section></section>'
+    );
+
+    expect(result.errors.filter((error) => error.code === 'nested-slide')).toHaveLength(2);
+  });
+
   it('does not count nested slides objects as duplicates of the outer slide', () => {
     const result = run(
       '<section data-slide-id="outer"><h1 data-ppt-el="e1">A</h1><section data-slide-id="inner"><p data-ppt-el="e1">B</p><p data-ppt-el="e1">C</p></section></section>'
     );
 
     expect(result.errors).toEqual([
+      {
+        severity: 'error',
+        code: 'nested-slide',
+        message: 'Slide "inner" is nested inside slide "outer".',
+        slideId: 'inner',
+        location: 'outer > section'
+      },
       {
         severity: 'error',
         code: 'duplicate-element-id',
@@ -152,6 +199,13 @@ describe('validateDeck error rules', () => {
     );
 
     expect(result.errors).toEqual([
+      {
+        severity: 'error',
+        code: 'nested-slide',
+        message: 'Slide "inner" is nested inside slide "outer".',
+        slideId: 'inner',
+        location: 'outer > section'
+      },
       {
         severity: 'error',
         code: 'duplicate-element-id',

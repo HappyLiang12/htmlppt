@@ -67,7 +67,7 @@ function toSlideInfo(element: Element, index: number): SlideInfo {
   const rawId = element.getAttribute('data-slide-id');
   const hasId = rawId !== null && rawId.trim() !== '';
   return {
-    id: hasId ? rawId : `s${index + 1}`,
+    id: hasId ? rawId.trim() : `s${index + 1}`,
     hasId,
     element,
     index,

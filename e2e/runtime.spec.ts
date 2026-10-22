@@ -4,10 +4,31 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { execa } from 'execa';
+import { RUNTIME_SOURCE } from '../packages/runtime/dist/index.js';
 import { serveHtml } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = join(repoRoot, 'packages/cli/dist/bin.js');
+
+const authoredDisplayDeck = (runtime: string) => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Authored display</title>
+  <style>
+    .slide { width: 800px; height: 450px; }
+    [data-ppt-deck]:not([data-ppt-ready]) > [data-slide-id] ~ [data-slide-id] { display: none; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1"><h1>One</h1></section>
+    <section class="slide" data-slide-id="s2" style="display: flex"><h1>Two</h1></section>
+    <section class="slide" data-slide-id="s3" style="display: none"><h1>Three</h1></section>
+  </main>
+  <script data-ppt-runtime="1">${runtime}</script>
+</body>
+</html>`;
 
 const readDisplay = (element: unknown) => {
   const scope = element as {
@@ -86,6 +107,35 @@ test.describe('presentation runtime', () => {
       }
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('print restores authored inline display', { tag: '@feature:runtime' }, async ({ page }) => {
+    const server = await serveHtml(authoredDisplayDeck(RUNTIME_SOURCE));
+    try {
+      await page.goto(server.url);
+      await expect(page.locator('[data-ppt-deck][data-ppt-ready="1"]')).toHaveCount(1);
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+      await expect(page.locator('[data-slide-id="s3"]')).toBeHidden();
+
+      await page.emulateMedia({ media: 'print' });
+      await page.evaluate("window.dispatchEvent(new Event('beforeprint'))");
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+      expect(
+        await page.locator('[data-slide-id="s2"]').evaluate(readDisplay)
+      ).toBe('flex');
+      await expect(page.locator('[data-slide-id="s3"]')).toBeHidden();
+
+      await page.evaluate("window.dispatchEvent(new Event('afterprint'))");
+      await page.emulateMedia({ media: 'screen' });
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeHidden();
+      await expect(page.locator('[data-slide-id="s3"]')).toBeHidden();
+      await expect(page.locator('[data-slide-id]:visible')).toHaveCount(1);
+    } finally {
+      await server.close();
     }
   });
 

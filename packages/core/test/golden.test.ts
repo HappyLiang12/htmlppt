@@ -32,11 +32,14 @@ describe('golden fixtures', () => {
     }
   );
 
-  it('outline matches the golden for rich.deck.html', () => {
-    expect(getOutline(parse('rich.deck.html'))).toEqual(
-      JSON.parse(read('rich.outline.expected.json'))
-    );
-  });
+  it.each(['basic.deck.html', 'rich.deck.html', 'messy.deck.html', 'animated.deck.html', 'external.deck.html', 'malicious.deck.html'])(
+    'outline matches the golden for %s',
+    (name) => {
+      expect(getOutline(parse(name))).toEqual(
+        JSON.parse(read(name.replace('.deck.html', '.outline.expected.json')))
+      );
+    }
+  );
 
   it('normalizes messy.deck.html deterministically and idempotently', () => {
     const doc = parse('messy.deck.html');

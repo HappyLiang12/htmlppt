@@ -86,6 +86,17 @@ describe('detectSlides', () => {
     expect(slides[0]).toMatchObject({ id: 's1', hasId: false });
   });
 
+  it('trims whitespace around explicit slide ids', () => {
+    const doc = documentFor(
+      `<section class="slide" data-slide-id=" s1 "></section><section class="slide" data-slide-id="s2"></section>`
+    );
+
+    const slides = detectSlides(doc);
+
+    expect(slides.map((slide) => slide.id)).toEqual(['s1', 's2']);
+    expect(slides.every((slide) => slide.hasId)).toBe(true);
+  });
+
   it('prefers size attributes over inline styles', () => {
     const doc = documentFor(
       `<section class="slide" data-width="800" data-height="600" style="width:1280px;height:720px"></section>`

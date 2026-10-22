@@ -1,0 +1,99 @@
+{
+  "title": "Messy deck",
+  "width": 1280,
+  "height": 720,
+  "slideCount": 2,
+  "runtime": false,
+  "slides": [
+    {
+      "id": "s1",
+      "index": 0,
+      "width": 1280,
+      "height": 720,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": null,
+          "tag": "h1",
+          "path": [
+            0
+          ],
+          "text": "Messy deck",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": null,
+          "tag": "p",
+          "path": [
+            1
+          ],
+          "text": "Fixed copy",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": null,
+          "tag": "div",
+          "path": [
+            2
+          ],
+          "text": "Nested note",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": null,
+          "tag": "img",
+          "path": [
+            3
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "index": 1,
+      "width": 1920,
+      "height": 1080,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": null,
+          "tag": "h2",
+          "path": [
+            0
+          ],
+          "text": "Second",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": null,
+          "tag": "canvas",
+          "path": [
+            1
+          ],
+          "text": "",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": null,
+          "tag": "div",
+          "path": [
+            2
+          ],
+          "text": "Nested group",
+          "classes": [],
+          "group": true
+        }
+      ]
+    }
+  ]
+}

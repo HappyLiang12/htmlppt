@@ -116,6 +116,9 @@ export function mutateDeck<T>(
   mutation: (draft: Document) => T
 ): { document: Document; result: T } {
   const document = source.cloneNode(true) as Document;
+  // Normalize before the mutation so detection sees stable slide ids; otherwise
+  // a new data-slide-id on a class-only deck shadows the existing slides.
+  normalizeDeck(document);
   const result = mutation(document);
   normalizeDeck(document);
   const validation = validateDeck(document);
@@ -203,14 +206,18 @@ export function addSlide(doc: Document, options: AddSlideOptions = {}): string {
   const slides = explicitSlides(doc);
   const ids = options.ids ?? defaultIdFactory;
   const id = ids.slideId(occupiedSlideIds(slides));
-  const first = slides[0];
-  const section = doc.createElement('section');
-  section.setAttribute('class', 'slide');
-  section.setAttribute('data-slide-id', id);
-  if (options.width !== undefined || options.height !== undefined) {
-    section.setAttribute('data-width', String(options.width ?? first.width));
-    section.setAttribute('data-height', String(options.height ?? first.height));
+  const referenceSlide = options.afterSlideId
+    ? slides.find((slide) => slide.id === options.afterSlideId)
+    : slides[slides.length - 1];
+  if (!referenceSlide) fail('slide-not-found', `Slide "${options.afterSlideId}" was not found.`);
+  const reference = referenceSlide.element;
+  const section = doc.createElement(reference.tagName.toLowerCase());
+  if (reference.hasAttribute('class')) {
+    section.setAttribute('class', reference.getAttribute('class') ?? '');
   }
+  section.setAttribute('data-slide-id', id);
+  section.setAttribute('data-width', String(options.width ?? referenceSlide.width));
+  section.setAttribute('data-height', String(options.height ?? referenceSlide.height));
   if (options.transition) section.setAttribute('data-ppt-transition', options.transition);
   section.innerHTML = options.html ?? '<h1>New slide</h1>';
   for (const child of Array.from(section.children)) {
@@ -222,10 +229,6 @@ export function addSlide(doc: Document, options: AddSlideOptions = {}): string {
     writeNotes(section, options.notes, doc);
   }
 
-  const reference = options.afterSlideId
-    ? slides.find((slide) => slide.id === options.afterSlideId)?.element
-    : slides[slides.length - 1].element;
-  if (!reference) fail('slide-not-found', `Slide "${options.afterSlideId}" was not found.`);
   const parent = reference.parentElement;
   if (!parent) fail('slide-operations-unavailable', 'Slides must have a parent element.');
   parent.insertBefore(section, reference.nextElementSibling);

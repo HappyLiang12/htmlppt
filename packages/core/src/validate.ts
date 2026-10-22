@@ -85,6 +85,29 @@ export function validateDeck(doc: Document): ValidationResult {
   const slides = bodyIsEmpty ? [] : detectSlides(doc);
   const slideElements = new Set(slides.map((slide) => slide.element));
 
+  const reportedNested = new Set<Element>();
+  for (const slide of slides) {
+    let ancestor = slide.element.parentElement;
+    let owner: SlideInfo | undefined;
+    while (ancestor) {
+      owner = slides.find((candidate) => candidate.element === ancestor);
+      if (owner) break;
+      ancestor = ancestor.parentElement;
+    }
+    if (owner && !reportedNested.has(slide.element)) {
+      reportedNested.add(slide.element);
+      errors.push(
+        diagnostic(
+          'error',
+          'nested-slide',
+          `Slide "${slide.id}" is nested inside slide "${owner.id}".`,
+          slide.id,
+          elementLocation(owner, slide.element)
+        )
+      );
+    }
+  }
+
   for (const slide of slides) {
     if (slide.element === doc.body) continue;
 

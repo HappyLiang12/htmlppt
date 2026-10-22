@@ -1,0 +1,59 @@
+{
+  "title": "Basic deck",
+  "width": 1600,
+  "height": 900,
+  "slideCount": 2,
+  "runtime": false,
+  "slides": [
+    {
+      "id": "s1",
+      "index": 0,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e1",
+          "tag": "h1",
+          "path": [
+            0
+          ],
+          "text": "Basic deck",
+          "classes": [],
+          "group": false
+        },
+        {
+          "id": "e2",
+          "tag": "p",
+          "path": [
+            1
+          ],
+          "text": "First slide",
+          "classes": [],
+          "group": false
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "index": 1,
+      "width": 1600,
+      "height": 900,
+      "transition": null,
+      "notes": null,
+      "elements": [
+        {
+          "id": "e3",
+          "tag": "h2",
+          "path": [
+            0
+          ],
+          "text": "Second slide",
+          "classes": [],
+          "group": false
+        }
+      ]
+    }
+  ]
+}

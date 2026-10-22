@@ -18,8 +18,15 @@ import {
   updateSlideHtml
 } from '../src/mutations.js';
 import { parseDeckHtml } from '../src/node.js';
+import { detectSlides } from '../src/detect.js';
+import { createDeckHtml } from '../src/template.js';
 
 const source = `<!doctype html><html><head><title>Deck</title></head><body><section data-slide-id="s1"><h1 data-ppt-el="e1" class="title">Hello</h1><p data-ppt-el="e2">Body</p></section><section data-slide-id="s2"><h2>Other</h2></section></body></html>`;
+
+const classOnlySource = `<!doctype html><html><head><title>Class only</title></head><body><main data-ppt-deck><section class="slide"><h1>One</h1></section><section class="slide"><h2>Two</h2></section></main></body></html>`;
+
+const detectedIds = (doc: Document): string[] =>
+  detectSlides(doc).map((detected) => detected.id);
 
 const slide = (doc: Document, id = 's1') =>
   doc.querySelector(`[data-slide-id="${id}"]`) as Element;
@@ -230,6 +237,54 @@ describe('mutateDeck', () => {
     expect(updated.querySelector('p')?.getAttribute('data-ppt-el')).toBe('e2');
     expect(doc.documentElement.outerHTML).toBe(beforeHtml);
   });
+
+  it('normalizes class-only slides before the mutation callback runs', () => {
+    const doc = parseDeckHtml(classOnlySource);
+    const beforeHtml = doc.documentElement.outerHTML;
+
+    const { document } = mutateDeck(doc, (draft) => addSlide(draft));
+
+    expect(detectedIds(document)).toEqual(['s1', 's2', 's3']);
+    expect(document.querySelectorAll('[data-slide-id]')).toHaveLength(3);
+    expect(doc.documentElement.outerHTML).toBe(beforeHtml);
+  });
+
+  it('returns a normalized class-only document that notes and html mutations can address', () => {
+    const { document } = mutateDeck(parseDeckHtml(classOnlySource), (draft) =>
+      addSlide(draft)
+    );
+
+    setNotes(document, 's1', 'note');
+    expect(
+      document.querySelector('[data-slide-id="s1"] > aside[data-ppt-notes]')?.textContent
+    ).toBe('note');
+
+    updateSlideHtml(document, 's1', '<h1>Replaced</h1><p>Text</p>');
+    const updated = document.querySelector('[data-slide-id="s1"]') as Element;
+    expect(updated.querySelector('h1')?.textContent).toBe('Replaced');
+    expect(updated.querySelector('p')?.textContent).toBe('Text');
+    expect(detectedIds(document)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('duplicates class-only slides without dropping them from detection', () => {
+    const { document } = mutateDeck(parseDeckHtml(classOnlySource), (draft) =>
+      duplicateSlide(draft, 's2')
+    );
+
+    expect(detectedIds(document)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('moves and reorders class-only slides after pre-normalization', () => {
+    const moved = mutateDeck(parseDeckHtml(classOnlySource), (draft) => {
+      moveSlide(draft, 's1', 1);
+    }).document;
+    expect(detectedIds(moved)).toEqual(['s2', 's1']);
+
+    const reordered = mutateDeck(parseDeckHtml(classOnlySource), (draft) => {
+      setSlideOrder(draft, ['s2', 's1']);
+    }).document;
+    expect(detectedIds(reordered)).toEqual(['s2', 's1']);
+  });
 });
 
 describe('slide mutations', () => {
@@ -250,10 +305,55 @@ describe('slide mutations', () => {
     expect(id).toBe('s3');
     expect(ids(doc)).toEqual(['s1', 's3', 's2']);
     const added = doc.querySelector(`[data-slide-id="${id}"]`) as Element;
-    expect(added.getAttribute('data-width')).toBeNull();
+    expect(added.hasAttribute('class')).toBe(false);
+    expect(added.getAttribute('data-width')).toBe('1600');
+    expect(added.getAttribute('data-height')).toBe('900');
     expect(added.querySelector('h1')?.getAttribute('data-ppt-el')).toBe('e1');
     expect(added.querySelector('aside[data-ppt-notes]')?.textContent).toBe('Talk track');
     expect(added.getAttribute('data-ppt-transition')).toBe('slide');
+  });
+
+  it('inherits the reference canvas and class onto the new slide', () => {
+    const canvasDeck = parseDeckHtml(`<!doctype html><html><head><title>Deck</title></head><body>
+<section class="slide hero" data-slide-id="s1" data-width="1280" data-height="720"></section>
+<section class="slide hero" data-slide-id="s2" data-width="1280" data-height="720"></section>
+</body></html>`);
+
+    const { document } = mutateDeck(canvasDeck, (draft) => addSlide(draft));
+    const added = document.querySelector('[data-slide-id="s3"]') as Element;
+
+    expect(added.tagName).toBe('SECTION');
+    expect(added.getAttribute('class')).toBe('slide hero');
+    expect(added.getAttribute('data-width')).toBe('1280');
+    expect(added.getAttribute('data-height')).toBe('720');
+  });
+
+  it('inherits the reference tag and omits a missing class for plain section decks', () => {
+    const plain = parseDeckHtml(`<!doctype html><html><head><title>Deck</title></head><body>
+<section><h1>One</h1></section>
+<section><h2>Two</h2></section>
+</body></html>`);
+
+    const { document } = mutateDeck(plain, (draft) => addSlide(draft));
+    const added = document.querySelector('[data-slide-id="s3"]') as Element;
+
+    expect(detectedIds(document)).toEqual(['s1', 's2', 's3']);
+    expect(added.tagName).toBe('SECTION');
+    expect(added.hasAttribute('class')).toBe(false);
+    expect(added.getAttribute('data-width')).toBe('1600');
+    expect(added.getAttribute('data-height')).toBe('900');
+  });
+
+  it('keeps the template walkthrough on the 1600x900 canvas', () => {
+    const { document } = mutateDeck(parseDeckHtml(createDeckHtml({ slides: 2 })), (draft) =>
+      addSlide(draft)
+    );
+    const added = document.querySelector('[data-slide-id="s3"]') as Element;
+
+    expect(detectedIds(document)).toEqual(['s1', 's2', 's3']);
+    expect(added.getAttribute('class')).toBe('slide');
+    expect(added.getAttribute('data-width')).toBe('1600');
+    expect(added.getAttribute('data-height')).toBe('900');
   });
 
   it('appends a slide by default without moving existing slides', () => {
@@ -437,13 +537,32 @@ describe('slide mutations', () => {
     );
   });
 
-  it('rejects an invalid transition through the mutation gate', () => {
+  it('rejects gate-only failures with invalid-result and inner diagnostics', () => {
     const doc = parseDeckHtml(source);
-    expect(() =>
+    const beforeHtml = doc.documentElement.outerHTML;
+    let caught: unknown;
+
+    try {
       mutateDeck(doc, (draft) => {
-        setTransition(draft, 's1', 'zoom' as never);
-      })
-    ).toThrow(expect.objectContaining({ code: 'invalid-transition' }));
+        addElement(slide(draft), '<section data-slide-id="s9">Nested</section>');
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(DeckMutationError);
+    expect(caught).toMatchObject({ code: 'invalid-result' });
+    expect((caught as DeckMutationError).message).toContain('nested-slide');
+    expect((caught as DeckMutationError).details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: 'error',
+          code: 'nested-slide',
+          slideId: 's9'
+        })
+      ])
+    );
+    expect(doc.documentElement.outerHTML).toBe(beforeHtml);
   });
 
   it('rejects invalid slide results through the gate', () => {
