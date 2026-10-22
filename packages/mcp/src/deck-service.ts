@@ -6,7 +6,15 @@ import {
   readDeckFile,
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
+import { isAbortError } from './abort.js';
 import { findLiveSession } from './host-session.js';
+
+/**
+ * Upper bound for a single host HTTP request. Health checks use a shorter
+ * bound because they only read and hash one local file; saves may wait on the
+ * host's save lock.
+ */
+export const HOST_REQUEST_TIMEOUT_MS = 5_000;
 
 export interface DeckSnapshot {
   document: Document;
@@ -157,14 +165,14 @@ export class HostDeckService implements DeckService {
   async load(filePath: string): Promise<DeckSnapshot> {
     const response = await this.request('GET', '/api/deck');
     if (!response.ok) {
-      throw await this.errorFor(response);
+      throw await this.errorFor(response, 'GET', '/api/deck');
     }
-    const payload = (await response.json()) as {
-      html?: unknown;
-      revision?: unknown;
-      filePath?: unknown;
-    };
-    if (typeof payload.html !== 'string' || typeof payload.revision !== 'string') {
+    const payload = await this.readJson(response, 'GET', '/api/deck');
+    if (
+      payload === null ||
+      typeof payload.html !== 'string' ||
+      typeof payload.revision !== 'string'
+    ) {
       throw new Error('The host returned an invalid deck payload.');
     }
     const document = parseDeckHtml(payload.html);
@@ -208,7 +216,7 @@ export class HostDeckService implements DeckService {
       baseRevision
     });
     if (response.status === 409) {
-      const payload = await readJson(response);
+      const payload = await this.readJson(response, 'PUT', '/api/deck');
       const currentRevision =
         typeof payload?.revision === 'string' ? payload.revision : undefined;
       throw new DeckConflictError(
@@ -217,16 +225,16 @@ export class HostDeckService implements DeckService {
       );
     }
     if (!response.ok) {
-      throw await this.errorFor(response);
+      throw await this.errorFor(response, 'PUT', '/api/deck');
     }
-    const payload = await readJson(response);
+    const payload = await this.readJson(response, 'PUT', '/api/deck');
     if (typeof payload?.revision !== 'string') {
       throw new Error('The host returned no revision.');
     }
     return { revision: payload.revision };
   }
 
-  private request(
+  private async request(
     method: 'GET' | 'PUT',
     route: string,
     body?: unknown
@@ -236,41 +244,85 @@ export class HostDeckService implements DeckService {
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(method === 'PUT' ? { 'x-htmlppt-source': 'mcp' } : {})
     };
-    return fetch(`${this.hostUrl}${route}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
+    try {
+      return await fetch(`${this.hostUrl}${route}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(HOST_REQUEST_TIMEOUT_MS)
+      });
+    } catch (error) {
+      this.throwIfTimedOut(error, method, route);
+      throw error;
+    }
   }
 
-  private async errorFor(response: Response): Promise<Error> {
-    const detail = await response.text().catch(() => '');
+  private async readJson(
+    response: Response,
+    method: 'GET' | 'PUT',
+    route: string
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const value: unknown = await response.json();
+      return typeof value === 'object' && value !== null
+        ? (value as Record<string, unknown>)
+        : null;
+    } catch (error) {
+      // The request signal also bounds reading the response body.
+      this.throwIfTimedOut(error, method, route);
+      return null;
+    }
+  }
+
+  private async errorFor(
+    response: Response,
+    method: 'GET' | 'PUT',
+    route: string
+  ): Promise<Error> {
+    let detail = '';
+    try {
+      detail = await response.text();
+    } catch (error) {
+      this.throwIfTimedOut(error, method, route);
+    }
     return new Error(
       `Host request failed with status ${response.status}${detail ? `: ${detail}` : ''}`
     );
+  }
+
+  private throwIfTimedOut(
+    error: unknown,
+    method: 'GET' | 'PUT',
+    route: string
+  ): void {
+    if (isAbortError(error)) {
+      throw new Error(
+        `Host request ${method} ${route} timed out after ${HOST_REQUEST_TIMEOUT_MS} ms.`
+      );
+    }
   }
 }
 
 /**
  * Uses the host that owns the deck when a registered session is alive and its
- * authenticated health endpoint responds. HTMLPPT_MCP_MODE=direct skips the
- * registry and writes the file directly; any other value allows host
- * auto-selection.
+ * authenticated health endpoint responds. HTMLPPT_MCP_MODE=direct is a
+ * universal override: it forces direct file access even when hostUrl/token are
+ * provided. Any other value allows host auto-selection.
  */
 export async function createDeckService(
   filePath: string,
   options: DeckServiceOptions = {}
 ): Promise<DeckService> {
+  if (process.env.HTMLPPT_MCP_MODE === 'direct') {
+    return new DirectDeckService();
+  }
+
   const { hostUrl, token } = options;
   if (hostUrl !== undefined || token !== undefined) {
     if (!hostUrl || !token) {
       throw new Error('Host mode requires both a host URL and a token.');
     }
     return new HostDeckService({ hostUrl, token });
-  }
-
-  if (process.env.HTMLPPT_MCP_MODE === 'direct') {
-    return new DirectDeckService();
   }
 
   const session = await findLiveSession(filePath);
@@ -281,17 +333,4 @@ export async function createDeckService(
     });
   }
   return new DirectDeckService();
-}
-
-async function readJson(
-  response: Response
-): Promise<Record<string, unknown> | null> {
-  try {
-    const value: unknown = await response.json();
-    return typeof value === 'object' && value !== null
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }

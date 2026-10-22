@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  createServer as createHttpServer,
+  type ServerResponse
+} from 'node:http';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import {
@@ -25,10 +29,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DeckConflictError,
   DirectDeckService,
+  HOST_REQUEST_TIMEOUT_MS,
   HostDeckService,
   createDeckService
 } from '../src/deck-service.js';
-import { findLiveSession } from '../src/host-session.js';
+import {
+  HEALTH_TIMEOUT_MS,
+  findLiveSession
+} from '../src/host-session.js';
+import { openEventStream, type SseStream } from './sse.js';
 
 interface HostContext {
   host: HostHandle;
@@ -43,18 +52,18 @@ let host: HostHandle | undefined;
 let previousHome: string | undefined;
 let previousMode: string | undefined;
 
-interface SseEvent {
-  event: string;
-  data: Record<string, unknown>;
-}
-
 interface HangingHost {
   port: number;
   close: () => Promise<void>;
 }
 
+interface StubHost {
+  port: number;
+  base: string;
+  close: () => Promise<void>;
+}
+
 const TIMEOUT = Symbol('timeout');
-const SSE_TIMEOUT_MS = 5_000;
 
 function requireElement(root: ParentNode, selector: string): Element {
   const element = root.querySelector(selector);
@@ -89,101 +98,11 @@ function withTimeout<T>(
   });
 }
 
-/** Minimal SSE reader with a bounded wait for each event. */
-class SseStream {
-  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
-  private readonly decoder = new TextDecoder();
-  private buffer = '';
-  private readonly queue: SseEvent[] = [];
-  private ended = false;
-
-  constructor(reader: ReadableStreamDefaultReader<Uint8Array>) {
-    this.reader = reader;
-  }
-
-  async next(timeoutMs = SSE_TIMEOUT_MS): Promise<SseEvent> {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const queued = this.queue.shift();
-      if (queued) {
-        return queued;
-      }
-      if (this.ended) {
-        throw new Error('The SSE stream ended before the expected event.');
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error(
-          `Timed out after ${timeoutMs} ms waiting for an SSE event.`
-        );
-      }
-      const result = await withTimeout(this.reader.read(), remaining);
-      if (result === TIMEOUT) {
-        throw new Error(
-          `Timed out after ${timeoutMs} ms waiting for an SSE event.`
-        );
-      }
-      if (result.done) {
-        this.ended = true;
-        continue;
-      }
-      this.buffer += this.decoder.decode(result.value, { stream: true });
-      this.drain();
-    }
-  }
-
-  async close(): Promise<void> {
-    await this.reader.cancel().catch(() => undefined);
-  }
-
-  private drain(): void {
-    for (;;) {
-      const boundary = this.buffer.indexOf('\n\n');
-      if (boundary === -1) {
-        return;
-      }
-      const block = this.buffer.slice(0, boundary);
-      this.buffer = this.buffer.slice(boundary + 2);
-      let eventName = 'message';
-      const data: string[] = [];
-      for (const rawLine of block.split('\n')) {
-        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-        if (line.startsWith(':')) {
-          continue;
-        }
-        const colon = line.indexOf(':');
-        const field = colon === -1 ? line : line.slice(0, colon);
-        const value =
-          colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
-        if (field === 'event') {
-          eventName = value;
-        } else if (field === 'data') {
-          data.push(value);
-        }
-      }
-      if (data.length === 0) {
-        continue;
-      }
-      const parsed: unknown = JSON.parse(data.join('\n'));
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('The SSE data is not a JSON object.');
-      }
-      this.queue.push({
-        event: eventName,
-        data: parsed as Record<string, unknown>
-      });
-    }
-  }
-}
-
 async function connectEvents(ctx: HostContext): Promise<SseStream> {
   const response = await fetch(
     `${ctx.base}/api/events?token=${encodeURIComponent(ctx.token)}`
   );
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed to open the event stream: ${response.status}`);
-  }
-  return new SseStream(response.body.getReader());
+  return openEventStream(response);
 }
 
 function sessionFilePath(filePath: string): string {
@@ -265,6 +184,37 @@ async function hangingHost(): Promise<HangingHost> {
       for (const socket of sockets) {
         socket.destroy();
       }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+}
+
+/**
+ * Serves a scripted /api/health response from a real HTTP server. Requests to
+ * other routes stay unanswered, so a successful health check can be followed
+ * by a request that never completes.
+ */
+async function stubHost(
+  health: (response: ServerResponse) => void
+): Promise<StubHost> {
+  const server = createHttpServer((request, response) => {
+    if (request.url === '/api/health') {
+      health(response);
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('The stub server did not expose a TCP port.');
+  }
+  return {
+    port: address.port,
+    base: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   };
@@ -546,7 +496,7 @@ describe('findLiveSession', () => {
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('falls back within a bounded time when the host never answers', async () => {
+  it('keeps the entry when the health check times out', async () => {
     deckPath = await copyFixture('basic.deck.html', dir);
     const hanging = await hangingHost();
     try {
@@ -556,13 +506,62 @@ describe('findLiveSession', () => {
       const startedAt = Date.now();
       expect(await findLiveSession(deckPath)).toBeNull();
 
-      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(await readSession(sessionFilePath(deckPath))).toEqual(entry);
+      expect(Date.now() - startedAt).toBeLessThan(HEALTH_TIMEOUT_MS + 2_000);
+    } finally {
+      await hanging.close();
+    }
+  });
+
+  it('removes a session whose health endpoint returns 401', async () => {
+    const ctx = await setupHost();
+    await writeSession({
+      path: deckPath,
+      port: ctx.host.port,
+      token: 'wrong-token',
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      revision: ctx.revision
+    });
+
+    expect(await findLiveSession(deckPath)).toBeNull();
+    await expect(
+      readFile(sessionFilePath(deckPath), 'utf8')
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('removes a session whose health payload is malformed', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const malformed = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: 'yes' }));
+    });
+    try {
+      await writeSession(staleEntry({ port: malformed.port }));
+
+      expect(await findLiveSession(deckPath)).toBeNull();
       await expect(
         readFile(sessionFilePath(deckPath), 'utf8')
       ).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      await hanging.close();
+      await malformed.close();
     }
+  });
+
+  it('removes a registry entry that points at a different path', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const otherPath = join(dir, 'other.deck.html');
+    await mkdir(join(dir, 'home', 'sessions'), { recursive: true });
+    await writeFile(
+      sessionFilePath(deckPath),
+      JSON.stringify(staleEntry({ path: otherPath })),
+      'utf8'
+    );
+
+    expect(await findLiveSession(deckPath)).toBeNull();
+    await expect(
+      readFile(sessionFilePath(deckPath), 'utf8')
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -654,6 +653,62 @@ describe('createDeckService', () => {
     expect(result.revision).not.toBe(snapshot.revision);
   });
 
+  it('falls back to direct mode without removing a busy session', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const hanging = await hangingHost();
+    try {
+      const entry = staleEntry({ port: hanging.port });
+      await writeSession(entry);
+
+      const service = await createDeckService(deckPath);
+
+      expect(service).toBeInstanceOf(DirectDeckService);
+      expect(await readSession(sessionFilePath(deckPath))).toEqual(entry);
+      const snapshot = await service.load(deckPath);
+      const result = await service.save(deckPath, snapshot, (draft) => {
+        setText(requireElement(draft, '[data-ppt-el="e1"]'), 'Direct while busy');
+      });
+      expect(await readFile(deckPath, 'utf8')).toContain('Direct while busy');
+      expect(result.revision).toBe(
+        hashHtml(await readFile(deckPath, 'utf8'))
+      );
+    } finally {
+      await hanging.close();
+    }
+  });
+
+  it('times out a host that stops answering after the health check', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const stalled = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      await writeSession(staleEntry({ port: stalled.port }));
+
+      const service = await createDeckService(deckPath);
+      expect(service).toBeInstanceOf(HostDeckService);
+
+      const startedAt = Date.now();
+      const outcome = await withTimeout(
+        service.load(deckPath).then(
+          () => null,
+          (error: unknown) => error as Error
+        ),
+        HOST_REQUEST_TIMEOUT_MS + 2_000
+      );
+      const elapsed = Date.now() - startedAt;
+      if (outcome === TIMEOUT) {
+        throw new Error('The host request did not time out.');
+      }
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/timed out/i);
+      expect(elapsed).toBeLessThan(HOST_REQUEST_TIMEOUT_MS + 2_000);
+    } finally {
+      await stalled.close();
+    }
+  });
+
   it('forces direct mode with HTMLPPT_MCP_MODE=direct and keeps the session', async () => {
     const ctx = await setupHost();
     const entry = await writeHostSession(ctx);
@@ -670,6 +725,21 @@ describe('createDeckService', () => {
     const saved = await readFile(deckPath, 'utf8');
     expect(saved).toContain('Forced direct edit');
     expect(result.revision).toBe(hashHtml(saved));
+  });
+
+  it('forces direct mode even with explicit host options', async () => {
+    const ctx = await setupHost();
+    process.env.HTMLPPT_MCP_MODE = 'direct';
+
+    const service = await createDeckService(deckPath, {
+      hostUrl: ctx.base,
+      token: ctx.token
+    });
+
+    expect(service).toBeInstanceOf(DirectDeckService);
+    expect(
+      await createDeckService(deckPath, { hostUrl: ctx.base })
+    ).toBeInstanceOf(DirectDeckService);
   });
 
   it('allows host auto-selection for other mode values', async () => {

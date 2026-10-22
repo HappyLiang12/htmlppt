@@ -4,6 +4,7 @@ export {
   listSessions,
   readSession,
   removeSession,
+  removeSessionIfUnchanged,
   sessionKey,
   sessionsDirectory,
   writeSession

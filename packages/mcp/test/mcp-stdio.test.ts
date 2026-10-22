@@ -20,6 +20,7 @@ import {
   StdioClientTransport
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { openEventStream, type SseStream } from './sse.js';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const packageRoot = join(repoRoot, 'packages', 'mcp');
@@ -159,89 +160,6 @@ async function callTool(
 ): Promise<{ result: ToolResult; payload: Record<string, unknown> }> {
   const result = (await client.callTool({ name, arguments: args })) as ToolResult;
   return { result, payload: resultPayload(result) };
-}
-
-interface SseEvent {
-  event: string;
-  data: Record<string, unknown>;
-}
-
-/** Minimal SSE reader used to prove the editor sees the MCP revision source. */
-class EventReader {
-  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
-  private readonly decoder = new TextDecoder();
-  private buffer = '';
-  private readonly queue: SseEvent[] = [];
-  private ended = false;
-
-  constructor(response: Response) {
-    if (!response.body) {
-      throw new Error('Expected an SSE response body.');
-    }
-    this.reader = response.body.getReader();
-  }
-
-  async next(): Promise<SseEvent> {
-    for (;;) {
-      const queued = this.queue.shift();
-      if (queued) {
-        return queued;
-      }
-      if (this.ended) {
-        throw new Error('The SSE stream ended before the expected event.');
-      }
-      const result = await this.reader.read();
-      if (result.done) {
-        this.ended = true;
-        continue;
-      }
-      this.buffer += this.decoder.decode(result.value, { stream: true });
-      this.drain();
-    }
-  }
-
-  async close(): Promise<void> {
-    await this.reader.cancel().catch(() => undefined);
-  }
-
-  private drain(): void {
-    for (;;) {
-      const boundary = this.buffer.indexOf('\n\n');
-      if (boundary === -1) {
-        return;
-      }
-      const block = this.buffer.slice(0, boundary);
-      this.buffer = this.buffer.slice(boundary + 2);
-      let eventName = 'message';
-      const data: string[] = [];
-      for (const rawLine of block.split('\n')) {
-        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-        if (line.startsWith(':')) {
-          continue;
-        }
-        const colon = line.indexOf(':');
-        const field = colon === -1 ? line : line.slice(0, colon);
-        const value =
-          colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
-        if (field === 'event') {
-          eventName = value;
-        } else if (field === 'data') {
-          data.push(value);
-        }
-      }
-      if (data.length === 0) {
-        continue;
-      }
-      const parsed: unknown = JSON.parse(data.join('\n'));
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('The SSE data is not a JSON object.');
-      }
-      this.queue.push({
-        event: eventName,
-        data: parsed as Record<string, unknown>
-      });
-    }
-  }
 }
 
 beforeAll(async () => {
@@ -516,7 +434,7 @@ describe('htmlppt MCP stdio server', () => {
     });
     const base = new URL(host.url).origin;
     const authorization = { authorization: `Bearer ${token}` };
-    let events: EventReader | undefined;
+    let events: SseStream | undefined;
     try {
       const health = await fetch(`${base}/api/health`, {
         headers: authorization
@@ -533,11 +451,10 @@ describe('htmlppt MCP stdio server', () => {
       });
 
       const eventsResponse = await fetch(
-        `${base}/api/events?token=${encodeURIComponent(token)}`,
-        { signal: AbortSignal.timeout(10_000) }
+        `${base}/api/events?token=${encodeURIComponent(token)}`
       );
       expect(eventsResponse.status).toBe(200);
-      events = new EventReader(eventsResponse);
+      events = openEventStream(eventsResponse);
       expect((await events.next()).event).toBe('hello');
 
       const relativePath = join('hosted', 'basic.deck.html');
