@@ -15,12 +15,13 @@ truth: there is no sidecar project file.
 - Create a new presentation from an outline, document, or rough notes.
 - Edit an existing deck: text, styling, slides, notes, transitions, or order.
 - Validate a deck before sharing or exporting.
-- Open the visual editor for human review, or export a standalone HTML file.
+- Open the visual editor for human review, or export to standalone HTML, PDF,
+  or one PNG per slide.
 - Automate deck work through the htmlppt MCP server (`htmlppt-mcp` or
   `htmlppt mcp`) or the `htmlppt` CLI.
 
 Do not use this skill for `.pptx`/PowerPoint files, video, or real-time
-collaboration. v1 supports static HTML decks and HTML export only.
+collaboration. v1 supports static HTML decks and HTML, PDF, and PNG export.
 
 ## Choose a workflow
 
@@ -144,8 +145,9 @@ the full runtime from [examples/basic.html](examples/basic.html).
    someone edited the file after your last read or write. Call `get_outline`,
    reconcile the change, and retry. Never bypass a conflict by overwriting the
    whole file.
-7. Export with `export_deck` and `format: "html"`. The result is a
-   self-contained `.export.html` file. PDF and PNG are not available in v1.
+7. Export with `export_deck` and `format: "html"` for a self-contained
+   `.export.html` file, or `format: "pdf"` / `"png"` for rendered output. PDF
+   and PNG need a system Chrome, Edge, or Chromium (or `HTMLPPT_CHROMIUM`).
 
 Every mutation returns a new `revision`. Reads return the revision they
 observed. Pass no revision explicitly: the MCP server tracks the last
@@ -164,8 +166,14 @@ htmlppt open deck.html --no-browser --port 0
 htmlppt stop deck.html                # stop one host
 htmlppt stop --all                    # stop every live host
 htmlppt export deck.html --format html --out dist/deck.html
+htmlppt export deck.html --format pdf --out dist/deck.pdf
+htmlppt export deck.html --format png --out dist/png
 htmlppt mcp                           # same stdio server as htmlppt-mcp
 ```
+
+PDF and PNG export launch a system Chrome, Edge, or Chromium; set
+`HTMLPPT_CHROMIUM` to an executable path when auto-discovery fails. `--out` is
+a file for `html`/`pdf` and a directory for `png`.
 
 `open` reuses a live editor for the same deck and prints its URL again. If a
 recorded host is alive but not answering health checks, `open` refuses to start

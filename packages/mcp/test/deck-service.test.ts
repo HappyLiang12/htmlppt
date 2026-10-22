@@ -28,6 +28,7 @@ import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DeckConflictError,
+  DeckExportError,
   DirectDeckService,
   HOST_REQUEST_TIMEOUT_MS,
   HostDeckService,
@@ -821,4 +822,86 @@ describe('createDeckService', () => {
       createDeckService(deckPath, { hostUrl: 'http://127.0.0.1:1' })
     ).rejects.toThrow(/token/i);
   });
+});
+
+describe('DeckService export', () => {
+  it(
+    'renders PDF and PNG files to an explicit directory',
+    async () => {
+      deckPath = await copyFixture('basic.deck.html', dir);
+      const original = await readFile(deckPath, 'utf8');
+      const outDir = join(dir, 'renders');
+      const service = new DirectDeckService();
+
+      const pdfFiles = await service.exportFiles(deckPath, 'pdf', outDir);
+      expect(pdfFiles).toEqual([join(outDir, 'basic.deck.pdf')]);
+      expect(
+        (await readFile(pdfFiles[0]!)).subarray(0, 5).toString('latin1')
+      ).toBe('%PDF-');
+
+      const pngFiles = await service.exportFiles(deckPath, 'png', outDir);
+      expect(pngFiles).toEqual([
+        join(outDir, 'basic.deck-s1.png'),
+        join(outDir, 'basic.deck-s2.png')
+      ]);
+      for (const file of pngFiles) {
+        expect((await readFile(file)).subarray(0, 8)).toEqual(
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        );
+      }
+      expect(await readFile(deckPath, 'utf8')).toBe(original);
+    },
+    30_000
+  );
+
+  it(
+    'reports an unavailable renderer as a structured export error',
+    async () => {
+      deckPath = await copyFixture('basic.deck.html', dir);
+      const previous = process.env.HTMLPPT_CHROMIUM;
+      process.env.HTMLPPT_CHROMIUM = join(dir, 'missing-browser.exe');
+      try {
+        const error = await rejection(
+          new DirectDeckService().exportFiles(deckPath, 'pdf', join(dir, 'out'))
+        );
+        expect(error).toBeInstanceOf(DeckExportError);
+        expect((error as DeckExportError).code).toBe('renderer-unavailable');
+        expect(error.message).toContain('HTMLPPT_CHROMIUM');
+      } finally {
+        if (previous === undefined) delete process.env.HTMLPPT_CHROMIUM;
+        else process.env.HTMLPPT_CHROMIUM = previous;
+      }
+    },
+    30_000
+  );
+
+  it(
+    'exports through the host and keeps its outDir confinement',
+    async () => {
+      const ctx = await setupHost();
+      const service = new HostDeckService({
+        hostUrl: ctx.base,
+        token: ctx.token
+      });
+
+      const files = await service.exportFiles(
+        deckPath,
+        'pdf',
+        join(dir, 'host-renders')
+      );
+      expect(files).toEqual([join(dir, 'host-renders', 'basic.deck.pdf')]);
+      expect((await readFile(files[0]!)).subarray(0, 5).toString('latin1')).toBe(
+        '%PDF-'
+      );
+
+      const outside = join(dir, '..', `outside-${randomUUID()}`);
+      const error = await rejection(
+        service.exportFiles(deckPath, 'pdf', outside)
+      );
+      expect(error).toBeInstanceOf(DeckExportError);
+      expect((error as DeckExportError).code).toBe('export-failed');
+      expect(error.message).toContain('inside the deck directory');
+    },
+    30_000
+  );
 });

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
+  detectSlides,
   getOutline,
   serializeExport,
   validateDeck,
@@ -385,15 +386,13 @@ export async function runCli(
 
   program
     .command('export <file>')
-    .description('Export a deck')
-    .option('--format <format>', 'output format', 'html')
-    .option('--out <path>', 'output path')
+    .description('Export a deck as HTML, PDF, or one PNG per slide')
+    .option('--format <format>', 'output format: html, pdf, or png', 'html')
+    .option(
+      '--out <path>',
+      'output file for html/PDF, output directory for PNG'
+    )
     .action(async (file: string, options: { format: string; out?: string }) => {
-      if (options.format !== 'html') {
-        throw new Error(
-          'Only html export is available in this milestone. Use --format html.'
-        );
-      }
       const sourcePath = resolve(io.cwd, file);
       const html = await readFile(sourcePath, 'utf8');
       const doc = parseDeckHtml(html);
@@ -404,11 +403,46 @@ export async function runCli(
         return;
       }
       const parsedPath = parse(sourcePath);
-      const destination = options.out
-        ? resolve(io.cwd, options.out)
-        : join(parsedPath.dir, `${parsedPath.name}.export.html`);
-      await writeDeckFileAtomic(destination, serializeExport(doc));
-      io.stdout(`Exported ${destination}`);
+      if (options.format === 'html') {
+        const destination = options.out
+          ? resolve(io.cwd, options.out)
+          : join(parsedPath.dir, `${parsedPath.name}.export.html`);
+        await writeDeckFileAtomic(destination, serializeExport(doc));
+        io.stdout(`Exported ${destination}`);
+        return;
+      }
+      if (options.format !== 'pdf' && options.format !== 'png') {
+        throw new Error(
+          `Unsupported export format "${options.format}". Use --format html, pdf, or png.`
+        );
+      }
+      const first = detectSlides(doc)[0];
+      const renderer = await import('@htmlppt/renderer');
+      if (options.format === 'pdf') {
+        const destination = options.out
+          ? resolve(io.cwd, options.out)
+          : join(parsedPath.dir, `${parsedPath.name}.pdf`);
+        await renderer.renderPdf({
+          html,
+          width: first.width,
+          height: first.height,
+          outPath: destination
+        });
+        io.stdout(`Exported ${destination}`);
+        return;
+      }
+      const outDir = options.out ? resolve(io.cwd, options.out) : parsedPath.dir;
+      await mkdir(outDir, { recursive: true });
+      const files = await renderer.renderPngs({
+        html,
+        width: first.width,
+        height: first.height,
+        outDir,
+        basename: parsedPath.name
+      });
+      for (const exported of files) {
+        io.stdout(`Exported ${exported}`);
+      }
     });
 
   program

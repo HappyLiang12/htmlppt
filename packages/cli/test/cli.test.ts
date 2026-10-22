@@ -223,14 +223,140 @@ describe('htmlppt cli', () => {
     await runCli(['new', 'deck.html'], { cwd, ...capture().io });
     const output = capture();
 
-    const code = await runCli(['export', 'deck.html', '--format', 'pdf'], {
+    const code = await runCli(['export', 'deck.html', '--format', 'jpg'], {
       cwd,
       ...output.io
     });
 
     expect(code).toBe(1);
-    expect(output.stderr.join('\n')).toContain('Only html export is available');
+    expect(output.stderr.join('\n')).toContain(
+      'Unsupported export format "jpg". Use --format html, pdf, or png.'
+    );
+    expect(await readdir(cwd)).toEqual(['deck.html']);
   });
+
+  it(
+    'exports a PDF beside the deck or to an explicit file',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+
+      const defaultOutput = capture();
+      const defaultCode = await runCli(
+        ['export', 'deck.html', '--format', 'pdf'],
+        { cwd, ...defaultOutput.io }
+      );
+      expect(defaultCode).toBe(0);
+      const defaultPath = join(cwd, 'deck.pdf');
+      expect(defaultOutput.stdout).toEqual([`Exported ${defaultPath}`]);
+      expect(
+        (await readFile(defaultPath)).subarray(0, 5).toString('latin1')
+      ).toBe('%PDF-');
+
+      const output = capture();
+      const code = await runCli(
+        ['export', 'deck.html', '--format', 'pdf', '--out', 'custom.pdf'],
+        { cwd, ...output.io }
+      );
+      expect(code).toBe(0);
+      expect(output.stdout).toEqual([`Exported ${join(cwd, 'custom.pdf')}`]);
+      expect((await readdir(cwd)).sort()).toEqual([
+        'custom.pdf',
+        'deck.html',
+        'deck.pdf'
+      ]);
+      expect(await readFile(join(cwd, 'deck.html'), 'utf8')).toContain(
+        'data-ppt-runtime="1"'
+      );
+    },
+    30_000
+  );
+
+  it(
+    'exports one PNG per slide beside the deck by default',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html', '--slides', '2'], {
+        cwd,
+        ...capture().io
+      });
+      const output = capture();
+
+      const code = await runCli(['export', 'deck.html', '--format', 'png'], {
+        cwd,
+        ...output.io
+      });
+
+      expect(code).toBe(0);
+      const expected = [join(cwd, 'deck-s1.png'), join(cwd, 'deck-s2.png')];
+      expect(output.stdout).toEqual(expected.map((file) => `Exported ${file}`));
+      for (const file of expected) {
+        const signature = await readFile(file);
+        expect(signature.subarray(0, 8)).toEqual(
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        );
+      }
+      expect((await readdir(cwd)).sort()).toEqual([
+        'deck-s1.png',
+        'deck-s2.png',
+        'deck.html'
+      ]);
+    },
+    30_000
+  );
+
+  it(
+    'treats --out as a PNG output directory and creates it',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html', '--slides', '1'], {
+        cwd,
+        ...capture().io
+      });
+      const output = capture();
+
+      const code = await runCli(
+        ['export', 'deck.html', '--format', 'png', '--out', 'renders'],
+        { cwd, ...output.io }
+      );
+
+      expect(code).toBe(0);
+      const expected = join(cwd, 'renders', 'deck-s1.png');
+      expect(output.stdout).toEqual([`Exported ${expected}`]);
+      expect((await readFile(expected)).subarray(0, 4)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47])
+      );
+    },
+    30_000
+  );
+
+  it(
+    'reports an unavailable Chromium with actionable guidance',
+    async () => {
+      const cwd = await makeTempDir('htmlppt-cli-');
+      await runCli(['new', 'deck.html'], { cwd, ...capture().io });
+      const previous = process.env.HTMLPPT_CHROMIUM;
+      process.env.HTMLPPT_CHROMIUM = join(cwd, 'missing-browser.exe');
+      try {
+        const output = capture();
+        const code = await runCli(
+          ['export', 'deck.html', '--format', 'pdf'],
+          { cwd, ...output.io }
+        );
+        expect(code).toBe(1);
+        expect(output.stderr.join('\n')).toContain('Chromium is unavailable');
+        expect(output.stderr.join('\n')).toContain('HTMLPPT_CHROMIUM');
+      } finally {
+        if (previous === undefined) {
+          delete process.env.HTMLPPT_CHROMIUM;
+        } else {
+          process.env.HTMLPPT_CHROMIUM = previous;
+        }
+      }
+      expect(await readdir(cwd)).toEqual(['deck.html']);
+    },
+    30_000
+  );
 
   it('routes help output through the injected io', async () => {
     const output = capture();

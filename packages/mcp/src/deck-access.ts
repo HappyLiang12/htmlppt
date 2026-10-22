@@ -6,6 +6,7 @@ import { readSession, sessionKey, sessionsDirectory } from '@htmlppt/host';
 import {
   createDeckService,
   type DeckSnapshot,
+  type ExportFormat,
   type SaveResult
 } from './deck-service.js';
 import { ToolError } from './errors.js';
@@ -61,6 +62,15 @@ export class DeckAccess {
 
   remember(filePath: string, snapshot: DeckSnapshot): void {
     this.snapshots.set(filePath, snapshot);
+  }
+
+  async exportDeck(
+    filePath: string,
+    format: ExportFormat,
+    outDir?: string
+  ): Promise<string[]> {
+    const service = await createDeckService(filePath);
+    return service.exportFiles(filePath, format, outDir);
   }
 }
 

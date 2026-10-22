@@ -701,10 +701,15 @@ export function registerTools(
     {
       title: 'Export deck',
       description:
-        'Export a deck to a self-contained HTML file. Additional formats arrive in a later milestone.',
+        'Export a deck as standalone HTML, PDF, or one PNG per slide. PDF and PNG require a system Chrome, Edge, or Chromium.',
       inputSchema: {
         path: deckPath,
-        format: z.literal('html').default('html'),
+        format: z
+          .enum(['html', 'pdf', 'png'])
+          .default('html')
+          .describe(
+            'html writes a cleaned standalone file; pdf and png render the slides.'
+          ),
         outDir: z
           .string()
           .min(1)
@@ -731,21 +736,35 @@ export function registerTools(
         const outputDirectory = args.outDir
           ? accessor.resolve(args.outDir)
           : parsedPath.dir;
-        const outputPath = path.join(
-          outputDirectory,
-          `${parsedPath.name}.export.html`
-        );
+        if (args.format === 'html') {
+          const outputPath = path.join(
+            outputDirectory,
+            `${parsedPath.name}.export.html`
+          );
+          context.operation = 'write';
+          context.outputPath = outputPath;
+          await mkdir(outputDirectory, { recursive: true });
+          await writeDeckFileAtomic(
+            outputPath,
+            serializeExport(snapshot.document)
+          );
+          return {
+            path: filePath,
+            format: 'html',
+            outputPath
+          };
+        }
         context.operation = 'write';
-        context.outputPath = outputPath;
-        await mkdir(outputDirectory, { recursive: true });
-        await writeDeckFileAtomic(
-          outputPath,
-          serializeExport(snapshot.document)
+        context.outputPath = outputDirectory;
+        const files = await accessor.exportDeck(
+          filePath,
+          args.format,
+          outputDirectory
         );
         return {
           path: filePath,
-          format: 'html',
-          outputPath
+          format: args.format,
+          files
         };
       });
     }

@@ -525,7 +525,7 @@ const INVALID_ARGUMENT_CASES: InvalidArgumentCase[] = [
   },
   { name: 'set_slide_order', invalidArgs: { path: 'deck.html', slideIds: [] } },
   { name: 'open_editor', invalidArgs: { path: 'deck.html', port: 70_000 } },
-  { name: 'export_deck', invalidArgs: { path: 'deck.html', format: 'pdf' } }
+  { name: 'export_deck', invalidArgs: { path: 'deck.html', format: 'jpg' } }
 ];
 
 let dir: string;
@@ -794,7 +794,10 @@ describe('htmlppt MCP stdio server', () => {
     const properties = exportTool?.inputSchema.properties as
       | Record<string, Record<string, unknown>>
       | undefined;
-    expect(properties?.format).toMatchObject({ const: 'html' });
+    expect(properties?.format).toMatchObject({
+      enum: ['html', 'pdf', 'png'],
+      default: 'html'
+    });
   });
 
   it('lists and serves the contract, authoring, and example resources', async () => {

@@ -132,7 +132,8 @@ CLI failures print a message to stderr and exit 1.
 | `Could not read the editor session registry at <dir>: ...` | The registry directory exists but is unreadable. Fix permissions, then retry the command. |
 | `Could not verify <n> editor session entries that are still in the registry at <dir>.` | Some entries survived pruning but could not be read or removed. Fix permissions, then retry `stop --all`. |
 | `Could not read the editor session entry for <path>.` | One entry is unreadable. Fix permissions on the registry, then retry. |
-| `Only html export is available in this milestone. Use --format html.` | PDF and PNG export are not available yet. |
+| `Chromium is unavailable. Install Google Chrome, Microsoft Edge or Chromium, or set HTMLPPT_CHROMIUM to its executable path.` | PDF/PNG export needs a local browser. Install one, or set `HTMLPPT_CHROMIUM` to a Chrome/Edge/Chromium executable. |
+| `Unsupported export format "<format>". Use --format html, pdf, or png.` | Fix `--format`. |
 | `Invalid --port. Use an integer between 0 and 65535.` | Fix the port number. |
 
 `open` reuses a live editor for the same deck and prints its existing
