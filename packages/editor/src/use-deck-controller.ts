@@ -7,10 +7,9 @@ import {
 } from '@htmlppt/core';
 import {
   DeckConflictError,
-  fetchDeck,
-  flushDeck,
-  saveDeck,
+  hostPersistence,
   tokenFromLocation,
+  type DeckPersistence,
   type DeckResponse
 } from './api';
 import { History, type HistoryEntry } from './history';
@@ -116,6 +115,8 @@ export interface DeckControllerActions {
   redo(): void;
   reload(deck?: DeckResponse): Promise<void>;
   overwrite(): Promise<void>;
+  /** Restores an IndexedDB draft as a dirty deck that autosaves next. */
+  restoreDraft(html: string): void;
   /** Consumes an SSE revision (or hello) signal from the host. */
   receiveRevision(event: DeckRevisionEvent): void;
   /** Best-effort keepalive write for an unloading page with unsaved edits. */
@@ -129,6 +130,10 @@ export interface DeckController {
 
 export interface DeckControllerOptions {
   token?: string;
+  /**
+   * Overrides host HTTP persistence; standalone tabs supply a local adapter.
+   */
+  persistence?: DeckPersistence;
   /**
    * Bridges pasted-object measurement to the rendered preview. The master
    * document is inert, so class-supplied positions require live layout; when
@@ -215,6 +220,9 @@ export function useDeckController(
   const historyRef = useRef(new History<string, number>());
   const clipboardRef = useRef<string[]>([]);
   const tokenRef = useRef(options.token ?? tokenFromLocation());
+  const persistenceRef = useRef<DeckPersistence>(
+    options.persistence ?? hostPersistence(tokenRef.current)
+  );
   const measurePastedRef = useRef(options.measurePastedObject);
   measurePastedRef.current = options.measurePastedObject;
 
@@ -358,7 +366,7 @@ export function useDeckController(
     const html = serializeDeck(master);
     update({ status: 'saving', error: '' });
     void enqueueSave((revision) =>
-      saveDeck(tokenRef.current, html, revision)
+      persistenceRef.current.save(html, revision)
     ).catch(() => undefined);
   };
 
@@ -372,7 +380,7 @@ export function useDeckController(
       await saveChainRef.current;
       update({ status: 'loading', error: '' });
       try {
-        const deck = provided ?? (await fetchDeck(tokenRef.current));
+        const deck = provided ?? (await persistenceRef.current.load());
         const master = parseDeck(deck.html);
         if (!hasEditorArtifacts(master)) {
           normalizeDeck(master);
@@ -518,7 +526,7 @@ export function useDeckController(
         const editVersion = editVersionRef.current;
         const generation = operationGenerationRef.current;
         try {
-          const deck = await fetchDeck(tokenRef.current);
+          const deck = await persistenceRef.current.load();
           if (operationGenerationRef.current !== generation) continue;
           if (deck.revision === revisionRef.current && editVersionRef.current === editVersion) {
             update({ status: 'ready' });
@@ -842,9 +850,59 @@ export function useDeckController(
     autosaveRef.current?.cancel();
     update({ status: 'saving', error: '' });
     await enqueueSave((revision) =>
-      saveDeck(tokenRef.current, html, revision)
+      persistenceRef.current.save(html, revision)
     );
   }, [enqueueSave, settlePendingEdits, update]);
+
+  const restoreDraft = useCallback(
+    (html: string) => {
+      // A recovered draft is newer than whatever the host currently holds, so
+      // it replaces the document but keeps the loaded revision as the base for
+      // the next save.
+      saveGenerationRef.current += 1;
+      autosaveRef.current?.cancel();
+      for (const edit of pendingEditsRef.current.values()) edit.discard();
+      pendingEditsRef.current.clear();
+      const master = parseDeck(html);
+      if (!hasEditorArtifacts(master)) {
+        normalizeDeck(master);
+      }
+      const previousSlides = slidesRef.current;
+      const previousActiveId =
+        previousSlides[activeIndexRef.current]?.id ?? null;
+      const source = sourceDocFor(master, 0);
+      let nextActive = 0;
+      if (previousActiveId) {
+        const found = source.slides.findIndex(
+          (slide) => slide.id === previousActiveId
+        );
+        if (found >= 0) nextActive = found;
+      }
+      const activeIndex = clampSlideIndex(nextActive, source.slides.length);
+      const slide = source.slides[activeIndex];
+      masterRef.current = master;
+      slidesRef.current = source.slides;
+      activeIndexRef.current = activeIndex;
+      historyRef.current.clear();
+      historyRef.current.push(serializeDeck(master), { meta: activeIndex });
+      update({
+        master,
+        slides: source.slides,
+        activeIndex,
+        srcDoc: slide ? buildSlideSrcDoc(master, slide) : '',
+        selection: null,
+        selections: [],
+        dirty: true,
+        pending: false,
+        status: 'saving',
+        conflict: null,
+        documentEpoch: stateRef.current.documentEpoch + 1,
+        error: ''
+      });
+      scheduleAutosaveRef.current();
+    },
+    [update]
+  );
 
   const restore = useCallback(
     (entry: HistoryEntry<string, number>) => {
@@ -897,7 +955,7 @@ export function useDeckController(
       update({ status: 'loading', recoveryBusy: true, error: '' });
       try {
         await saveChainRef.current;
-        const deck = provided ?? (await fetchDeck(tokenRef.current));
+        const deck = provided ?? (await persistenceRef.current.load());
         await applyExternal(deck, editVersion, generation);
       } catch (cause) {
         update({ status: 'error', error: toMessage(cause) });
@@ -925,7 +983,8 @@ export function useDeckController(
     update({ status: 'saving', recoveryBusy: true, error: '' });
     try {
       await enqueueSave(
-        (revision) => saveDeck(tokenRef.current, html, revision, { force: true }),
+        (revision) =>
+          persistenceRef.current.save(html, revision, { force: true }),
         stateRef.current.conflict
       );
     } catch {
@@ -941,7 +1000,7 @@ export function useDeckController(
   const flushBeforeUnload = useCallback(() => {
     const master = masterRef.current;
     if (!master || !stateRef.current.dirty || stateRef.current.pending || stateRef.current.conflict || externalBusyRef.current) return;
-    flushDeck(tokenRef.current, serializeDeck(master), revisionRef.current);
+    persistenceRef.current.flush(serializeDeck(master), revisionRef.current);
   }, []);
 
   const actions = useMemo<DeckControllerActions>(
@@ -969,6 +1028,7 @@ export function useDeckController(
       redo,
       reload,
       overwrite,
+      restoreDraft,
       receiveRevision,
       flushBeforeUnload
     }),
@@ -996,6 +1056,7 @@ export function useDeckController(
       redo,
       reload,
       overwrite,
+      restoreDraft,
       receiveRevision,
       flushBeforeUnload
     ]

@@ -108,6 +108,7 @@ export function mapShortcut(
       return null;
     }
     if (key === 'z') return { type: 'undo' };
+    if (key === 'y') return { type: 'redo' };
     if (key === 's') return { type: 'save' };
     if (key === 'd') return { type: 'duplicate' };
     if (key === 'g') return { type: 'group' };

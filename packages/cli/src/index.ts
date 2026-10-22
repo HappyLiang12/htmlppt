@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
 import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
+  detectSlides,
   getOutline,
   serializeExport,
   validateDeck,
@@ -267,6 +268,40 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   return true;
 }
 
+const SOURCE_OVERWRITE_MESSAGE =
+  'Refusing to overwrite the source deck. Choose a different --out path.';
+
+function comparablePath(value: string): string {
+  const resolved = resolve(value);
+  // Windows paths are case-insensitive, so a case variant names the same file.
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * The source deck must survive every export. Compare the resolved paths and,
+ * when both exist, their real paths so a symlink alias is also refused.
+ */
+async function rejectSourceOverwrite(
+  source: string,
+  destination: string
+): Promise<void> {
+  let same = comparablePath(source) === comparablePath(destination);
+  if (!same) {
+    try {
+      const [sourceReal, destinationReal] = await Promise.all([
+        realpath(source),
+        realpath(destination)
+      ]);
+      same = comparablePath(sourceReal) === comparablePath(destinationReal);
+    } catch {
+      // A missing destination cannot alias the source through realpath.
+    }
+  }
+  if (same) {
+    throw new Error(SOURCE_OVERWRITE_MESSAGE);
+  }
+}
+
 function printDiagnostics(result: ValidationResult, io: CliIO): void {
   for (const diagnostic of result.errors) {
     io.stderr(`ERROR ${diagnostic.code}: ${diagnostic.message}`);
@@ -385,15 +420,13 @@ export async function runCli(
 
   program
     .command('export <file>')
-    .description('Export a deck')
-    .option('--format <format>', 'output format', 'html')
-    .option('--out <path>', 'output path')
+    .description('Export a deck as HTML, PDF, or one PNG per slide')
+    .option('--format <format>', 'output format: html, pdf, or png', 'html')
+    .option(
+      '--out <path>',
+      'output file for html/PDF, output directory for PNG'
+    )
     .action(async (file: string, options: { format: string; out?: string }) => {
-      if (options.format !== 'html') {
-        throw new Error(
-          'Only html export is available in this milestone. Use --format html.'
-        );
-      }
       const sourcePath = resolve(io.cwd, file);
       const html = await readFile(sourcePath, 'utf8');
       const doc = parseDeckHtml(html);
@@ -404,11 +437,56 @@ export async function runCli(
         return;
       }
       const parsedPath = parse(sourcePath);
-      const destination = options.out
-        ? resolve(io.cwd, options.out)
-        : join(parsedPath.dir, `${parsedPath.name}.export.html`);
-      await writeDeckFileAtomic(destination, serializeExport(doc));
-      io.stdout(`Exported ${destination}`);
+      if (options.format === 'html') {
+        const destination = options.out
+          ? resolve(io.cwd, options.out)
+          : join(parsedPath.dir, `${parsedPath.name}.export.html`);
+        await rejectSourceOverwrite(sourcePath, destination);
+        await writeDeckFileAtomic(destination, serializeExport(doc));
+        io.stdout(`Exported ${destination}`);
+        return;
+      }
+      if (options.format !== 'pdf' && options.format !== 'png') {
+        throw new Error(
+          `Unsupported export format "${options.format}". Use --format html, pdf, or png.`
+        );
+      }
+      const slides = detectSlides(doc);
+      const first = slides[0];
+      if (options.format === 'pdf') {
+        const destination = options.out
+          ? resolve(io.cwd, options.out)
+          : join(parsedPath.dir, `${parsedPath.name}.pdf`);
+        await rejectSourceOverwrite(sourcePath, destination);
+        const renderer = await import('@htmlppt/renderer');
+        await renderer.renderPdf({
+          html,
+          width: first.width,
+          height: first.height,
+          outPath: destination
+        });
+        io.stdout(`Exported ${destination}`);
+        return;
+      }
+      const outDir = options.out ? resolve(io.cwd, options.out) : parsedPath.dir;
+      for (let index = 0; index < slides.length; index += 1) {
+        await rejectSourceOverwrite(
+          sourcePath,
+          join(outDir, `${parsedPath.name}-s${index + 1}.png`)
+        );
+      }
+      await mkdir(outDir, { recursive: true });
+      const renderer = await import('@htmlppt/renderer');
+      const files = await renderer.renderPngs({
+        html,
+        width: first.width,
+        height: first.height,
+        outDir,
+        basename: parsedPath.name
+      });
+      for (const exported of files) {
+        io.stdout(`Exported ${exported}`);
+      }
     });
 
   program

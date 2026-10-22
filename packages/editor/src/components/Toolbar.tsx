@@ -1,5 +1,6 @@
 import type { ShapeKind } from '@htmlppt/core';
 import type { SaveStatus } from '../use-deck-controller';
+import { ExportMenu, type ExportFormat } from './ExportMenu';
 import { InsertMenu } from './InsertMenu';
 
 export type EditorView = 'normal' | 'sorter';
@@ -23,9 +24,17 @@ export interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   onPlay: () => void;
+  onOpenHelp: () => void;
   onViewChange: (view: EditorView) => void;
   onPreviousSlide: () => void;
   onNextSlide: () => void;
+  onExport: (format: ExportFormat) => void;
+  exporting: ExportFormat | null;
+  exportSignal: number;
+  /** Upload-only standalone tabs cannot write the file or render PDF/PNG. */
+  standaloneUpload?: boolean;
+  /** Any standalone tab lacks the host renderer required for PDF/PNG. */
+  standaloneMode?: boolean;
 }
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
@@ -40,7 +49,7 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
 };
 
 const BUTTON_CLASS =
-  'rounded border border-white/15 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40';
+  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
 const ACTIVE_VIEW_CLASS =
   'rounded border border-amber-400/70 bg-amber-400/10 px-2 py-1 text-xs text-amber-200';
 
@@ -63,9 +72,15 @@ export function Toolbar({
   onUndo,
   onRedo,
   onPlay,
+  onOpenHelp,
   onViewChange,
   onPreviousSlide,
-  onNextSlide
+  onNextSlide,
+  onExport,
+  exporting,
+  exportSignal,
+  standaloneUpload = false,
+  standaloneMode = false
 }: ToolbarProps) {
   return (
     <header
@@ -90,8 +105,21 @@ export function Toolbar({
               : 'text-zinc-400'
         }`}
       >
-        {STATUS_LABEL[status]}
+        {standaloneMode && status === 'ready'
+          ? '已開啟'
+          : status === 'saved' && standaloneUpload
+            ? '已暫存'
+            : STATUS_LABEL[status]}
       </span>
+      {standaloneMode && (
+        <span
+          data-testid="standalone-badge"
+          className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] text-amber-200"
+          title="未連上 host；下載 HTML 或按 Ctrl+S 才會寫出檔案"
+        >
+          獨立模式
+        </span>
+      )}
 
       <div className="flex items-center gap-1">
         <button
@@ -212,6 +240,17 @@ export function Toolbar({
       <div className="ml-auto flex items-center gap-1">
         <button
           type="button"
+          data-testid="shortcuts-open"
+          aria-label="鍵盤快速鍵"
+          aria-haspopup="dialog"
+          title="鍵盤快速鍵（?）"
+          className={BUTTON_CLASS}
+          onClick={onOpenHelp}
+        >
+          快速鍵
+        </button>
+        <button
+          type="button"
           data-testid="play"
           className={BUTTON_CLASS}
           title="播放"
@@ -219,15 +258,12 @@ export function Toolbar({
         >
           播放
         </button>
-        <button
-          type="button"
-          data-testid="export-html"
-          className={BUTTON_CLASS}
-          title="匯出 HTML（M5 提供）"
-          disabled
-        >
-          匯出 HTML
-        </button>
+        <ExportMenu
+          signal={exportSignal}
+          exporting={exporting}
+          standalone={standaloneMode}
+          onExport={onExport}
+        />
       </div>
     </header>
   );

@@ -89,7 +89,7 @@ export interface InspectorProps {
 }
 
 const ACTION_CLASS =
-  'rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40';
+  'rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:cursor-not-allowed disabled:opacity-40';
 
 function ActionButton({
   testId,
@@ -122,11 +122,11 @@ const TABS: readonly { id: InspectorTab; label: string }[] = [
 ];
 
 const FIELD_CLASS =
-  'w-full rounded border border-white/15 bg-black/20 px-2 py-1 text-xs tabular-nums text-zinc-100 outline-none transition-colors focus:border-amber-400/70 disabled:opacity-50';
+  'w-full rounded border border-white/40 bg-black/20 px-2 py-1 text-xs tabular-nums text-zinc-100 outline-none transition-colors focus:border-amber-400/70 disabled:opacity-50';
 const SECTION_CLASS =
   'flex flex-col gap-2 border-b border-white/10 px-3 py-3 last:border-b-0';
 const HEADING_CLASS =
-  'text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500';
+  'text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400';
 
 interface NumberFieldProps {
   pendingActions: PendingActions;
@@ -502,7 +502,7 @@ export function Inspector({
         <section aria-label="物件" className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>物件</h3>
           {objects.length === 0 ? (
-            <p className="text-xs text-zinc-500">此頁沒有物件。</p>
+            <p className="text-xs text-zinc-400">此頁沒有物件。</p>
           ) : (
             <ul data-testid="object-list" className="flex flex-col gap-1">
               {objects.map((object) => {
@@ -916,24 +916,24 @@ export function Inspector({
           >
             <h3 className={HEADING_CLASS}>位置與大小</h3>
             {objectActions.hidden ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
                 物件已隱藏，請先顯示後再調整位置。
               </p>
             ) : objectActions.locked ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
                 物件已鎖定，請先解除鎖定再調整位置。
               </p>
             ) : multi ? (
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-400">
                 已選取 {selectionCount} 個物件；可對齊、分佈、群組，或拖曳移動。
               </p>
             ) : objectActions.group ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-500">
+              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
                 群組僅支援移動與旋轉；取消群組後可調整大小。
               </p>
             ) : (
               readOnly && (
-                <p className="text-[11px] text-zinc-500">
+                <p className="text-[11px] text-zinc-400">
                   巢狀選取為唯讀，請先選取最上層物件。
                 </p>
               )
@@ -1088,7 +1088,7 @@ export function Inspector({
                   data-testid="clear-background"
                   onClick={clearBackground}
                   disabled={background === null}
-                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40"
+                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
                 >
                   清除背景
                 </button>
@@ -1097,7 +1097,7 @@ export function Inspector({
                   data-testid="apply-background"
                   onClick={applyBackground}
                   disabled={!backgroundValue.trim()}
-                  className="rounded border border-white/15 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/30 disabled:opacity-40"
+                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
                 >
                   套用
                 </button>
@@ -1125,7 +1125,7 @@ export function Inspector({
       >
         <div className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>文字</h3>
-          <p data-testid="text-placeholder" className="text-xs text-zinc-500">
+          <p data-testid="text-placeholder" className="text-xs text-zinc-400">
             選取文字後，使用上方的浮動工具列調整格式。
           </p>
         </div>
@@ -1169,7 +1169,7 @@ export function Inspector({
             }}
             className={`${FIELD_CLASS} resize-y font-sans`}
           />
-          <p className="text-[11px] text-zinc-500">
+          <p className="text-[11px] text-zinc-400">
             備註以隱藏的區塊儲存在投影片內。
           </p>
         </div>

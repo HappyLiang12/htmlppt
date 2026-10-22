@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -77,6 +78,7 @@ export function PlayView({
   onOpenPresenter
 }: PlayViewProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const regionRef = useRef<HTMLDivElement | null>(null);
   const onKeyDownRef = useRef(onKeyDown);
   onKeyDownRef.current = onKeyDown;
   const onAdvanceRef = useRef(onAdvance);
@@ -92,6 +94,12 @@ export function PlayView({
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, [slide.width, slide.height]);
+
+  // Move focus out of the unmounted editor chrome so shortcuts land on the
+  // play surface even when presenting was started with the mouse.
+  useEffect(() => {
+    regionRef.current?.focus();
+  }, []);
 
   const handleLoad = (event: SyntheticEvent<HTMLIFrameElement>) => {
     const frameDocument = event.currentTarget.contentDocument;
@@ -111,15 +119,20 @@ export function PlayView({
 
   return (
     <div
+      ref={regionRef}
       data-testid="play-view"
       data-fullscreen={fullscreen}
       role="region"
       aria-label="播放模式"
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black outline-none"
       onClick={(event) => {
         if (event.target === event.currentTarget) onAdvance();
       }}
     >
+      <p className="sr-only">
+        使用方向鍵、Space 或 PageDown 換頁；Escape 離開播放；P 開啟簡報者視窗。
+      </p>
       {fullscreenNotice && (
         <div
           data-testid="fullscreen-warning"
@@ -142,8 +155,9 @@ export function PlayView({
         type="button"
         data-testid="presenter-open"
         title="開啟簡報者檢視（P）"
+        aria-haspopup="dialog"
         onClick={onOpenPresenter}
-        className="absolute right-4 top-4 z-20 rounded border border-white/25 bg-black/50 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/50"
+        className="absolute right-4 top-4 z-20 rounded border border-white/40 bg-black/50 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60"
       >
         簡報者
       </button>

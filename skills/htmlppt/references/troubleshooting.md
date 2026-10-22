@@ -62,9 +62,9 @@ modified by the failed call.
 3. Retry the mutation.
 
 If the caller is a host-attached editor session, the host also emits a
-`revision` event with `source: "mcp"` when an MCP write succeeds. The editor
-does not consume those events for live sync until M3; reload the editor to see
-the write. Saving from the stale editor revision returns 409/conflict.
+`revision` event with `source: "mcp"` when an MCP write succeeds. The open
+editor consumes the event and applies the new revision. Saving from a stale
+editor revision returns 409/conflict.
 
 ### `slide-not-found`, `target-not-found`, `target-ambiguous`
 
@@ -132,7 +132,8 @@ CLI failures print a message to stderr and exit 1.
 | `Could not read the editor session registry at <dir>: ...` | The registry directory exists but is unreadable. Fix permissions, then retry the command. |
 | `Could not verify <n> editor session entries that are still in the registry at <dir>.` | Some entries survived pruning but could not be read or removed. Fix permissions, then retry `stop --all`. |
 | `Could not read the editor session entry for <path>.` | One entry is unreadable. Fix permissions on the registry, then retry. |
-| `Only html export is available in this milestone. Use --format html.` | PDF and PNG export are not available yet. |
+| `Chromium is unavailable. Install Google Chrome, Microsoft Edge or Chromium, or set HTMLPPT_CHROMIUM to its executable path.` | PDF/PNG export needs a local browser. Install one, or set `HTMLPPT_CHROMIUM` to a Chrome/Edge/Chromium executable. |
+| `Unsupported export format "<format>". Use --format html, pdf, or png.` | Fix `--format`. |
 | `Invalid --port. Use an integer between 0 and 65535.` | Fix the port number. |
 
 `open` reuses a live editor for the same deck and prints its existing
@@ -150,9 +151,8 @@ automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
   `<script data-ppt-runtime="1">` marker, so an empty body still validates;
   the `missing-runtime` warning fires only when the marker is absent.
 - The host watches the file and emits revision events over SSE, including for
-  external writes. The editor does not consume them for live sync until M3;
-  after an external or MCP write, reload the editor. A save based on the old
-  revision can return 409/conflict; reload and merge.
+  external writes. The open editor consumes them and applies the new revision.
+  A save based on the old revision can return 409/conflict; reload and merge.
 - A relative image or font may load on the author's machine but disappear in
   export. Validation warns with `relative-asset`; use `data:` or an absolute
   URL.

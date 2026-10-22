@@ -1,4 +1,8 @@
-import { useState } from 'react';
+import {
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent
+} from 'react';
 import type {
   TextCommand,
   TextToolbarState
@@ -50,13 +54,14 @@ const SIZES = [12, 14, 16, 18, 24, 32, 40, 48, 64, 96];
 const LINE_HEIGHTS = ['1', '1.15', '1.3', '1.5', '2'];
 
 type Menu = 'color' | 'highlight' | 'font' | 'size' | 'line' | null;
+type OpenMenu = Exclude<Menu, null>;
 
 const BUTTON =
-  'rounded border border-white/15 px-1.5 py-1 text-xs text-zinc-300 transition-colors hover:border-white/40 disabled:opacity-40';
+  'rounded border border-white/40 px-1.5 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
 const ACTIVE =
   'rounded border border-amber-400/80 bg-amber-400/15 px-1.5 py-1 text-xs text-amber-200';
 const MENU =
-  'absolute left-0 top-full z-20 mt-1 flex max-h-64 w-max flex-wrap gap-1 rounded border border-white/15 bg-[#161a21] p-2 shadow-xl';
+  'absolute left-0 top-full z-20 mt-1 flex max-h-64 w-max flex-wrap gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl';
 
 function toggleClass(active: boolean): string {
   return active ? ACTIVE : BUTTON;
@@ -69,6 +74,41 @@ export function TextToolbar({
   onLink
 }: TextToolbarProps) {
   const [menu, setMenu] = useState<Menu>(null);
+  const triggers = useRef<Record<OpenMenu, HTMLButtonElement | null>>({
+    color: null,
+    highlight: null,
+    font: null,
+    size: null,
+    line: null
+  });
+
+  const closeMenu = (name: OpenMenu) => {
+    setMenu(null);
+    triggers.current[name]?.focus();
+  };
+
+  const menuKeyDown = (
+    event: {
+      key: string;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    },
+    name: OpenMenu
+  ) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu(name);
+  };
+
+  const triggerProps = (name: OpenMenu) => ({
+    ref: (element: HTMLButtonElement | null) => {
+      triggers.current[name] = element;
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (menu === name) menuKeyDown(event, name);
+    }
+  });
 
   const run = (command: TextCommand) => {
     setMenu(null);
@@ -144,6 +184,7 @@ export function TextToolbar({
           aria-label="文字顏色"
           className={BUTTON}
           aria-expanded={menu === 'color'}
+          {...triggerProps('color')}
           onClick={() => toggleMenu('color')}
         >
           <span
@@ -153,7 +194,11 @@ export function TextToolbar({
           />
         </button>
         {menu === 'color' && (
-          <div className={MENU}>
+          <div
+            data-testid="text-menu-color"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'color')}
+          >
             {TEXT_COLORS.map((color) => (
               <button
                 key={color}
@@ -178,6 +223,7 @@ export function TextToolbar({
           aria-label="螢光標示"
           className={BUTTON}
           aria-expanded={menu === 'highlight'}
+          {...triggerProps('highlight')}
           onClick={() => toggleMenu('highlight')}
         >
           <span
@@ -186,7 +232,11 @@ export function TextToolbar({
           />
         </button>
         {menu === 'highlight' && (
-          <div className={MENU}>
+          <div
+            data-testid="text-menu-highlight"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'highlight')}
+          >
             {HIGHLIGHTS.map((color) => (
               <button
                 key={color}
@@ -211,6 +261,7 @@ export function TextToolbar({
           aria-label="字型"
           className={BUTTON}
           aria-expanded={menu === 'font'}
+          {...triggerProps('font')}
           onClick={() => toggleMenu('font')}
         >
           {FONTS.find((font) => font.value === state.fontFamily)?.label ??
@@ -219,7 +270,11 @@ export function TextToolbar({
           <span className="ml-1 text-[10px]">▾</span>
         </button>
         {menu === 'font' && (
-          <div className={`${MENU} flex-col`}>
+          <div
+            data-testid="text-menu-font"
+            className={`${MENU} flex-col`}
+            onKeyDown={(event) => menuKeyDown(event, 'font')}
+          >
             {FONTS.map((font) => (
               <button
                 key={font.value}
@@ -246,13 +301,18 @@ export function TextToolbar({
           aria-label="字級"
           className={BUTTON}
           aria-expanded={menu === 'size'}
+          {...triggerProps('size')}
           onClick={() => toggleMenu('size')}
         >
           {state.fontSize}
           <span className="ml-1 text-[10px]">▾</span>
         </button>
         {menu === 'size' && (
-          <div className={MENU}>
+          <div
+            data-testid="text-menu-size"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'size')}
+          >
             {SIZES.map((size) => (
               <button
                 key={size}
@@ -301,12 +361,17 @@ export function TextToolbar({
           aria-label="行高"
           className={BUTTON}
           aria-expanded={menu === 'line'}
+          {...triggerProps('line')}
           onClick={() => toggleMenu('line')}
         >
           行高
         </button>
         {menu === 'line' && (
-          <div className={MENU}>
+          <div
+            data-testid="text-menu-line"
+            className={MENU}
+            onKeyDown={(event) => menuKeyDown(event, 'line')}
+          >
             {LINE_HEIGHTS.map((value) => (
               <button
                 key={value}

@@ -109,6 +109,52 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
     });
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        window.close();
+        return;
+      }
+      const target = event.target as Element | null;
+      const interactive = Boolean(
+        target?.closest?.('button, a, input, select, textarea')
+      );
+      if ((event.key === ' ' || event.key === 'Spacebar') && interactive) {
+        return;
+      }
+      const channel = channelRef.current;
+      const move = (delta: number) => {
+        const nextIndex = index + delta;
+        if (!connected || !channel || nextIndex < 0 || nextIndex >= slides.length) {
+          return;
+        }
+        event.preventDefault();
+        channel.postMessage({ sessionId, type: 'slide', index: nextIndex });
+      };
+      if (
+        event.key === 'ArrowRight' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'PageDown' ||
+        event.key === ' ' ||
+        event.key === 'Spacebar'
+      ) {
+        move(1);
+      } else if (
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'PageUp'
+      ) {
+        move(-1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [connected, index, sessionId, slides.length]);
+
   return (
     <main
       data-testid="presenter-view"
@@ -117,8 +163,17 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
       <header className="flex items-center justify-between border-b border-white/10 pb-3">
         <div>
           <h1 className="text-sm font-semibold tracking-wide">簡報者檢視</h1>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-zinc-400">
             第 {slides.length === 0 ? 0 : index + 1} / {slides.length} 頁
+          </p>
+          <p
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="presenter-announcement"
+          >
+            第 {slides.length === 0 ? 0 : index + 1} 頁，共 {slides.length} 頁
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs">
@@ -138,7 +193,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
       </header>
 
       <section aria-label="目前備註" className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
           備註
         </h2>
         <p
@@ -150,7 +205,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
       </section>
 
       <section aria-label="下一頁" className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
           下一頁
         </h2>
         <div
@@ -170,7 +225,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
               </span>
             </>
           ) : (
-            <span className="text-sm text-zinc-500">（最後一頁）</span>
+            <span className="text-sm text-zinc-400">（最後一頁）</span>
           )}
         </div>
       </section>
@@ -181,7 +236,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
           data-testid="presenter-prev"
           disabled={!connected || index <= 0}
           onClick={() => send(index - 1)}
-          className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/30 disabled:opacity-40"
+          className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60 disabled:opacity-40"
         >
           上一頁
         </button>
@@ -190,7 +245,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
           data-testid="presenter-next"
           disabled={!connected || index >= slides.length - 1}
           onClick={() => send(index + 1)}
-          className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/30 disabled:opacity-40"
+          className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60 disabled:opacity-40"
         >
           下一頁
         </button>

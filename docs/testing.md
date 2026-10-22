@@ -12,8 +12,8 @@ npx playwright install chromium
 
 ## Commands
 
-- `npm run test:unit` — core unit tests
-- `npm run test:integration` — host, MCP, CLI, filesystem, HTTP
+- `npm run test:unit` — core and editor unit tests
+- `npm run test:integration` — renderer, host, MCP, CLI, filesystem, and HTTP
 - `npm run test:e2e` — builds the workspace first, then runs Playwright Chromium
 - `npm run test:package` — builds, packs the `htmlppt` tarball, installs it in a temp project, and smokes the installed bins
 - `npm run test:matrix` — feature tag coverage
@@ -30,7 +30,9 @@ npx playwright install chromium
 
 ## Rules
 
-- No `skip`, no retries, no mocking the host or filesystem in integration tests.
+- No retries and no mocking the host or filesystem in integration tests.
+  POSIX-only permission and symlink checks skip on Windows because the
+  platform cannot express those cases; CI gates Ubuntu and Windows.
 - Bug fixes start with a reproduction test.
 - Do not edit golden files or baselines to force a green suite.
 

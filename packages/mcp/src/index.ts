@@ -1,5 +1,6 @@
 export {
   DeckConflictError,
+  DeckExportError,
   DirectDeckService,
   HostDeckService,
   createDeckService
@@ -8,6 +9,7 @@ export type {
   DeckService,
   DeckServiceOptions,
   DeckSnapshot,
+  ExportFormat,
   HostDeckServiceOptions,
   SaveResult
 } from './deck-service.js';

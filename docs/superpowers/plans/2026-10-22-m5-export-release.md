@@ -4,7 +4,7 @@
 
 **Goal:** Finish v1: PDF/PNG export with a system Chromium, visual round-trip coverage, security and accessibility hardening, real release documentation, cross-platform CI, and the final acceptance pass. This milestone prepares the project for publishing but does not push or publish without explicit user authorization.
 
-**Architecture:** A renderer module in `packages/core`/`packages/host` uses `playwright-core` with a detected system Chromium to turn deck HTML into PDF (one page per slide) or per-slide PNGs at 2× scale. The host exposes `POST /api/export`; the CLI and MCP call the same renderer. Visual tests compare standalone-rendered slides with editor/export rendering using pixelmatch/pngjs. Security and accessibility tests exercise the real host and editor. Release work adds README/LICENSE/CONTRIBUTING/SECURITY, contract and MCP docs, package smoke, and Ubuntu/Windows CI on Node 20/22.
+**Architecture:** A `packages/renderer` workspace uses `playwright-core` with a detected system Chromium to turn deck HTML into PDF (one page per slide) or per-slide PNGs at 2× scale. The host exposes `POST /api/export`; the CLI and MCP call the same renderer. Visual tests compare standalone-rendered slides with editor/export rendering using pixelmatch/pngjs. Security and accessibility tests exercise the real host and editor. Release work adds README/LICENSE/CONTRIBUTING/SECURITY, contract and MCP docs, package smoke, and Ubuntu/Windows CI on Node 20/22.
 
 **Tech Stack:** `playwright-core` (system Chromium), `pixelmatch`, `pngjs` (dev), Playwright, Vitest, tsup, GitHub Actions.
 
@@ -17,7 +17,7 @@
 - PDF page size = first slide canvas size; mixed decks warn. Print backgrounds; no editor chrome; hidden runtime slides are shown per slide.
 - PNG per slide at 2× device scale, named `<basename>-s1.png` etc.
 - No push, PR, npm publish, or remote repository creation without explicit user authorization.
-- New dependencies: `playwright-core` (runtime), `pixelmatch`/`pngjs` (dev), recorded here.
+- New dependencies: `playwright-core` and `pdf-lib` (runtime), `pixelmatch`/`pngjs`/`pdfjs-dist` and optional direct `@napi-rs/canvas` declaration (dev), recorded here. PDF normalization uses a structural library, not a handwritten byte parser.
 
 ## File Structure
 
@@ -45,15 +45,21 @@ scripts/package-smoke.mjs
 
 ### Task 1: Chromium discovery and PDF/PNG renderer
 
-**Files:** `packages/renderer/*` (new), root build scripts, dependencies.
+**Files:** `packages/renderer/*` (new), root `package.json`, `package-lock.json`, `tsconfig.json`, and `dependency-cruiser.cjs` only for renderer wiring.
 
 **Interfaces:**
-- `findChromium(env?): Promise<{ executablePath: string; source: 'env'|'chrome'|'edge'|'chromium' } | null>` — checks `HTMLPPT_CHROMIUM`, then platform default Chrome/Edge/Chromium locations and `playwright` browser caches; returns null when none.
-- `renderPdf({ html, width, height, outPath }): Promise<void>` — sandboxed browser context (`javaScriptEnabled: true`, no network beyond the deck), `page.setContent(html)`, wait for fonts/images (`document.fonts.ready` + `networkidle` best effort), emulate print media, PDF at `width × height` CSS px, print backgrounds, no margins.
-- `renderPngs({ html, width, height, outDir, basename }): Promise<string[]>` — one screenshot per `[data-slide-id]` at 2× scale; hide others; restore; deterministic names.
-- Errors: `RendererUnavailableError` with install instructions; `RenderError` with the failing slide.
-- Tests: with a real installed Chromium in CI/local, render a 2-slide deck → PDF exists, 2 pages, page size matches; PNGs count 2, dimensions 2× canvas; a missing browser executable returns `RendererUnavailableError` (test via `HTMLPPT_CHROMIUM=/nonexistent` and no fallback detection override; no mocks of Chromium itself).
-- If no Chromium is available on the machine, the test must still assert the actionable error path and mark the rendering case as environment-unavailable explicitly (documented, not skipped silently; use a conditional inside one test that asserts the error message when unavailable).
+- New workspace `@htmlppt/renderer` owns browser-only rendering; core remains browser-independent. Build renderer after core and before host; wire renderer tests into `test:integration`. Runtime dependency `playwright-core` is `^1.64.1`; `pdf-lib ^1.17.1` is explicitly approved for structural PDF page-size/content-coordinate normalization instead of handwritten PDF parsing. PDF assertions use a Node-20-compatible `pdfjs-dist` dev dependency as specified by the test-framework design, and PNG assertions use the planned `pngjs` dev dependency. Tests may explicitly declare the already PDF.js-installed `@napi-rs/canvas` as a dev dependency for PDF raster edge assertions; it must not enter the runtime bundle.
+- `findChromium(env?): Promise<{ executablePath: string; source: 'env'|'chrome'|'edge'|'chromium' } | null>` — checks `HTMLPPT_CHROMIUM`, then platform default Chrome/Edge/Chromium locations and Playwright browser caches; returns null when none. A supplied invalid `HTMLPPT_CHROMIUM` is authoritative and never falls through to another browser.
+- `renderPdf({ html, width, height, outPath }): Promise<void>` — local Chromium with its sandbox enabled, isolated context with `javaScriptEnabled: false`, no service workers, no file access or navigation from authored content. Load with `page.setContent(html)`. Only HTTP(S) image/font/stylesheet asset requests declared by the document/CSS are permitted; no scripts, fetch/XHR, frames, workers, WebSockets, or arbitrary document requests. Trusted Playwright evaluation may prepare layout; authored scripts remain inert and original HTML is unchanged.
+- Wait for external stylesheets before reading/fixing display and geometry, within the finite asset deadline. Prepare all detected slides for print independently of executing the runtime: expose navigation-hidden slides using their authored active-state display (including active-class flex/grid), page-break after each except the last, first-canvas page size, backgrounds and zero margins. Wait for fonts/images including those requested by revealed layout; timeout must close resources and return an actionable RenderError, not hang or silently report fidelity.
+- Preserve exact PDF page boxes and content coordinates together. Chromium may quantize CSS page dimensions; use structural PDF parsing to adjust page dimensions and the corresponding content translation without clipping or adding edge strips. Never search the full PDF byte stream with regex for object/trailer boundaries. Test adversarial-but-valid title metadata and rasterized top/bottom/left/right edge pixels, not only page-count/MediaBox equality.
+- `renderPngs({ html, width, height, outDir, basename }): Promise<string[]>` — one screenshot per detected slide at 2× scale, including decks without explicit slide-id markers supported by core detection; isolate each slide, preserve authored layout, use per-slide canvas dimensions with provided dimensions as fallback; deterministic `<basename>-sN.png` names. Validate basename as a filename, not a path.
+- Errors: exported `RendererUnavailableError` with install/HTMLPPT_CHROMIUM instructions; exported `RenderError` with the failing slide where applicable. Always close page/context/browser in finally, including output failures. Outputs must not expose partial files; stage each output locally before atomic placement. Host output-directory confinement belongs to Task 2.
+- Tests use real installed Chromium and real files: a 2-slide deck yields a PDF parsed by pdfjs-dist with 2 pages of width*72/96 by height*72/96 points and two PNGs of 2× canvas dimensions; test flex layout, runtime-hidden slides, background content, mixed slide dimensions, no source mutation, output failures and invalid basename. A missing executable via authoritative env override returns RendererUnavailableError even when another browser is installed.
+- Assert renderer isolation with a real local HTTP asset server: an image/font may load, authored script cannot trigger a side effect, iframe/file/navigation/fetch requests do not reach forbidden endpoints. Do not disable Chromium's sandbox in tests.
+- A machine lacking Chromium must report the renderer test environment as blocked and assert the error path; it cannot claim rendering acceptance. No skipped tests, fake Chromium, or replacing successful-render expectations with weaker missing-browser assertions.
+
+**Steps:** renderer tests first and observed RED; implement; run renderer tests, typecheck, lint, dependency gate and build with preserved command exit codes. Do not edit host/CLI/MCP/editor integration in this task.
 
 **Commit:** `feat(renderer): add system Chromium PDF and PNG export`.
 
@@ -177,3 +183,52 @@ scripts/package-smoke.mjs
 - README/LICENSE/CONTRIBUTING/SECURITY/contract/MCP docs exist.
 - The package tarball contains the editor, skill, CLI, and MCP bins.
 - Release is prepared; publishing waits for explicit user authorization.
+
+---
+
+## Amendment (2026-10-23): final-release acceptance gaps
+
+The Task 8 acceptance review found three items that the M4 exit explicitly
+deferred to M5 but this plan never allocated. They are in scope before the M5
+merge:
+
+### Task 8a: Editor export UI and host HTML export
+
+**Files:** `packages/host/src/server.ts`, `packages/host/test/export.test.ts`,
+`packages/editor/src/api.ts`, `packages/editor/src/components/Toolbar.tsx`,
+`packages/editor/src/App.tsx`, `e2e/export-ui.spec.ts`, docs.
+
+- Extend `POST /api/export` with `format: "html"`; write
+  `<basename>.export.html` inside the confined `outDir` using
+  `serializeExport`, and keep PDF/PNG behavior unchanged.
+- Replace the disabled toolbar placeholder with an accessible Export menu
+  (HTML / PDF / PNG), wired to Ctrl/Cmd+Shift+E, with busy/error/result
+  feedback.
+- Host mode writes through the endpoint; standalone mode downloads HTML and
+  explains that PDF/PNG require a host.
+
+### Task 8b: IndexedDB crash recovery
+
+**Files:** new `packages/editor/src/recovery.ts` (+ test),
+`packages/editor/src/App.tsx`, `packages/editor/src/use-deck-controller.ts`,
+E2E recovery test.
+
+- Persist dirty master HTML to IndexedDB (debounced), keyed by deck path.
+- After a reload with an unsaved draft, show a recovery banner offering
+  restore or discard; restore marks the deck dirty so autosave persists it.
+- Clear the draft once a save succeeds.
+
+### Task 8c: Standalone upload/download mode
+
+**Files:** new `packages/editor/src/standalone.ts` (+ test),
+`packages/editor/src/api.ts`, `packages/editor/src/App.tsx`,
+`packages/editor/src/use-deck-controller.ts`, `e2e/standalone.spec.ts`.
+
+- When `/api/deck` is unavailable, show an open/drop empty state and load a
+  local HTML file into the editor.
+- Save in place through a File System Access handle; otherwise autosave to
+  IndexedDB and download through Ctrl+S / Export HTML.
+- PDF/PNG are disabled in standalone mode with actionable guidance.
+
+Each item is test-first. The final acceptance run must include the new
+`@feature:standalone` and `@feature:recovery` matrix rows.

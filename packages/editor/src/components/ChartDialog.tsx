@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import type { KeyboardEvent } from 'react';
+import { ModalDialog } from './ModalDialog';
 
 export interface ChartDialogProps {
   json: string;
@@ -15,30 +16,22 @@ export function ChartDialog({
   onApply,
   onCancel
 }: ChartDialogProps) {
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    textarea.current?.focus();
-  }, []);
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      onApply();
+    }
+  };
 
   return (
-    <div
-      data-testid="chart-dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-label="編輯圖表"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          onCancel();
-        } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault();
-          onApply();
-        }
-      }}
+    <ModalDialog
+      label="編輯圖表"
+      testId="chart-dialog"
+      onClose={onCancel}
+      initialFocus='[data-testid="chart-json"]'
+      panelClassName="w-[640px]"
     >
-      <div className="flex max-h-full w-[640px] flex-col gap-3 rounded-lg border border-white/15 bg-[#12151b] p-4 shadow-2xl">
+      <div className="flex flex-col gap-3" onKeyDown={handleKeyDown}>
         <div>
           <h2 className="text-sm font-semibold text-zinc-100">編輯圖表</h2>
           <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
@@ -47,14 +40,13 @@ export function ChartDialog({
           </p>
         </div>
         <textarea
-          ref={textarea}
           data-testid="chart-json"
           aria-label="圖表 JSON"
           value={json}
           rows={18}
           spellCheck={false}
           onChange={(event) => onChange(event.target.value)}
-          className="w-full resize-y rounded border border-white/15 bg-black/30 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-100 outline-none focus:border-amber-400/70"
+          className="w-full resize-y rounded border border-white/40 bg-black/30 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-100 outline-none focus:border-amber-400/70"
         />
         {error && (
           <p
@@ -70,7 +62,7 @@ export function ChartDialog({
             type="button"
             data-testid="chart-cancel"
             onClick={onCancel}
-            className="rounded border border-white/15 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/30"
+            className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/60"
           >
             取消
           </button>
@@ -84,6 +76,6 @@ export function ChartDialog({
           </button>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }

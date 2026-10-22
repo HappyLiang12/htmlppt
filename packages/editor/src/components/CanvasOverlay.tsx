@@ -93,7 +93,9 @@ export function CanvasOverlay({
             data-primary={index === 0 ? 'true' : undefined}
             data-selected-id={box.elementId ?? undefined}
             data-selected-path={box.path.join('.')}
-            className="pointer-events-none absolute border border-amber-400"
+            className={`pointer-events-none absolute ${
+              index === 0 ? 'border-2' : 'border'
+            } border-amber-400`}
             style={{
               left: box.rect.x * scale,
               top: box.rect.y * scale,
@@ -103,6 +105,15 @@ export function CanvasOverlay({
                 box.rotation === 0 ? undefined : `rotate(${box.rotation}deg)`
             }}
           >
+            {index === 0 && (
+              <span
+                data-testid="selection-marker"
+                aria-hidden="true"
+                className="absolute left-0 top-0 rounded-br bg-amber-400 px-1 text-[10px] font-semibold text-zinc-950"
+              >
+                選取
+              </span>
+            )}
             {interactive && (
               <>
                 {resizable && HANDLES.map((handle) => (

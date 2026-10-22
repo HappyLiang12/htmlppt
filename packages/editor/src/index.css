@@ -14,6 +14,19 @@ body {
   box-sizing: border-box;
 }
 
+/* One visible keyboard focus ring for every editor chrome control. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible,
+[role='tab']:focus-visible,
+[role='option']:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
+}
+
 @keyframes htmlppt-preview-fade {
   from {
     opacity: 1;

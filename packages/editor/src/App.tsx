@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent
@@ -20,6 +21,7 @@ import {
   replaceImageSource,
   sanitizePastedText,
   serializeDeck,
+  serializeExport,
   setImageAlt,
   setImageCrop,
   setShapeAppearance,
@@ -57,7 +59,36 @@ import {
 import { TextToolbar } from './components/TextToolbar';
 import { TableToolbar } from './components/TableToolbar';
 import { ChartDialog } from './components/ChartDialog';
-import { openDeckEvents, tokenFromLocation } from './api';
+import { ShortcutsDialog } from './components/ShortcutsDialog';
+import { describeSelection, describeSlide } from './announcements';
+import {
+  DeckAuthError,
+  exportDeck,
+  fetchDeck,
+  flushDeck,
+  openDeckEvents,
+  saveDeck,
+  tokenFromLocation,
+  type DeckPersistence,
+  type ExportFormat
+} from './api';
+import {
+  deleteDraft,
+  draftKey,
+  hasUnsavedDraft,
+  listDrafts,
+  readDraft,
+  writeDraft,
+  type DraftRecord
+} from './recovery';
+import {
+  createStandalonePersistence,
+  downloadHtml,
+  exportFileName,
+  hashHtml,
+  type StandaloneSession
+} from './standalone';
+import { StandaloneLauncher } from './components/StandaloneLauncher';
 import {
   planConflictResolution,
   type ConflictResolution
@@ -377,7 +408,30 @@ export function App() {
     []
   );
 
-  const { state, actions } = useDeckController({ measurePastedObject });
+  const standaloneRef = useRef<StandaloneSession | null>(null);
+  const standalonePersistence = useMemo(
+    () => createStandalonePersistence(() => standaloneRef.current),
+    []
+  );
+  const persistence = useMemo<DeckPersistence>(() => {
+    const token = tokenFromLocation();
+    return {
+      load: () => fetchDeck(token),
+      save: (html, baseRevision, options) =>
+        standaloneRef.current
+          ? standalonePersistence.save(html, baseRevision, options)
+          : saveDeck(token, html, baseRevision, options),
+      flush: (html, baseRevision) => {
+        if (standaloneRef.current) {
+          standalonePersistence.flush(html, baseRevision);
+        } else {
+          flushDeck(token, html, baseRevision);
+        }
+      }
+    };
+  }, [standalonePersistence]);
+
+  const { state, actions } = useDeckController({ measurePastedObject, persistence });
   const {
     slides,
     activeIndex,
@@ -389,6 +443,7 @@ export function App() {
     selection,
     selections,
     master,
+    dirty,
     conflict
   } = state;
 
@@ -396,6 +451,9 @@ export function App() {
 
   const [view, setView] = useState<EditorView>('normal');
   const [playing, setPlaying] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
+  const previousSelectionKeyRef = useRef('');
   const [fullscreen, setFullscreen] = useState<FullscreenState>('off');
   const [fullscreenNotice, setFullscreenNotice] = useState('');
   const [presenterError, setPresenterError] = useState('');
@@ -419,6 +477,22 @@ export function App() {
   const [frameEpoch, setFrameEpoch] = useState(0);
   const [slideOpError, setSlideOpError] = useState('');
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [mode, setMode] = useState<'unknown' | 'host' | 'standalone'>(
+    'unknown'
+  );
+  const [standalone, setStandalone] = useState<{
+    name: string;
+    canWrite: boolean;
+  } | null>(null);
+  const [standaloneDrafts, setStandaloneDrafts] = useState<DraftRecord[]>([]);
+  const [standaloneError, setStandaloneError] = useState('');
+  const [openingStandalone, setOpeningStandalone] = useState(false);
+  const [recoveryDraft, setRecoveryDraft] = useState<DraftRecord | null>(null);
+  const recoveryCheckedRef = useRef<string | null>(null);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportMessage, setExportMessage] = useState('');
+  const [exportError, setExportError] = useState('');
+  const [exportSignal, setExportSignal] = useState(0);
 
   const sessionRef = useRef<TransformSession | null>(null);
   const finishSessionRef = useRef<() => void>(() => undefined);
@@ -1171,9 +1245,183 @@ export function App() {
     setChartEditor(null);
   }, [chartEditor, commitMasterDocument]);
 
+  const openStandaloneFile = useCallback(
+    async (file: File, handle: FileSystemFileHandle | null) => {
+      if (!file.name || !/\.html?$/i.test(file.name)) {
+        setStandaloneError('請選擇 .html 或 .htm 檔案。');
+        return;
+      }
+      setOpeningStandalone(true);
+      setStandaloneError('');
+      try {
+        const html = await file.text();
+        standaloneRef.current = { name: file.name, handle };
+        setStandalone({ name: file.name, canWrite: handle !== null });
+        setMode('standalone');
+        setRecoveryDraft(null);
+        recoveryCheckedRef.current = null;
+        await actions.load({
+          html,
+          revision: await hashHtml(html),
+          filePath: file.name
+        });
+      } catch (cause) {
+        setStandaloneError(
+          cause instanceof Error ? cause.message : String(cause)
+        );
+      } finally {
+        setOpeningStandalone(false);
+      }
+    },
+    [actions]
+  );
+
+  const restoreStandaloneDraft = useCallback(
+    async (draft: DraftRecord) => {
+      setOpeningStandalone(true);
+      setStandaloneError('');
+      try {
+        standaloneRef.current = { name: draft.filePath, handle: null };
+        setStandalone({ name: draft.filePath, canWrite: false });
+        setMode('standalone');
+        setStandaloneDrafts((current) =>
+          current.filter((item) => item.key !== draft.key)
+        );
+        await actions.load({
+          html: draft.html,
+          revision: await hashHtml(draft.html),
+          filePath: draft.filePath
+        });
+        actions.restoreDraft(draft.html);
+      } catch (cause) {
+        setStandaloneError(
+          cause instanceof Error ? cause.message : String(cause)
+        );
+      } finally {
+        setOpeningStandalone(false);
+      }
+    },
+    [actions]
+  );
+
+  const discardStandaloneDraft = useCallback((draft: DraftRecord) => {
+    void deleteDraft(draft.key);
+    setStandaloneDrafts((current) =>
+      current.filter((item) => item.key !== draft.key)
+    );
+  }, []);
+
+  const handleExport = useCallback(
+    async (format: ExportFormat) => {
+      const current = stateRef.current;
+      if (!current.master) return;
+      setExportError('');
+      setExportMessage('');
+      if (mode === 'standalone') {
+        const name = standalone?.name ?? current.filePath;
+        if (format !== 'html') {
+          setExportError(
+            '獨立模式不支援 PDF/PNG；請用 htmlppt open 開啟檔案。'
+          );
+          return;
+        }
+        downloadHtml(serializeExport(current.master), name);
+        void deleteDraft(draftKey(name));
+        setRecoveryDraft(null);
+        setExportMessage(`已下載 ${exportFileName(name)}。`);
+        return;
+      }
+      setExporting(format);
+      try {
+        const files = await exportDeck(tokenFromLocation(), format);
+        setExportMessage(
+          `已匯出 ${files.length} 個檔案：${files.join('、')}`
+        );
+        setAnnouncement(`已匯出 ${files.length} 個檔案。`);
+      } catch (cause) {
+        setExportError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setExporting(null);
+      }
+    },
+    [mode, standalone?.name]
+  );
+
   useEffect(() => {
-    void actions.load();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const deck = await fetchDeck(tokenFromLocation());
+        if (cancelled) return;
+        setMode('host');
+        await actions.load(deck);
+      } catch (cause) {
+        if (cancelled) return;
+        if (
+          cause instanceof DeckAuthError &&
+          (cause.status === 401 ||
+            cause.status === 403 ||
+            cause.status >= 500)
+        ) {
+          setMode('host');
+          await actions.load();
+          return;
+        }
+        // A static editor without the host API is the upload/download mode.
+        setMode('standalone');
+        setStandaloneDrafts(await listDrafts());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [actions]);
+
+  // Hold a debounced local draft while there are unsaved changes. A host save
+  // deletes it; an upload-only standalone tab keeps it as its only recovery.
+  useEffect(() => {
+    if (!master || !dirty || mode === 'unknown') return;
+    const name = filePath || standalone?.name || '';
+    const key = draftKey(name);
+    if (!key) return;
+    const html = serializeDeck(master);
+    const timer = window.setTimeout(() => {
+      void writeDraft({ key, filePath: name, html, savedAt: Date.now() });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [master, dirty, srcDoc, slides, filePath, standalone?.name, mode]);
+
+  useEffect(() => {
+    if (dirty || status !== 'saved') return;
+    if (mode === 'standalone' && !standalone?.canWrite) return;
+    const key = draftKey(filePath || standalone?.name || '');
+    if (!key) return;
+    void deleteDraft(key);
+    setRecoveryDraft(null);
+  }, [
+    dirty,
+    status,
+    mode,
+    standalone?.canWrite,
+    standalone?.name,
+    filePath
+  ]);
+
+  useEffect(() => {
+    if (!master) return;
+    const key = draftKey(filePath || standalone?.name || '');
+    if (!key || recoveryCheckedRef.current === key) return;
+    recoveryCheckedRef.current = key;
+    let cancelled = false;
+    void readDraft(key).then((draft) => {
+      if (!cancelled && hasUnsavedDraft(draft, serializeDeck(master))) {
+        setRecoveryDraft(draft);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [master, filePath, standalone?.name]);
   /**
    * Connects once the initial deck exists, so the hello revision is compared
    * against a loaded master instead of an empty one. EventSource reconnects on
@@ -2090,6 +2338,18 @@ export function App() {
       }
 
       if (editable) return;
+      // Modal dialogs own every key while they are open; their own handlers
+      // provide Escape and focus trapping. Still suppress browser defaults
+      // that would reload the page or open a save dialog behind the dialog.
+      if (shortcutsOpen || chartEditor) {
+        if (
+          event.key === 'F5' ||
+          ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's')
+        ) {
+          event.preventDefault();
+        }
+        return;
+      }
       const action = mapShortcut(event);
       if (!action) return;
 
@@ -2124,6 +2384,17 @@ export function App() {
           return;
         case 'save':
           event.preventDefault();
+          if (standaloneRef.current && !standaloneRef.current.handle) {
+            const savedMaster = stateRef.current.master;
+            const name = standaloneRef.current.name;
+            if (savedMaster) {
+              downloadHtml(serializeDeck(savedMaster), name, '.html');
+              void deleteDraft(draftKey(name));
+              setRecoveryDraft(null);
+              setAnnouncement('已下載 HTML 檔。');
+            }
+            return;
+          }
           void actionsRef.current.saveNow().catch(() => undefined);
           return;
         case 'group':
@@ -2137,9 +2408,12 @@ export function App() {
           handleObjectCommand({ type: 'ungroup' });
           return;
         case 'export':
-        case 'help':
-          // Export is M5; help is not part of the shell.
           event.preventDefault();
+          setExportSignal((value) => value + 1);
+          return;
+        case 'help':
+          event.preventDefault();
+          setShortcutsOpen(true);
           return;
         case 'select-all':
           event.preventDefault();
@@ -2216,11 +2490,13 @@ export function App() {
     },
     [
       cancelSession,
+      chartEditor,
       clearOverlay,
       computeFitScale,
       handleObjectCommand,
       nudgeSelection,
       playing,
+      shortcutsOpen,
       startPlay,
       startTextEditing,
       stopPlay,
@@ -2728,6 +3004,30 @@ export function App() {
     actions.showSlide(index);
   };
 
+  const selectionKey = selections
+    .map((target) => `${target.slideIndex}:${target.path.join('.')}`)
+    .join('|');
+
+  useEffect(() => {
+    if (previousSelectionKeyRef.current === selectionKey) return;
+    previousSelectionKeyRef.current = selectionKey;
+    if (!selectionKey) {
+      setAnnouncement('已取消選取');
+      return;
+    }
+    const current = stateRef.current;
+    const slide = current.slides[current.activeIndex];
+    const target = current.selection;
+    const element =
+      slide && target ? elementAtPath(slide.element, target.path) : null;
+    setAnnouncement(describeSelection(element, current.selections.length));
+  }, [selectionKey]);
+
+  useEffect(() => {
+    if (slides.length === 0) return;
+    setAnnouncement(describeSlide(activeIndex, slides.length));
+  }, [activeIndex, activeSlide?.id, slides.length]);
+
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
   const styleState: InspectorStyleState | null = (() => {
     if (
@@ -2794,6 +3094,20 @@ export function App() {
         ? 'rotate'
         : 'all';
 
+  if (mode === 'standalone' && !master) {
+    return (
+      <StandaloneLauncher
+        drafts={standaloneDrafts}
+        error={standaloneError || (status === 'load-error' ? error : '')}
+        busy={openingStandalone}
+        onOpenFile={(file, handle) => void openStandaloneFile(file, handle)}
+        onError={setStandaloneError}
+        onRestore={(draft) => void restoreStandaloneDraft(draft)}
+        onDiscard={discardStandaloneDraft}
+      />
+    );
+  }
+
   if (playing && activeSlide) {
     return (
       <PlayView
@@ -2823,6 +3137,15 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col bg-[#0f1115] text-zinc-100">
+      <p
+        data-testid="a11y-status"
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcement}
+      </p>
       <Toolbar
         filePath={filePath}
         status={status}
@@ -2846,9 +3169,15 @@ export function App() {
         onUndo={actions.undo}
         onRedo={actions.redo}
         onPlay={() => startPlay(false)}
+        onOpenHelp={() => setShortcutsOpen(true)}
         onViewChange={changeView}
         onPreviousSlide={() => goTo(activeIndex - 1)}
         onNextSlide={() => goTo(activeIndex + 1)}
+        onExport={handleExport}
+        exporting={exporting}
+        exportSignal={exportSignal}
+        standaloneMode={mode === 'standalone'}
+        standaloneUpload={mode === 'standalone' && standalone?.canWrite === false}
       />
 
       {textToolbar && (
@@ -2883,12 +3212,68 @@ export function App() {
         />
       )}
 
-      {(error || slideOpError) && (
+      {shortcutsOpen && (
+        <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />
+      )}
+
+      {(error || slideOpError || exportError) && (
         <div
           data-testid="editor-error"
           className="max-h-24 overflow-auto border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200"
         >
-          {[error, slideOpError].filter(Boolean).join(' · ')}
+          {[error, slideOpError, exportError].filter(Boolean).join(' · ')}
+        </div>
+      )}
+
+      {exportMessage && (
+        <div
+          data-testid="export-result"
+          role="status"
+          className="flex items-center gap-3 border-b border-emerald-500/30 bg-emerald-950/50 px-4 py-2 text-xs text-emerald-100"
+        >
+          <span className="min-w-0 flex-1 truncate">{exportMessage}</span>
+          <button
+            type="button"
+            data-testid="export-dismiss"
+            className="rounded border border-emerald-300/40 px-2 py-0.5 text-emerald-100"
+            onClick={() => setExportMessage('')}
+          >
+            關閉
+          </button>
+        </div>
+      )}
+
+      {recoveryDraft && (
+        <div
+          data-testid="recovery-banner"
+          role="alert"
+          className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/40 px-4 py-2 text-xs text-amber-100"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            發現上次未儲存的編輯：{recoveryDraft.filePath}
+          </span>
+          <button
+            type="button"
+            data-testid="recovery-restore"
+            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100"
+            onClick={() => {
+              actions.restoreDraft(recoveryDraft.html);
+              setRecoveryDraft(null);
+            }}
+          >
+            恢復
+          </button>
+          <button
+            type="button"
+            data-testid="recovery-discard"
+            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100"
+            onClick={() => {
+              void deleteDraft(recoveryDraft.key);
+              setRecoveryDraft(null);
+            }}
+          >
+            捨棄
+          </button>
         </div>
       )}
 
@@ -3005,9 +3390,9 @@ export function App() {
                 )}
               </div>
             ) : status === 'loading' ? (
-              <p className="text-sm text-zinc-500">載入中…</p>
+              <p className="text-sm text-zinc-400">載入中…</p>
             ) : (
-              <p className="text-sm text-zinc-500">找不到投影片。</p>
+              <p className="text-sm text-zinc-400">找不到投影片。</p>
             )}
           </main>
 

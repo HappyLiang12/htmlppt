@@ -372,7 +372,7 @@
   },
   {
     "name": "export_deck",
-    "description": "Export a deck to a self-contained HTML file. Additional formats arrive in a later milestone.",
+    "description": "Export a deck as standalone HTML, PDF, or one PNG per slide. PDF and PNG require a system Chrome, Edge, or Chromium.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -383,13 +383,18 @@
         },
         "format": {
           "type": "string",
-          "const": "html",
-          "default": "html"
+          "enum": [
+            "html",
+            "pdf",
+            "png"
+          ],
+          "default": "html",
+          "description": "html writes a cleaned standalone file; pdf and png render the slides."
         },
         "outDir": {
           "type": "string",
           "minLength": 1,
-          "description": "Output directory. Defaults to the deck directory."
+          "description": "Output directory, resolved against the deck directory and confined to it. Defaults to the deck directory."
         }
       },
       "required": [

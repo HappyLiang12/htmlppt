@@ -314,10 +314,21 @@ is terminated instead of being left running.
 
 Arguments: `{ path, format, outDir? }`.
 
-`format` is the literal `html` and defaults to `html`. Returns
-`{ path, format: "html", outputPath }`. The output is
-`<deck-name>.export.html` beside the deck, or in `outDir` when supplied. An
-invalid deck fails with `invalid-deck` and includes `errors`.
+`format` is one of `html`, `pdf`, or `png` and defaults to `html`.
+
+- `html` returns `{ path, format: "html", outputPath }` and writes
+  `<deck-name>.export.html` beside the deck, or in `outDir` when supplied.
+- `pdf` returns `{ path, format: "pdf", files }` with one PDF named
+  `<deck-name>.pdf`.
+- `png` returns `{ path, format: "png", files }` with one
+  `<deck-name>-sN.png` per slide.
+
+PDF and PNG require a system Chrome, Edge, or Chromium (or `HTMLPPT_CHROMIUM`)
+and fail with `renderer-unavailable` when none is found; `export-failed`
+reports a rendering error. `outDir` resolves against the deck directory and
+must stay inside it for every format, in direct and host-attached mode; an
+escape fails with `invalid-out-dir`. An invalid deck fails with `invalid-deck`
+and includes `errors`.
 
 ## Resources
 
@@ -345,12 +356,16 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `directory-not-found` | The parent directory of a new file does not exist. |
 | `invalid-deck` | The supplied or exported deck failed validation. Inspect `errors`. |
 | `invalid-result` | A mutation would make the deck invalid and was rejected. |
+| `renderer-unavailable` | PDF/PNG export found no Chrome, Edge, or Chromium. Install one or set `HTMLPPT_CHROMIUM`. |
+| `export-failed` | Rendering or the host export path failed. Read `message` for the actionable detail. |
 | `slide-not-found` | The slide id is wrong. Use `get_outline`. |
 | `target-not-found` | No element matches the target. Re-read the slide. |
 | `target-ambiguous` | The target matches more than one element. Use an id or a narrower selector. |
 | `target-invalid` | The selector or path is invalid, or an insertion anchor is not a direct child of the slide. |
 | `invalid-fragment` | `add_element` HTML is not exactly one root element. |
 | `invalid-image` | `add_image` source is not a supported data/http(s) URL, or a local image cannot be opened, measured, or read, is not a regular file, is empty, has an unsupported type, or is larger than 8 MB. A missing or empty-string `source` is `InvalidParams` before the handler runs. |
+| `invalid-out-dir` | `export_deck` `outDir` escapes the deck directory. Use a relative subdirectory such as `exports`. |
+| `source-overwrite` | The export destination would replace the source deck (for example a deck named `deck.pdf` exported as PDF). Rename the deck or choose a different `outDir`. |
 | `invalid-table` | `add_table` rows or columns are outside the 50x20 core bounds. |
 | `invalid-chart` | `update_chart` data is malformed or fails chart validation; the deck is unchanged. |
 | `invalid-insert` | A core insert rejected the geometry or content, for example a computed non-positive image size. |

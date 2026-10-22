@@ -91,5 +91,7 @@ conflict by rewriting the whole file unless the user asks for it.
 
 - `open_editor` starts a detached local editor host and returns its tokenized
   loopback URL. It does not modify the deck.
-- `export_deck` supports `format: "html"` in this milestone. PDF and PNG export
-  arrive later.
+- `export_deck` supports `format: "html"`, `"pdf"`, and `"png"`. PDF and PNG
+  render through a system Chrome, Edge, or Chromium; each PNG covers one slide.
+  When a live editor owns the deck, rendering goes through that host and its
+  output directory must stay inside the deck directory.

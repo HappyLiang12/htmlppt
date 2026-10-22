@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -86,6 +87,24 @@ describe('session registry', () => {
       expect((await stat(sessionsDirectory())).mode & 0o777).toBe(0o700);
     }
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'tightens CLI session files and directories to 0600/0700',
+    async () => {
+      // `htmlppt open` persists its session through writeSession. Windows ACLs
+      // cannot express POSIX mode bits, so this assertion is POSIX-only.
+      await mkdir(sessionsDirectory(), { recursive: true });
+      await chmod(sessionsDirectory(), 0o777);
+      const entry = makeEntry(join(home, 'cli-deck.html'));
+
+      await writeSession(entry);
+
+      expect((await stat(sessionsDirectory())).mode & 0o777).toBe(0o700);
+      expect((await stat(sessionFilePath(entry.path))).mode & 0o777).toBe(
+        0o600
+      );
+    }
+  );
 
   it('falls back to ~/.htmlppt/sessions', () => {
     delete process.env.HTMLPPT_HOME;

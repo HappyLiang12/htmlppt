@@ -1,5 +1,11 @@
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { mutateDeck, normalizeDeck, serializeDeck } from '@htmlppt/core';
+import {
+  detectSlides,
+  mutateDeck,
+  normalizeDeck,
+  serializeDeck
+} from '@htmlppt/core';
 import {
   DeckFileConflictError,
   parseDeckHtml,
@@ -7,14 +13,40 @@ import {
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
 import { isAbortError } from './abort.js';
+import {
+  INVALID_OUT_DIR_MESSAGE,
+  sameFilePath,
+  verifyExportDirectory
+} from './export-path.js';
 import { findLiveSession } from './host-session.js';
 
 /**
  * Upper bound for a single host HTTP request. Health checks use a shorter
  * bound because they only read and hash one local file; saves may wait on the
- * host's save lock.
+ * host's save lock. Exports include browser startup and rendering, so they get
+ * their own bound well above both.
  */
 export const HOST_REQUEST_TIMEOUT_MS = 5_000;
+export const HOST_EXPORT_TIMEOUT_MS = 60_000;
+
+export type ExportFormat = 'pdf' | 'png';
+
+export class DeckExportError extends Error {
+  readonly code:
+    | 'renderer-unavailable'
+    | 'export-failed'
+    | 'invalid-out-dir'
+    | 'source-overwrite';
+
+  constructor(
+    code: DeckExportError['code'],
+    message: string
+  ) {
+    super(message);
+    this.name = 'DeckExportError';
+    this.code = code;
+  }
+}
 
 export interface DeckSnapshot {
   document: Document;
@@ -56,6 +88,11 @@ export interface DeckService {
     html: string,
     baseRevision: string
   ): Promise<{ revision: string }>;
+  exportFiles(
+    filePath: string,
+    format: ExportFormat,
+    outDir?: string
+  ): Promise<string[]>;
 }
 
 export interface HostDeckServiceOptions {
@@ -66,6 +103,79 @@ export interface HostDeckServiceOptions {
 export interface DeckServiceOptions {
   hostUrl?: string;
   token?: string;
+}
+
+async function renderExport(
+  html: string,
+  document: Document,
+  deckPath: string,
+  format: ExportFormat,
+  outDir?: string
+): Promise<string[]> {
+  const parsed = path.parse(deckPath);
+  await mkdir(path.resolve(outDir ?? parsed.dir), { recursive: true });
+  const directory = await verifyExportDirectory(
+    deckPath,
+    path.resolve(outDir ?? parsed.dir)
+  );
+  if (!directory) {
+    throw new DeckExportError('invalid-out-dir', INVALID_OUT_DIR_MESSAGE);
+  }
+  const slides = detectSlides(document);
+  const first = slides[0];
+  if (!first) {
+    throw new DeckExportError('export-failed', 'No slide canvas was detected.');
+  }
+  if (format === 'pdf') {
+    const outPath = path.join(directory, `${parsed.name}.pdf`);
+    if (await sameFilePath(outPath, deckPath)) {
+      throw new DeckExportError(
+        'source-overwrite',
+        'Refusing to overwrite the source deck. Choose a different --out path.'
+      );
+    }
+  } else {
+    for (let index = 0; index < slides.length; index += 1) {
+      const outPath = path.join(
+        directory,
+        `${parsed.name}-s${index + 1}.png`
+      );
+      if (await sameFilePath(outPath, deckPath)) {
+        throw new DeckExportError(
+          'source-overwrite',
+          'Refusing to overwrite the source deck. Choose a different --out path.'
+        );
+      }
+    }
+  }
+  const renderer = await import('@htmlppt/renderer');
+  try {
+    if (format === 'pdf') {
+      const outPath = path.join(directory, `${parsed.name}.pdf`);
+      await renderer.renderPdf({
+        html,
+        width: first.width,
+        height: first.height,
+        outPath
+      });
+      return [outPath];
+    }
+    return await renderer.renderPngs({
+      html,
+      width: first.width,
+      height: first.height,
+      outDir: directory,
+      basename: parsed.name
+    });
+  } catch (error) {
+    if (error instanceof renderer.RendererUnavailableError) {
+      throw new DeckExportError('renderer-unavailable', error.message);
+    }
+    if (error instanceof renderer.RenderError) {
+      throw new DeckExportError('export-failed', error.message);
+    }
+    throw error;
+  }
 }
 
 export class DirectDeckService implements DeckService {
@@ -119,6 +229,21 @@ export class DirectDeckService implements DeckService {
     } catch (error) {
       throw await this.toConflict(error, filePath);
     }
+  }
+
+  async exportFiles(
+    filePath: string,
+    format: ExportFormat,
+    outDir?: string
+  ): Promise<string[]> {
+    const snapshot = await this.load(filePath);
+    return renderExport(
+      snapshot.html,
+      snapshot.document,
+      path.resolve(filePath),
+      format,
+      outDir
+    );
   }
 
   private async readCurrent(filePath: string) {
@@ -207,6 +332,38 @@ export class HostDeckService implements DeckService {
     return this.put(html, baseRevision);
   }
 
+  async exportFiles(
+    _filePath: string,
+    format: ExportFormat,
+    outDir?: string
+  ): Promise<string[]> {
+    const response = await this.request(
+      'POST',
+      '/api/export',
+      { format, outDir },
+      HOST_EXPORT_TIMEOUT_MS
+    );
+    const payload = await this.readJson(response, 'POST', '/api/export');
+    if (!response.ok) {
+      const message =
+        typeof payload?.message === 'string'
+          ? payload.message
+          : `Host export failed with status ${response.status}.`;
+      throw new DeckExportError(
+        response.status === 501 ? 'renderer-unavailable' : 'export-failed',
+        message
+      );
+    }
+    const files = payload?.files;
+    if (
+      !Array.isArray(files) ||
+      !files.every((file) => typeof file === 'string')
+    ) {
+      throw new Error('The host returned no exported files.');
+    }
+    return files;
+  }
+
   private async put(
     html: string,
     baseRevision: string
@@ -235,9 +392,10 @@ export class HostDeckService implements DeckService {
   }
 
   private async request(
-    method: 'GET' | 'PUT',
+    method: 'GET' | 'PUT' | 'POST',
     route: string,
-    body?: unknown
+    body?: unknown,
+    timeoutMs = HOST_REQUEST_TIMEOUT_MS
   ): Promise<Response> {
     const headers: Record<string, string> = {
       authorization: `Bearer ${this.token}`,
@@ -249,17 +407,17 @@ export class HostDeckService implements DeckService {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(HOST_REQUEST_TIMEOUT_MS)
+        signal: AbortSignal.timeout(timeoutMs)
       });
     } catch (error) {
-      this.throwIfTimedOut(error, method, route);
+      this.throwIfTimedOut(error, method, route, timeoutMs);
       throw error;
     }
   }
 
   private async readJson(
     response: Response,
-    method: 'GET' | 'PUT',
+    method: 'GET' | 'PUT' | 'POST',
     route: string
   ): Promise<Record<string, unknown> | null> {
     try {
@@ -276,7 +434,7 @@ export class HostDeckService implements DeckService {
 
   private async errorFor(
     response: Response,
-    method: 'GET' | 'PUT',
+    method: 'GET' | 'PUT' | 'POST',
     route: string
   ): Promise<Error> {
     let detail = '';
@@ -292,12 +450,13 @@ export class HostDeckService implements DeckService {
 
   private throwIfTimedOut(
     error: unknown,
-    method: 'GET' | 'PUT',
-    route: string
+    method: 'GET' | 'PUT' | 'POST',
+    route: string,
+    timeoutMs = HOST_REQUEST_TIMEOUT_MS
   ): void {
     if (isAbortError(error)) {
       throw new Error(
-        `Host request ${method} ${route} timed out after ${HOST_REQUEST_TIMEOUT_MS} ms.`
+        `Host request ${method} ${route} timed out after ${timeoutMs} ms.`
       );
     }
   }

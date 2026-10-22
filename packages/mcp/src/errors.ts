@@ -2,7 +2,7 @@ import path from 'node:path';
 import { DeckMutationError, type ElementTarget } from '@htmlppt/core';
 import { DeckFileExistsError } from '@htmlppt/core/node';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { DeckConflictError } from './deck-service.js';
+import { DeckConflictError, DeckExportError } from './deck-service.js';
 
 export type ToolOperation = 'read' | 'write';
 
@@ -75,6 +75,9 @@ export function errorPayload(
     };
   }
   if (error instanceof DeckMutationError) {
+    return { code: error.code, message: error.message, ...base };
+  }
+  if (error instanceof DeckExportError) {
     return { code: error.code, message: error.message, ...base };
   }
 
