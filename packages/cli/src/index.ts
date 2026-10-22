@@ -562,7 +562,7 @@ export async function runCli(
             // Some registry entries survived the prune: they exist but could
             // not be read or removed. Never report those as cleaned.
             io.stderr(
-              `Could not verify ${remaining.length} editor session ${remaining.length === 1 ? 'entry' : 'entries'} that are still in the registry at ${sessionsDirectory()}. Check permissions, then retry "htmlppt stop --all".`
+              `Could not verify ${remaining.length} editor session ${remaining.length === 1 ? 'entry that is' : 'entries that are'} still in the registry at ${sessionsDirectory()}. Check permissions, then retry "htmlppt stop --all".`
             );
             exitCode = 1;
             return;

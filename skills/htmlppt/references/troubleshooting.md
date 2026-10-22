@@ -127,7 +127,10 @@ CLI failures print a message to stderr and exit 1.
 | `No live editor sessions were stopped.` | Nothing was live or cleanable. |
 | `The editor session for <path> changed while stopping it. Retry "htmlppt stop <path>".` | The registry changed after verification. Re-run stop. |
 | `The editor session for <path> disappeared before it could be stopped.` | The host removed its entry first. No action needed. |
-| `The editor process <pid> for <path> did not stop within 5 seconds. Stop it manually, then run "htmlppt stop <path>" again.` | The process ignored or outlived SIGTERM. Inspect the process before killing it manually. |
+| `The editor process <pid> for <path> did not stop within 5 seconds. Stop it manually, then run "htmlppt stop <path>" again.` | The process ignored or outlived SIGTERM. Inspect the process before killing it manually. The timeout path is OS-limited and not covered by the automated tests. |
+| `Could not read the editor session registry at <dir>: ...` | The registry directory exists but is unreadable. Fix permissions, then retry the command. |
+| `Could not verify <n> editor session entries that are still in the registry at <dir>.` | Some entries survived pruning but could not be read or removed. Fix permissions, then retry `stop --all`. |
+| `Could not read the editor session entry for <path>.` | One entry is unreadable. Fix permissions on the registry, then retry. |
 | `Only html export is available in this milestone. Use --format html.` | PDF and PNG export are not available yet. |
 | `Invalid --port. Use an integer between 0 and 65535.` | Fix the port number. |
 

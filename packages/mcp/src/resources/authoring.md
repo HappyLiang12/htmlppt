@@ -40,8 +40,9 @@ predictable handle.
 - Inline styles keep authoring local and editable. Use `set_style` for individual
   CSS properties, with `null` to remove a property.
 - A deck's shared visual language belongs in a `<style>` block. Avoid
-  `position: fixed` and viewport-height layouts because they do not export
-  reliably.
+  `position: fixed` and full-height `100vh`/`100dvh`/`100svh`/`100lvh` layouts
+  because they may not export reliably. Other viewport units are not detected
+  by validation but still scale with the window.
 - `set_slide_background` accepts exactly one of `color`, `gradient`, or `image`.
   Colors use the `background` shorthand; gradients and images use
   `background-image`. The previous background form is cleared.

@@ -39,14 +39,17 @@ all read and write the same contract.
 - Multi-slide decks include exactly one runtime marker:
   `<script data-ppt-runtime="1">...</script>`.
 - A missing runtime produces a warning, not an error. Multiple markers or a
-  marker on another element type are errors.
+  marker on another element type are errors. Validation checks only the marker,
+  not the script body; an empty or comment-only runtime still validates but
+  cannot present.
 
 ## Assets, charts, and styles
 
 - Use `data:` or absolute URLs for images and other assets.
 - Chart data lives in `data-ppt-chart` and must be valid JSON.
-- `position: fixed` and viewport-height layouts produce validation warnings
-  because they may not export reliably.
+- `position: fixed` and full-height `100vh`/`100dvh`/`100svh`/`100lvh` layouts
+  produce validation warnings because they may not export reliably. Other
+  viewport units are not detected but still scale with the window.
 
 ## Editor artifacts
 
