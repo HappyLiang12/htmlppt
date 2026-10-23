@@ -13,7 +13,7 @@ import {
   type Response
 } from '@playwright/test';
 import { execa } from 'execa';
-import { parseDeckHtml } from '../packages/core/dist/node.js';
+import { parseDeckHtml } from '@htmlppt/core/node';
 import { startCliHost } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
