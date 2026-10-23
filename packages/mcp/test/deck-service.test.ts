@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import {
   mkdir,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -628,7 +629,11 @@ describe('findLiveSession', () => {
   it('finds a live session through a directory alias', async () => {
     const realDirectory = join(dir, 'real-deck');
     await mkdir(realDirectory);
-    const realDeck = join(realDirectory, 'deck.html');
+    // Session keys are derived from realpaths, so both the deck content and the
+    // registry entry must use the canonical directory: on macOS, for example,
+    // the temp root below /var resolves to /private/var.
+    const canonicalDirectory = await realpath(realDirectory);
+    const realDeck = join(canonicalDirectory, 'deck.html');
     await rename(await copyFixture('basic.deck.html', realDirectory), realDeck);
     const aliasDirectory = join(dir, 'alias-deck');
     await symlink(
