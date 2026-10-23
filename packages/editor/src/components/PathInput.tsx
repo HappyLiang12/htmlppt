@@ -18,10 +18,14 @@ export function PathInput({
   onPick
 }: PathInputProps) {
   const [draft, setDraft] = useState(value);
+  const focusedRef = useRef(false);
   const submittingRef = useRef(false);
+  const cancellingRef = useRef(false);
 
   useEffect(() => {
-    setDraft(value);
+    // A load can replace the deck while the field is focused. Keep the
+    // in-progress draft until focus leaves so typing is never clobbered.
+    if (!focusedRef.current) setDraft(value);
   }, [value]);
 
   const submit = (): void => {
@@ -47,16 +51,27 @@ export function PathInput({
         readOnly={!editable}
         disabled={opening}
         onChange={(event) => setDraft(event.target.value)}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault();
             submit();
           } else if (event.key === 'Escape') {
+            // Escape blurs, and that blur would otherwise submit the draft it
+            // is discarding. The flag is consumed by the blur handler.
+            cancellingRef.current = true;
             setDraft(value);
             event.currentTarget.blur();
           }
         }}
-        onBlur={submit}
+        onBlur={() => {
+          focusedRef.current = false;
+          const cancelled = cancellingRef.current;
+          cancellingRef.current = false;
+          if (!cancelled) submit();
+        }}
       />
       <button
         type="button"

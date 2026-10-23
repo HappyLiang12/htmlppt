@@ -2,10 +2,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent
 } from 'react';
+import { flushSync } from 'react-dom';
 import {
   chartDataOf,
   deleteTableColumn,
@@ -378,6 +380,16 @@ function objectActionStateFor(
   };
 }
 
+/** The bootstrap URL carries the session token; never echo it to the user. */
+function bootstrapOrigin(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
 function openErrorMessage(error: DeckOpenError): string {
   switch (error.code) {
     case 'invalid-path':
@@ -388,10 +400,18 @@ function openErrorMessage(error: DeckOpenError): string {
       return '只支援 .html 或 .htm 檔案。';
     case 'invalid-deck':
       return '這個檔案不是有效的簡報。';
-    case 'deck-already-open':
-      return error.url
-        ? `已在另一個 host 開啟：${error.url}`
+    case 'unauthorized':
+      return '未授權，請重新整理頁面。';
+    case 'host-closing':
+      return '編輯器正在關閉，請稍後再試。';
+    case 'deck-unreadable':
+      return '無法讀取檔案。';
+    case 'deck-already-open': {
+      const origin = bootstrapOrigin(error.url);
+      return origin
+        ? `已在另一個 host 開啟：${origin}`
         : '此簡報已在另一個 host 開啟。';
+    }
     default:
       return error.message || '開啟失敗。';
   }
@@ -540,6 +560,9 @@ export function App() {
   const detachSessionRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // The controller reports save/load completion through state, so an async
+  // open must force a render before reading the result from stateRef.
+  const [, syncControllerState] = useReducer((version: number) => version + 1, 0);
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
   const keyDownRef = useRef<
@@ -1308,9 +1331,28 @@ export function App() {
       setOpeningDeck(true);
       try {
         await actions.saveNow();
+        // saveNow can no-op (external busy, failed settlement) without an
+        // error; a still-dirty deck must not be replaced under the user. The
+        // controller update may not have rendered yet, so flush before reading.
+        flushSync(() => syncControllerState());
+        if (stateRef.current.dirty) {
+          setOpenDeckError('儲存未完成，無法開啟另一個檔案。');
+          return;
+        }
         if (stateRef.current.conflict || stateRef.current.error) return;
         const opened = await openDeck(input);
         await actions.load(opened);
+        // load reports failure as state, and its update may still be waiting
+        // for a render. Flush so the URL only changes for a successful load.
+        flushSync(() => syncControllerState());
+        const current = stateRef.current;
+        if (
+          current.status === 'load-error' ||
+          current.filePath !== opened.filePath
+        ) {
+          setOpenDeckError('載入失敗，已保留目前簡報。');
+          return;
+        }
         window.history.replaceState(null, '', opened.url);
       } catch (cause) {
         setOpenDeckError(
@@ -1329,19 +1371,38 @@ export function App() {
 
   const pickDeck = useCallback(async (): Promise<void> => {
     if (openingDeck) return;
+    setOpenDeckError(null);
+    setOpeningDeck(true);
     try {
       const picked = await pickHtmlFile();
       if (!picked) return;
       if (!actions.settlePendingEdits()) return;
       await actions.saveNow();
+      flushSync(() => syncControllerState());
+      if (stateRef.current.dirty) {
+        setOpenDeckError('儲存未完成，無法開啟另一個檔案。');
+        return;
+      }
       if (stateRef.current.conflict || stateRef.current.error) return;
       await openStandaloneFile(picked.file, picked.handle);
     } catch (cause) {
       setOpenDeckError(
         cause instanceof Error ? cause.message : String(cause)
       );
+    } finally {
+      setOpeningDeck(false);
     }
   }, [openingDeck, actions, openStandaloneFile]);
+
+  // An open swaps the whole document under any active text/gesture session.
+  // Park focus first so the outgoing deck cannot receive further edits.
+  useEffect(() => {
+    if (!openingDeck) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+    const framed = frame.current?.contentDocument?.activeElement;
+    if (framed instanceof HTMLElement) framed.blur();
+  }, [openingDeck]);
 
   const restoreStandaloneDraft = useCallback(
     async (draft: DraftRecord) => {
@@ -3225,7 +3286,10 @@ export function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-[#0f1115] text-zinc-100">
+    <div
+      className="flex h-screen flex-col bg-[#0f1115] text-zinc-100"
+      aria-busy={openingDeck || undefined}
+    >
       <p
         data-testid="a11y-status"
         className="sr-only"
@@ -3519,6 +3583,18 @@ export function App() {
             onSetNotes={handleNotesChange}
           />
         </div>
+      )}
+
+      {openingDeck && (
+        <div
+          data-testid="opening-overlay"
+          aria-hidden="true"
+          className="fixed inset-0 z-50 cursor-progress bg-black/10"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        />
       )}
     </div>
   );

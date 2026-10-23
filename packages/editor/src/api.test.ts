@@ -86,6 +86,35 @@ describe('host API authentication', () => {
     expect(call[1].body).toBe(JSON.stringify({ path: 'next.html' }));
   });
 
+  it('never exposes a raw error body when the payload has no message', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'internal' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response('upstream boom', {
+          status: 502,
+          headers: { 'content-type': 'text/plain' }
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(openDeck('deck.html')).rejects.toMatchObject({
+      name: 'DeckOpenError',
+      code: 'internal',
+      message: '開啟失敗。'
+    });
+    await expect(openDeck('deck.html')).rejects.toMatchObject({
+      name: 'DeckOpenError',
+      code: 'open-failed',
+      message: '開啟失敗。'
+    });
+  });
+
   it('exports and flushes with the cookie only', async () => {
     const fetchMock = vi
       .fn()

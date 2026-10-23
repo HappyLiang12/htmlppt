@@ -141,7 +141,7 @@ export async function openDeck(path: string): Promise<OpenDeckResponse> {
     body: JSON.stringify({ path })
   });
   if (!response.ok) {
-    const { detail, payload } = await readErrorPayload(response);
+    const { payload } = await readErrorPayload(response);
     const body =
       payload !== null && typeof payload === 'object'
         ? (payload as { error?: unknown; message?: unknown; url?: unknown })
@@ -149,7 +149,9 @@ export async function openDeck(path: string): Promise<OpenDeckResponse> {
     throw new DeckOpenError(
       response.status,
       typeof body.error === 'string' ? body.error : 'open-failed',
-      typeof body.message === 'string' ? body.message : detail,
+      // Never fall back to the raw body: a JSON error payload without a
+      // message would otherwise be shown to the user verbatim.
+      typeof body.message === 'string' ? body.message : '開啟失敗。',
       typeof body.url === 'string' ? body.url : undefined
     );
   }

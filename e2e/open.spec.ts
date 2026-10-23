@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   access,
   mkdir,
@@ -11,7 +11,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Response
+} from '@playwright/test';
 import { execa } from 'execa';
 import { startCliHost } from './helpers';
 
@@ -32,9 +38,19 @@ function pathInput(page: Page): Locator {
   return page.getByTestId('deck-path');
 }
 
+function isOpenRequest(request: {
+  method(): string;
+  url(): string;
+}): boolean {
+  return (
+    request.method() === 'POST' &&
+    new URL(request.url()).pathname === '/api/open'
+  );
+}
+
 function waitForDeckSave(page: Page) {
   return page.waitForResponse(
-    (response) =>
+    (response: Response) =>
       response.request().method() === 'PUT' &&
       new URL(response.url()).pathname === '/api/deck'
   );
@@ -52,8 +68,11 @@ async function createDeck(
 }
 
 /** A second deck with a heading that cannot be confused with the first. */
-async function createSecondDeck(directory: string): Promise<string> {
-  const path = await createDeck(directory, 'second.html', 1);
+async function createSecondDeck(
+  directory: string,
+  file = 'second.html'
+): Promise<string> {
+  const path = await createDeck(directory, file, 1);
   const html = await readFile(path, 'utf8');
   const updated = html.replace(
     /(<h1[^>]*>)Untitled deck(<\/h1>)/,
@@ -83,6 +102,7 @@ async function startIsolatedHost(
   }
 }
 
+/** The registry path the CLI uses: HTMLPPT_HOME/sessions/<sha256(path)>.json */
 function registryFile(home: string, deckPath: string): string {
   const key = createHash('sha256').update(deckPath).digest('hex');
   return join(home, 'sessions', `${key}.json`);
@@ -115,30 +135,34 @@ test(
       await expect(frameHeading(page)).toContainText('Untitled deck');
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
 
-      // Persist the editor's initial normalization before measuring: the open
-      // flow must not touch the first deck after this snapshot.
-      const initialSave = waitForDeckSave(page);
-      await page.keyboard.press('Control+s');
-      expect((await initialSave).ok()).toBeTruthy();
-      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
-      const firstBefore = await readFile(firstPath, 'utf8');
-
       let openRequests = 0;
       page.on('request', (request) => {
-        if (
-          request.method() === 'POST' &&
-          new URL(request.url()).pathname === '/api/open'
-        ) {
-          openRequests += 1;
-        }
+        if (isOpenRequest(request)) openRequests += 1;
       });
 
+      // Leave a text edit pending, then open the second deck immediately. The
+      // open flow must settle and save it into the first deck first, while the
+      // second deck's h1 still proves the new document loaded.
+      const firstHeading = frameHeading(page);
+      await firstHeading.dblclick();
+      await expect(firstHeading).toHaveAttribute('contenteditable', 'true');
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('First deck edited');
       await pathInput(page).fill(secondPath);
       await pathInput(page).press('Enter');
+
       await expect(frameHeading(page)).toContainText('Second deck');
       await expect(page).toHaveURL(/\/d\/second\.html$/);
       expect(new URL(page.url()).pathname).toBe('/d/second.html');
       await expect(pathInput(page)).toHaveValue(/second\.html$/);
+      expect(openRequests).toBe(1);
+
+      // The pending first-deck edit is in the first file before the open; the
+      // post-open snapshot is what the second-deck edit must leave untouched.
+      await expect
+        .poll(async () => readFile(firstPath, 'utf8'))
+        .toContain('First deck edited');
+      const firstBefore = await readFile(firstPath, 'utf8');
 
       const heading = frameHeading(page);
       await heading.dblclick();
@@ -159,13 +183,13 @@ test(
       // through the input must work, and blurring an unchanged value is inert.
       await pathInput(page).fill(firstPath);
       await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
-      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(frameHeading(page)).toContainText('First deck edited');
       await expect(page).toHaveURL(/\/d\/first\.html$/);
       const current = await pathInput(page).inputValue();
       const requestsBefore = openRequests;
       await pathInput(page).fill(current);
       await page.getByTestId('canvas-preview').click({ position: { x: 4, y: 4 } });
-      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(frameHeading(page)).toContainText('First deck edited');
       await expect(page).toHaveURL(/\/d\/first\.html$/);
       expect(openRequests).toBe(requestsBefore);
     } finally {
@@ -176,14 +200,14 @@ test(
 );
 
 test(
-  'accepts a file URL and keeps the current deck on failure',
+  'accepts a file URL, keeps the current deck on failure, and cancels Escape',
   { tag: '@feature:editor-core' },
   async ({ page }) => {
     test.setTimeout(120_000);
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-open-url-'));
     let host: StartedHost | undefined;
     try {
-      await createDeck(directory, 'first.html', 2);
+      const firstPath = await createDeck(directory, 'first.html', 2);
       const secondPath = await createSecondDeck(directory);
       host = await startCliHost(cliPath, directory, 'first.html');
 
@@ -206,11 +230,138 @@ test(
       await expect(frameHeading(page)).toContainText('Second deck');
       expect(new URL(page.url()).pathname).toBe('/d/second.html');
 
-      // Escape discards the draft and restores the loaded deck path.
-      await pathInput(page).fill(join(directory, 'discarded.html'));
+      // Escape must cancel the draft, not submit it through the blur it
+      // causes. The discarded path is a real deck, so a missing-file error
+      // cannot hide a submitted open.
+      let openRequests = 0;
+      page.on('request', (request) => {
+        if (isOpenRequest(request)) openRequests += 1;
+      });
+      await pathInput(page).fill(firstPath);
       await pathInput(page).press('Escape');
+      await expect(pathInput(page)).not.toBeFocused();
       await expect(pathInput(page)).toHaveValue(/second\.html$/);
+      await expect(frameHeading(page)).toContainText('Second deck');
+      await expect(page).toHaveURL(/\/d\/second\.html$/);
+
+      // A later request proves the browser already processed the blur task;
+      // an open submitted by the blur would have been observed by then.
+      const health = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/health' && response.ok()
+      );
+      await page.evaluate(() => fetch('/api/health'));
+      await health;
+      expect(openRequests).toBe(0);
     } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'shows a 409 host origin without its token and never prints raw JSON',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-open-errors-'));
+    let host: StartedHost | undefined;
+    try {
+      await createDeck(directory, 'first.html', 2);
+      const secondPath = await createSecondDeck(directory);
+      host = await startCliHost(cliPath, directory, 'first.html');
+
+      await page.goto(host.url);
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+      await page.route('**/api/open', (route) =>
+        route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'deck-already-open',
+            url: 'http://127.0.0.1:4567/editor?token=super-secret'
+          })
+        })
+      );
+      await pathInput(page).fill(secondPath);
+      await pathInput(page).press('Enter');
+      await expect(page.locator('#deck-path-error')).toHaveText(
+        '已在另一個 host 開啟：http://127.0.0.1:4567'
+      );
+      await expect(page.locator('#deck-path-error')).not.toContainText(
+        'super-secret'
+      );
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page).toHaveURL(/\/d\/first\.html$/);
+
+      // An error payload without a message must not echo the JSON body.
+      await page.unroute('**/api/open');
+      await page.route('**/api/open', (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'mystery' })
+        })
+      );
+      await pathInput(page).fill(secondPath);
+      await pathInput(page).press('Enter');
+      await expect(page.locator('#deck-path-error')).toHaveText('開啟失敗。');
+      await expect(page.locator('#deck-path-error')).not.toContainText(
+        'mystery'
+      );
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page).toHaveURL(/\/d\/first\.html$/);
+    } finally {
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'a second tab follows the open and rebinds its URL',
+  { tag: '@feature:live-sync' },
+  async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-open-rebind-'));
+    let host: StartedHost | undefined;
+    let other: Page | undefined;
+    try {
+      await createDeck(directory, 'first.html', 2);
+      const secondPath = await createSecondDeck(directory);
+      host = await startCliHost(cliPath, directory, 'first.html');
+
+      await page.goto(host.url);
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+      other = await context.newPage();
+      const liveStream = other.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/events' && response.ok()
+      );
+      await other.goto(host.url);
+      await liveStream;
+      await expect(other).toHaveURL(/\/d\/first\.html$/);
+      await expect(pathInput(other)).toHaveValue(/first\.html$/);
+      await expect(frameHeading(other)).toContainText('Untitled deck');
+      await expect(other.getByTestId('save-status')).toHaveText('已同步');
+
+      await pathInput(page).fill(secondPath);
+      await pathInput(page).press('Enter');
+      await expect(frameHeading(page)).toContainText('Second deck');
+      await expect(page).toHaveURL(/\/d\/second\.html$/);
+
+      // The host broadcast rebinds the untouched tab without a navigation.
+      await expect(frameHeading(other)).toContainText('Second deck');
+      await expect(other).toHaveURL(/\/d\/second\.html$/);
+      await expect(pathInput(other)).toHaveValue(/second\.html$/);
+      await expect(other.getByTestId('save-status')).toHaveText('已同步');
+    } finally {
+      await other?.close();
       await host?.stop();
       await rm(directory, { recursive: true, force: true });
     }
@@ -263,12 +414,24 @@ test(
     test.setTimeout(120_000);
     const root = await mkdtemp(join(tmpdir(), 'htmlppt-open-registry-'));
     const home = join(root, 'home');
+    // Unique deck names keep the registry assertions from colliding with any
+    // other test or a developer's real session entries.
+    const suffix = randomUUID();
+    const firstName = `first-${suffix}.html`;
+    const secondName = `second-${suffix}.html`;
     let host: StartedHost | undefined;
     try {
       await mkdir(home, { recursive: true });
-      const firstPath = await createDeck(root, 'first.html', 2);
-      const secondPath = await createSecondDeck(root);
-      host = await startIsolatedHost(root, 'first.html', home);
+      const firstPath = await createDeck(root, firstName, 2);
+      const secondPath = await createSecondDeck(root, secondName);
+      host = await startIsolatedHost(root, firstName, home);
+
+      const firstReal = await realpath(firstPath);
+      const secondReal = await realpath(secondPath);
+      expect(
+        await exists(registryFile(home, firstReal)),
+        'the first deck is registered before the open'
+      ).toBe(true);
 
       const token = new URL(host.url).searchParams.get('token');
       if (!token) throw new Error(`Host URL has no token: ${host.url}`);
@@ -282,16 +445,14 @@ test(
       });
       expect(response.status).toBe(200);
       const opened = (await response.json()) as { filePath: string };
-      expect(opened.filePath).toBe(await realpath(secondPath));
+      expect(opened.filePath).toBe(secondReal);
 
-      const firstReal = await realpath(firstPath);
-      const secondReal = await realpath(secondPath);
       expect(await exists(registryFile(home, firstReal))).toBe(false);
       expect(await exists(registryFile(home, secondReal))).toBe(true);
 
       const reopened = await execa(
         'node',
-        [cliPath, 'open', 'second.html', '--no-browser'],
+        [cliPath, 'open', secondName, '--no-browser'],
         { cwd: root, env: { ...process.env, HTMLPPT_HOME: home } }
       );
       const urls = reopened.stdout.match(/HTMLPPT_URL=(\S+)/g) ?? [];
@@ -299,7 +460,7 @@ test(
       const nextUrl = new URL(/HTMLPPT_URL=(\S+)/.exec(reopened.stdout)?.[1] ?? '');
       expect(nextUrl.port).toBe(new URL(host.url).port);
 
-      const stopped = await execa('node', [cliPath, 'stop', 'second.html'], {
+      const stopped = await execa('node', [cliPath, 'stop', secondName], {
         cwd: root,
         env: { ...process.env, HTMLPPT_HOME: home }
       });
