@@ -1,3 +1,5 @@
+import type { Translator } from './i18n';
+
 const MAX_TEXT_LENGTH = 40;
 
 function shortText(element: Element): string {
@@ -10,20 +12,25 @@ function shortText(element: Element): string {
  */
 export function describeSelection(
   element: Element | null,
-  count: number
+  count: number,
+  t: Translator
 ): string {
-  if (count <= 0 || !element) return '已取消選取';
-  if (count > 1) return `已選取 ${count} 個物件`;
+  if (count <= 0 || !element) return t('app.deselected');
+  if (count > 1) return t('a11y.selectedCount', { count });
   const tag = element.tagName.toLowerCase();
   const text = shortText(element);
-  if (!text) return `已選取 ${tag}`;
+  if (!text) return t('a11y.selectedTag', { tag });
   const summary =
     text.length > MAX_TEXT_LENGTH
       ? `${text.slice(0, MAX_TEXT_LENGTH - 1)}…`
       : text;
-  return `已選取 ${tag}：${summary}`;
+  return t('a11y.selectedSummary', { tag, summary });
 }
 
-export function describeSlide(index: number, total: number): string {
-  return `第 ${index + 1} 頁，共 ${total} 頁`;
+export function describeSlide(
+  index: number,
+  total: number,
+  t: Translator
+): string {
+  return t('a11y.slide', { index: index + 1, total });
 }

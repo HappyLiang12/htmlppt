@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { SlideInfo } from '@htmlppt/core';
+import { useI18n } from '../i18n';
 import { buildSlideSrcDoc } from '../slide-doc';
 
 /** Slides without a heading still need a readable label in editor chrome. */
-export function slideTitle(slide: SlideInfo): string {
+export function slideTitle(
+  slide: SlideInfo,
+  untitled = '未命名投影片'
+): string {
   const heading = slide.element.querySelector('h1, h2, h3, [data-ppt-title]');
   const text = heading?.textContent?.replace(/\s+/g, ' ').trim();
-  return text || '未命名投影片';
+  return text || untitled;
 }
 
 export interface SlideMiniatureProps {
@@ -26,6 +30,7 @@ export function SlideMiniature({
   width,
   className = ''
 }: SlideMiniatureProps) {
+  const { t } = useI18n();
   const srcDoc = useMemo(
     () =>
       master ? buildSlideSrcDoc(master, slide, { markFrame: false }) : '',
@@ -42,7 +47,7 @@ export function SlideMiniature({
     >
       {srcDoc && (
         <iframe
-          title="投影片縮圖"
+          title={t('rail.thumbnail')}
           sandbox="allow-same-origin"
           srcDoc={srcDoc}
           tabIndex={-1}
@@ -74,6 +79,7 @@ export function ThumbnailRail({
   activeIndex,
   onSelect
 }: ThumbnailRailProps) {
+  const { t } = useI18n();
   const activeRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -83,12 +89,12 @@ export function ThumbnailRail({
   return (
     <aside
       data-testid="thumbnail-rail"
-      aria-label="投影片縮圖"
+      aria-label={t('rail.thumbnail')}
       className="flex w-48 shrink-0 flex-col gap-2 overflow-y-auto border-r border-white/10 p-3"
     >
       {slides.map((slide, index) => {
         const active = index === activeIndex;
-        const title = slideTitle(slide);
+        const title = slideTitle(slide, t('rail.untitled'));
         return (
           <div
             key={slide.id}
@@ -113,7 +119,7 @@ export function ThumbnailRail({
               <span
                 data-testid="thumbnail-active-marker"
                 aria-hidden="true"
-                title="目前投影片"
+                title={t('rail.current')}
                 className="absolute right-1 top-1 rounded bg-amber-400 px-1 py-0.5 text-[10px] font-semibold text-zinc-950"
               >
                 ✓
@@ -129,7 +135,10 @@ export function ThumbnailRail({
             </span>
             <button
               type="button"
-              aria-label={`第 ${index + 1} 頁：${title}`}
+              aria-label={t('rail.pageTitle', {
+                index: index + 1,
+                title
+              })}
               aria-current={active ? 'page' : undefined}
               onClick={() => onSelect(index)}
               className="absolute inset-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"

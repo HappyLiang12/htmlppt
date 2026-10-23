@@ -1,5 +1,6 @@
 import { useState, type DragEvent } from 'react';
 import { pickHtmlFile } from '../file-picker';
+import { useI18n } from '../i18n';
 import type { DraftRecord } from '../recovery';
 
 export interface StandaloneLauncherProps {
@@ -32,6 +33,7 @@ export function StandaloneLauncher({
   onRestore,
   onDiscard
 }: StandaloneLauncherProps) {
+  const { t } = useI18n();
   const [dragging, setDragging] = useState(false);
 
   const chooseFile = async () => {
@@ -63,11 +65,10 @@ export function StandaloneLauncher({
           htmlppt
         </p>
         <h1 id="standalone-title" className="mt-2 text-xl font-semibold">
-          獨立編輯模式
+          {t('standalone.title')}
         </h1>
         <p className="mt-2 text-sm text-zinc-400">
-          未連上本機 host。開啟或拖入一份 HTML 簡報即可編輯；支援 File System
-          Access 的瀏覽器會直接寫回原檔，其他瀏覽器可下載匯出的 HTML。
+          {t('standalone.description')}
         </p>
 
         <div
@@ -91,10 +92,10 @@ export function StandaloneLauncher({
             disabled={busy}
             onClick={() => void chooseFile()}
           >
-            開啟 HTML…
+            {t('standalone.open')}
           </button>
           <label className="cursor-pointer text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline">
-            或上傳 HTML 檔
+            {t('standalone.upload')}
             <input
               data-testid="standalone-file"
               type="file"
@@ -123,7 +124,7 @@ export function StandaloneLauncher({
         {drafts.length > 0 && (
           <div className="mt-6">
             <h2 className="text-sm font-medium text-zinc-200">
-              未儲存的編輯
+              {t('recovery.available')}
             </h2>
             <ul className="mt-2 space-y-2">
               {drafts.map((draft) => (
@@ -145,7 +146,7 @@ export function StandaloneLauncher({
                     disabled={busy}
                     onClick={() => onRestore(draft)}
                   >
-                    恢復
+                    {t('recovery.restore')}
                   </button>
                   <button
                     type="button"
@@ -154,7 +155,7 @@ export function StandaloneLauncher({
                     disabled={busy}
                     onClick={() => onDiscard(draft)}
                   >
-                    捨棄
+                    {t('recovery.discard')}
                   </button>
                 </li>
               ))}
@@ -163,11 +164,7 @@ export function StandaloneLauncher({
         )}
 
         <p className="mt-6 text-xs text-zinc-500">
-          PDF/PNG 需要本機 Chromium 與 host，請改用
-          <code className="mx-1 rounded bg-white/10 px-1 py-0.5">
-            htmlppt open deck.html
-          </code>
-          開啟。
+          {t('export.standaloneUnsupported')}
         </p>
       </section>
     </div>

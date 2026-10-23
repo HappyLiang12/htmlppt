@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useI18n } from '../i18n';
 
 export interface PathInputProps {
   value: string;
@@ -17,6 +18,7 @@ export function PathInput({
   onOpen,
   onPick
 }: PathInputProps) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState(value);
   const focusedRef = useRef(false);
   const submittingRef = useRef(false);
@@ -43,7 +45,7 @@ export function PathInput({
     <div className="flex min-w-0 items-center gap-1">
       <input
         data-testid="deck-path"
-        aria-label="簡報路徑"
+        aria-label={t('path.label')}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? 'deck-path-error' : undefined}
         className="w-64 truncate rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70"
@@ -77,13 +79,13 @@ export function PathInput({
         type="button"
         data-testid="deck-picker"
         className="rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 hover:border-white/60"
-        title="開啟另一個 HTML 檔"
-        aria-label="開啟另一個 HTML 檔"
+        title={t('path.openHint')}
+        aria-label={t('path.openHint')}
         disabled={opening}
         onPointerDown={(event) => event.preventDefault()}
         onClick={onPick}
       >
-        開啟…
+        {t('path.open')}
       </button>
       {error && (
         <span

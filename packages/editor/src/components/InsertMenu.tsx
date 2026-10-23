@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ShapeKind } from '@htmlppt/core';
+import { useI18n, type MessageKey } from '../i18n';
 
 export interface InsertMenuProps {
   onInsertText: () => void;
@@ -19,13 +20,13 @@ const FIELD =
 
 type MenuName = 'shape' | 'table' | 'image';
 
-const SHAPES: { shape: ShapeKind; label: string }[] = [
-  { shape: 'rect', label: '矩形' },
-  { shape: 'rounded-rect', label: '圓角矩形' },
-  { shape: 'ellipse', label: '橢圓' },
-  { shape: 'triangle', label: '三角形' },
-  { shape: 'line', label: '線條' },
-  { shape: 'arrow', label: '箭頭' }
+const SHAPES: { shape: ShapeKind; label: MessageKey }[] = [
+  { shape: 'rect', label: 'insert.rect' },
+  { shape: 'rounded-rect', label: 'insert.rounded' },
+  { shape: 'ellipse', label: 'insert.ellipse' },
+  { shape: 'triangle', label: 'insert.triangle' },
+  { shape: 'line', label: 'insert.line' },
+  { shape: 'arrow', label: 'insert.arrow' }
 ];
 
 export function InsertMenu({
@@ -36,6 +37,7 @@ export function InsertMenu({
   onInsertImageFile,
   onInsertImageUrl
 }: InsertMenuProps) {
+  const { t } = useI18n();
   const [menu, setMenu] = useState<MenuName | null>(null);
   const [rows, setRows] = useState('3');
   const [columns, setColumns] = useState('3');
@@ -75,22 +77,26 @@ export function InsertMenu({
   const columnCount = tableSize(columns, 20);
 
   return (
-    <div className="flex items-center gap-1" role="group" aria-label="插入物件">
+    <div
+      className="flex items-center gap-1"
+      role="group"
+      aria-label={t('insert.group')}
+    >
       <button
         type="button"
         data-testid="insert-text"
-        title="插入文字方塊"
+        title={t('insert.textHint')}
         className={BUTTON}
         onClick={onInsertText}
       >
-        文字
+        {t('insert.text')}
       </button>
 
       <div className="relative">
         <button
           type="button"
           data-testid="insert-shape"
-          title="插入形狀"
+          title={t('insert.shapeHint')}
           aria-expanded={menu === 'shape'}
           ref={(element) => {
             triggers.current.shape = element;
@@ -101,7 +107,7 @@ export function InsertMenu({
             if (menu === 'shape') menuKeyDown(event, 'shape');
           }}
         >
-          形狀
+          {t('insert.shape')}
         </button>
         {menu === 'shape' && (
           <div
@@ -120,7 +126,7 @@ export function InsertMenu({
                   onInsertShape(shape);
                 }}
               >
-                {label}
+                {t(label)}
               </button>
             ))}
           </div>
@@ -131,7 +137,7 @@ export function InsertMenu({
         <button
           type="button"
           data-testid="insert-table"
-          title="插入表格"
+          title={t('insert.tableHint')}
           aria-expanded={menu === 'table'}
           ref={(element) => {
             triggers.current.table = element;
@@ -142,7 +148,7 @@ export function InsertMenu({
             if (menu === 'table') menuKeyDown(event, 'table');
           }}
         >
-          表格
+          {t('insert.table')}
         </button>
         {menu === 'table' && (
           <div
@@ -151,26 +157,26 @@ export function InsertMenu({
             onKeyDown={(event) => menuKeyDown(event, 'table')}
           >
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
-              列
+              {t('insert.rows')}
               <input
                 type="number"
                 min={1}
                 max={50}
                 data-testid="table-rows"
-                aria-label="表格列數"
+                aria-label={t('insert.rowsLabel')}
                 value={rows}
                 onChange={(event) => setRows(event.target.value)}
                 className={FIELD}
               />
             </label>
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
-              欄
+              {t('insert.columns')}
               <input
                 type="number"
                 min={1}
                 max={20}
                 data-testid="table-columns"
-                aria-label="表格欄數"
+                aria-label={t('insert.columnsLabel')}
                 value={columns}
                 onChange={(event) => setColumns(event.target.value)}
                 className={FIELD}
@@ -187,7 +193,7 @@ export function InsertMenu({
                 onInsertTable(rowCount, columnCount);
               }}
             >
-              插入表格
+              {t('insert.createTable')}
             </button>
           </div>
         )}
@@ -196,18 +202,18 @@ export function InsertMenu({
       <button
         type="button"
         data-testid="insert-chart"
-        title="插入圖表"
+        title={t('insert.chartHint')}
         className={BUTTON}
         onClick={onInsertChart}
       >
-        圖表
+        {t('insert.chart')}
       </button>
 
       <div className="relative">
         <button
           type="button"
           data-testid="insert-image"
-          title="插入圖片"
+          title={t('insert.imageHint')}
           aria-expanded={menu === 'image'}
           ref={(element) => {
             triggers.current.image = element;
@@ -218,7 +224,7 @@ export function InsertMenu({
             if (menu === 'image') menuKeyDown(event, 'image');
           }}
         >
-          圖片
+          {t('insert.image')}
         </button>
         {menu === 'image' && (
           <div
@@ -235,7 +241,7 @@ export function InsertMenu({
                 fileInput.current?.click();
               }}
             >
-              上傳圖片…
+              {t('insert.uploadImage')}
             </button>
             <button
               type="button"
@@ -246,7 +252,7 @@ export function InsertMenu({
                 onInsertImageUrl();
               }}
             >
-              圖片網址…
+              {t('insert.imageUrl')}
             </button>
           </div>
         )}

@@ -1,5 +1,10 @@
 import type { ShapeKind } from '@htmlppt/core';
 import type { SaveStatus } from '../use-deck-controller';
+import {
+  useI18n,
+  type Locale,
+  type MessageKey
+} from '../i18n';
 import { ExportMenu, type ExportFormat } from './ExportMenu';
 import { InsertMenu } from './InsertMenu';
 import { PathInput } from './PathInput';
@@ -43,15 +48,15 @@ export interface ToolbarProps {
   standaloneMode?: boolean;
 }
 
-const STATUS_LABEL: Record<SaveStatus, string> = {
-  loading: '載入中…',
-  ready: '已同步',
-  saving: '儲存中…',
-  saved: '已儲存',
-  external: '外部更新',
-  conflict: '衝突',
-  'load-error': '載入失敗',
-  error: '儲存失敗'
+const STATUS_KEY: Record<SaveStatus, MessageKey> = {
+  loading: 'common.loading',
+  ready: 'common.ready',
+  saving: 'common.saving',
+  saved: 'common.saved',
+  external: 'common.external',
+  conflict: 'common.conflict',
+  'load-error': 'common.loadFailed',
+  error: 'common.saveFailed'
 };
 
 const BUTTON_CLASS =
@@ -93,6 +98,8 @@ export function Toolbar({
   standaloneUpload = false,
   standaloneMode = false
 }: ToolbarProps) {
+  const { locale, setLocale, t } = useI18n();
+
   return (
     <header
       data-testid="toolbar"
@@ -122,18 +129,18 @@ export function Toolbar({
         }`}
       >
         {standaloneMode && status === 'ready'
-          ? '已開啟'
+          ? t('status.opened')
           : status === 'saved' && standaloneUpload
-            ? '已暫存'
-            : STATUS_LABEL[status]}
+            ? t('status.drafted')
+            : t(STATUS_KEY[status])}
       </span>
       {standaloneMode && (
         <span
           data-testid="standalone-badge"
           className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] text-amber-200"
-          title="未連上 host；下載 HTML 或按 Ctrl+S 才會寫出檔案"
+          title={t('toolbar.standaloneHint')}
         >
-          獨立模式
+          {t('toolbar.standaloneBadge')}
         </span>
       )}
 
@@ -142,37 +149,39 @@ export function Toolbar({
           type="button"
           data-testid="add-slide"
           className={BUTTON_CLASS}
-          title="在目前投影片後新增"
+          title={t('toolbar.addHint')}
           onClick={(event) => {
             // A double click also emits a second click with detail 2; one
             // toolbar gesture must create one slide.
             if (event.detail <= 1) onAddSlide();
           }}
         >
-          新增
+          {t('toolbar.add')}
         </button>
         <button
           type="button"
           data-testid="duplicate-slide"
           className={BUTTON_CLASS}
-          title="複製目前投影片"
+          title={t('toolbar.duplicateHint')}
           onClick={(event) => {
             if (event.detail <= 1) onDuplicateSlide();
           }}
         >
-          複製
+          {t('toolbar.duplicate')}
         </button>
         <button
           type="button"
           data-testid="delete-slide"
           className={BUTTON_CLASS}
-          title={canDelete ? '刪除目前投影片' : '至少需要保留一頁'}
+          title={
+            canDelete ? t('toolbar.deleteHint') : t('toolbar.keepOneSlide')
+          }
           onClick={(event) => {
             if (event.detail <= 1) onDeleteSlide();
           }}
           disabled={!canDelete}
         >
-          刪除
+          {t('toolbar.deleteSlide')}
         </button>
       </div>
 
@@ -190,19 +199,19 @@ export function Toolbar({
           type="button"
           data-testid="undo"
           className={BUTTON_CLASS}
-          title="復原"
+          title={t('shortcuts.undo')}
           onClick={onUndo}
         >
-          復原
+          {t('shortcuts.undo')}
         </button>
         <button
           type="button"
           data-testid="redo"
           className={BUTTON_CLASS}
-          title="重做"
+          title={t('shortcuts.redo')}
           onClick={onRedo}
         >
-          重做
+          {t('shortcuts.redo')}
         </button>
       </div>
 
@@ -213,7 +222,7 @@ export function Toolbar({
           onClick={onPreviousSlide}
           disabled={activeIndex <= 0}
         >
-          上一頁
+          {t('toolbar.previous')}
         </button>
         <span data-testid="slide-counter" className="tabular-nums">
           {slideCount === 0 ? 0 : activeIndex + 1} / {slideCount}
@@ -224,14 +233,14 @@ export function Toolbar({
           onClick={onNextSlide}
           disabled={activeIndex >= slideCount - 1}
         >
-          下一頁
+          {t('toolbar.next')}
         </button>
       </div>
 
       <div
         className="flex items-center gap-1"
         role="group"
-        aria-label="檢視模式"
+        aria-label={t('toolbar.viewGroup')}
       >
         <button
           type="button"
@@ -240,7 +249,7 @@ export function Toolbar({
           className={view === 'normal' ? ACTIVE_VIEW_CLASS : BUTTON_CLASS}
           onClick={() => onViewChange('normal')}
         >
-          一般
+          {t('toolbar.viewNormal')}
         </button>
         <button
           type="button"
@@ -249,30 +258,41 @@ export function Toolbar({
           className={view === 'sorter' ? ACTIVE_VIEW_CLASS : BUTTON_CLASS}
           onClick={() => onViewChange('sorter')}
         >
-          排序
+          {t('toolbar.viewSorter')}
         </button>
       </div>
 
       <div className="ml-auto flex items-center gap-1">
+        <select
+          data-testid="locale-select"
+          aria-label={t('locale.label')}
+          value={locale}
+          onChange={(event) => setLocale(event.target.value as Locale)}
+          className="rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-200"
+        >
+          <option value="en">English</option>
+          <option value="zh-Hant">繁體中文</option>
+          <option value="zh-Hans">简体中文</option>
+        </select>
         <button
           type="button"
           data-testid="shortcuts-open"
-          aria-label="鍵盤快速鍵"
+          aria-label={t('toolbar.shortcuts')}
           aria-haspopup="dialog"
-          title="鍵盤快速鍵（?）"
+          title={t('toolbar.shortcutsTitle')}
           className={BUTTON_CLASS}
           onClick={onOpenHelp}
         >
-          快速鍵
+          {t('toolbar.shortcuts')}
         </button>
         <button
           type="button"
           data-testid="play"
           className={BUTTON_CLASS}
-          title="播放"
+          title={t('toolbar.play')}
           onClick={onPlay}
         >
-          播放
+          {t('toolbar.play')}
         </button>
         <ExportMenu
           signal={exportSignal}

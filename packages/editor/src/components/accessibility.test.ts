@@ -2,6 +2,7 @@ import { detectSlides } from '@htmlppt/core';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { withLocale } from '../i18n/test-utils.js';
 import { parseDeck } from '../slide-doc.js';
 import { SorterView } from './SorterView.js';
 import { ThumbnailRail } from './ThumbnailRail.js';
@@ -36,10 +37,12 @@ describe('thumbnail rail accessibility', () => {
   it('keeps every preview iframe outside the tile control', () => {
     const doc = parse(
       renderToStaticMarkup(
-        createElement(ThumbnailRail, {
-          ...fixture(),
-          onSelect: () => undefined
-        })
+        withLocale(
+          createElement(ThumbnailRail, {
+            ...fixture(),
+            onSelect: () => undefined
+          })
+        )
       )
     );
     const tiles = Array.from(
@@ -57,10 +60,12 @@ describe('thumbnail rail accessibility', () => {
   it('gives every tile a named control and marks the active one', () => {
     const doc = parse(
       renderToStaticMarkup(
-        createElement(ThumbnailRail, {
-          ...fixture(),
-          onSelect: () => undefined
-        })
+        withLocale(
+          createElement(ThumbnailRail, {
+            ...fixture(),
+            onSelect: () => undefined
+          })
+        )
       )
     );
     const tiles = Array.from(
@@ -83,14 +88,16 @@ describe('sorter accessibility', () => {
   it('exposes tiles as named options without nested controls', () => {
     const doc = parse(
       renderToStaticMarkup(
-        createElement(SorterView, {
-          ...fixture(),
-          onSelect: () => undefined,
-          onReorder: () => undefined,
-          onDuplicate: () => undefined,
-          onDelete: () => undefined,
-          canDelete: true
-        })
+        withLocale(
+          createElement(SorterView, {
+            ...fixture(),
+            onSelect: () => undefined,
+            onReorder: () => undefined,
+            onDuplicate: () => undefined,
+            onDelete: () => undefined,
+            canDelete: true
+          })
+        )
       )
     );
 
@@ -115,14 +122,16 @@ describe('sorter accessibility', () => {
   it('keeps duplicate and delete actions outside the listbox', () => {
     const doc = parse(
       renderToStaticMarkup(
-        createElement(SorterView, {
-          ...fixture(),
-          onSelect: () => undefined,
-          onReorder: () => undefined,
-          onDuplicate: () => undefined,
-          onDelete: () => undefined,
-          canDelete: true
-        })
+        withLocale(
+          createElement(SorterView, {
+            ...fixture(),
+            onSelect: () => undefined,
+            onReorder: () => undefined,
+            onDuplicate: () => undefined,
+            onDelete: () => undefined,
+            canDelete: true
+          })
+        )
       )
     );
 

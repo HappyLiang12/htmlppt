@@ -11,6 +11,7 @@ import {
   useDeckController,
   type DeckController
 } from './use-deck-controller.js';
+import type { Translator } from './i18n';
 
 const DECK: DeckResponse = {
   revision: 'revision-1',
@@ -31,15 +32,17 @@ let container: HTMLDivElement;
 let root: Root;
 let controller!: DeckController;
 let persistence: DeckPersistence;
+let translate: Translator | undefined;
 const saveCalls: Array<{ force?: boolean }> = [];
 
 function Probe() {
-  controller = useDeckController({ persistence });
+  controller = useDeckController({ persistence, translate });
   return null;
 }
 
 beforeEach(async () => {
   saveCalls.length = 0;
+  translate = undefined;
   persistence = {
     load: () => Promise.reject(new Error('Unexpected load.')),
     save: async (_html, _baseRevision, options) => {
@@ -380,6 +383,41 @@ describe('useDeckController', () => {
     expect(controller.state.master?.querySelector('h1')?.textContent).toBe(
       'First slide'
     );
+  });
+
+  it('translates a failed pending edit through the supplied translator', async () => {
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-pending' }));
+    });
+
+    act(() => {
+      controller.actions.changePendingEdit('text', {
+        apply: () => false,
+        discard: () => undefined
+      });
+    });
+    let settled = true;
+    act(() => {
+      settled = controller.actions.settlePendingEdits();
+    });
+
+    expect(settled).toBe(false);
+    expect(controller.state.error).toBe('translated:editor.pendingEditFailed');
+  });
+
+  it('translates a reload failure through the supplied translator', async () => {
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-reload' }));
+    });
+
+    await act(async () => {
+      await controller.actions.reload();
+    });
+
+    expect(controller.state.status).toBe('error');
+    expect(controller.state.error).toBe('translated:editor.reloadFailed');
   });
 
   it('keeps decks with authored data-ppt-editing markers unnormalized', async () => {

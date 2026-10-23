@@ -62,6 +62,7 @@ import { TextToolbar } from './components/TextToolbar';
 import { TableToolbar } from './components/TableToolbar';
 import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
+import { useI18n, type Translator } from './i18n';
 import { describeSelection, describeSlide } from './announcements';
 import {
   DeckAuthError,
@@ -391,34 +392,35 @@ function bootstrapOrigin(url: string | undefined): string {
   }
 }
 
-function openErrorMessage(error: DeckOpenError): string {
+function openErrorMessage(error: DeckOpenError, t: Translator): string {
   switch (error.code) {
     case 'invalid-path':
-      return '路徑無效；請輸入 HTML 檔案路徑。';
+      return t('path.invalid');
     case 'not-found':
-      return '找不到檔案。';
+      return t('path.notFound');
     case 'unsupported-extension':
-      return '只支援 .html 或 .htm 檔案。';
+      return t('path.extension');
     case 'invalid-deck':
-      return '這個檔案不是有效的簡報。';
+      return t('path.invalidDeck');
     case 'unauthorized':
-      return '未授權，請重新整理頁面。';
+      return t('path.unauthorized');
     case 'host-closing':
-      return '編輯器正在關閉，請稍後再試。';
+      return t('path.hostClosing');
     case 'deck-unreadable':
-      return '無法讀取檔案。';
+      return t('path.unreadable');
     case 'deck-already-open': {
       const origin = bootstrapOrigin(error.url);
       return origin
-        ? `已在另一個 host 開啟：${origin}`
-        : '此簡報已在另一個 host 開啟。';
+        ? t('path.alreadyOpen', { url: origin })
+        : t('path.alreadyOpenOther');
     }
     default:
-      return error.message || '開啟失敗。';
+      return error.message || t('path.openFailed');
   }
 }
 
 export function App() {
+  const { locale, t } = useI18n();
   const frame = useRef<HTMLIFrameElement | null>(null);
   const canvas = useRef<HTMLElement | null>(null);
 
@@ -473,7 +475,11 @@ export function App() {
     [standalonePersistence]
   );
 
-  const { state, actions } = useDeckController({ measurePastedObject, persistence });
+  const { state, actions } = useDeckController({
+    measurePastedObject,
+    persistence,
+    translate: t
+  });
   const {
     slides,
     activeIndex,
@@ -498,6 +504,7 @@ export function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const previousSelectionKeyRef = useRef('');
+  const previousAnnouncementLocaleRef = useRef(locale);
   const [fullscreen, setFullscreen] = useState<FullscreenState>('off');
   const [fullscreenNotice, setFullscreenNotice] = useState('');
   const [presenterError, setPresenterError] = useState('');
@@ -680,9 +687,7 @@ export function App() {
       typeof root.requestFullscreen !== 'function'
     ) {
       setFullscreen('unavailable');
-      setFullscreenNotice(
-        '此瀏覽器或環境不支援全螢幕。按 F11 可手動全螢幕；Escape 返回編輯器。'
-      );
+      setFullscreenNotice(t('app.fullscreenUnsupported'));
       return;
     }
     try {
@@ -691,11 +696,9 @@ export function App() {
       setFullscreenNotice('');
     } catch {
       setFullscreen('unavailable');
-      setFullscreenNotice(
-        '瀏覽器未允許全螢幕。按 F11 可手動全螢幕；Escape 返回編輯器。'
-      );
+      setFullscreenNotice(t('app.fullscreenDenied'));
     }
-  }, []);
+  }, [t]);
 
   const closePresenter = useCallback((notify: boolean) => {
     const presenter = presentationRef.current;
@@ -753,9 +756,7 @@ export function App() {
       'popup=yes,width=960,height=720'
     );
     if (!popup) {
-      setPresenterError(
-        '瀏覽器封鎖了簡報者視窗。請允許此網站開啟彈出視窗，再按 P 或「簡報者」重試。'
-      );
+      setPresenterError(t('app.presenterBlockedHint'));
       return;
     }
 
@@ -810,7 +811,7 @@ export function App() {
     // broadcasting before that would be dropped and the cache would suppress
     // the retry.
     setPresenterError('');
-  }, [closePresenter, playing]);
+  }, [closePresenter, playing, t]);
 
   const startPlay = useCallback(
     (fromCurrent: boolean) => {
@@ -841,14 +842,12 @@ export function App() {
       if (!active && playingRef.current) {
         // Fullscreen can end without leaving play (for example when the
         // presenter popup opens). Keep presenting and explain how to return.
-        setFullscreenNotice(
-          '已離開全螢幕。按 F 重新進入，Escape 返回編輯器。'
-        );
+        setFullscreenNotice(t('app.fullscreenExitedHint'));
       }
     };
     document.addEventListener('fullscreenchange', onChange);
     return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!playing) return;
@@ -1136,19 +1135,19 @@ export function App() {
       try {
         const source = await imageSourceFromFile(file);
         if (!applyPathEdit(slideId, path, (element) => replaceImageSource(element, source))) {
-          setSlideOpError('無法更換圖片；請重新選取物件後再試。');
+          setSlideOpError(t('app.replaceImageFailed'));
         }
       } catch (error) {
         setSlideOpError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [applyPathEdit]);
+  }, [applyPathEdit, t]);
 
   const handleReplaceImageUrl = useCallback(() => {
-    const value = window.prompt('圖片網址（https:// 或 data:image/...）', 'https://');
+    const value = window.prompt(t('app.imageUrlPromptDetail'), 'https://');
     if (value === null) return;
     applySelectionEdit((element) => replaceImageSource(element, value));
-  }, [applySelectionEdit]);
+  }, [applySelectionEdit, t]);
 
   const handleTableAction = useCallback(
     (action: TableAction) => {
@@ -1285,7 +1284,7 @@ export function App() {
         const target = findSlide(draft, slideInfo.id);
         const element = elementAtPath(target.element, selection.path);
         if (!element || !chartFigure(element)) {
-          failure = '選取的物件不是圖表。';
+          failure = t('app.chartNotSelected');
           return false;
         }
         const result = withChartData(element, editor.json);
@@ -1298,16 +1297,19 @@ export function App() {
       () => void commitMasterDocument()
     );
     if (!applied) {
-      setChartEditor({ ...editor, error: failure || '無法套用圖表資料。' });
+      setChartEditor({
+        ...editor,
+        error: failure || t('app.chartApplyFailed')
+      });
       return;
     }
     setChartEditor(null);
-  }, [chartEditor, commitMasterDocument]);
+  }, [chartEditor, commitMasterDocument, t]);
 
   const openStandaloneFile = useCallback(
     async (file: File, handle: FileSystemFileHandle | null) => {
       if (!file.name || !/\.html?$/i.test(file.name)) {
-        setStandaloneError('請選擇 .html 或 .htm 檔案。');
+        setStandaloneError(t('standalone.fileType'));
         return;
       }
       setOpeningStandalone(true);
@@ -1332,7 +1334,7 @@ export function App() {
         setOpeningStandalone(false);
       }
     },
-    [actions]
+    [actions, t]
   );
 
   const openDeckAtPath = useCallback(
@@ -1348,7 +1350,7 @@ export function App() {
         // controller update may not have rendered yet, so flush before reading.
         flushSync(() => syncControllerState());
         if (stateRef.current.dirty) {
-          setOpenDeckError('儲存未完成，無法開啟另一個檔案。');
+          setOpenDeckError(t('path.saveIncomplete'));
           return;
         }
         if (stateRef.current.conflict || stateRef.current.error) return;
@@ -1362,14 +1364,14 @@ export function App() {
           current.status === 'load-error' ||
           current.filePath !== opened.filePath
         ) {
-          setOpenDeckError('載入失敗，已保留目前簡報。');
+          setOpenDeckError(t('path.loadFailedKept'));
           return;
         }
         window.history.replaceState(null, '', opened.url);
       } catch (cause) {
         setOpenDeckError(
           cause instanceof DeckOpenError
-            ? openErrorMessage(cause)
+            ? openErrorMessage(cause, t)
             : cause instanceof Error
               ? cause.message
               : String(cause)
@@ -1378,7 +1380,7 @@ export function App() {
         setOpeningDeck(false);
       }
     },
-    [mode, openingDeck, actions]
+    [mode, openingDeck, actions, t]
   );
 
   const pickDeck = useCallback(async (): Promise<void> => {
@@ -1392,7 +1394,7 @@ export function App() {
       await actions.saveNow();
       flushSync(() => syncControllerState());
       if (stateRef.current.dirty) {
-        setOpenDeckError('儲存未完成，無法開啟另一個檔案。');
+        setOpenDeckError(t('path.saveIncomplete'));
         return;
       }
       if (stateRef.current.conflict || stateRef.current.error) return;
@@ -1404,7 +1406,7 @@ export function App() {
     } finally {
       setOpeningDeck(false);
     }
-  }, [openingDeck, actions, openStandaloneFile]);
+  }, [openingDeck, actions, openStandaloneFile, t]);
 
   // An open swaps the whole document under any active text/gesture session.
   // Park focus first so the outgoing deck cannot receive further edits.
@@ -1460,31 +1462,34 @@ export function App() {
       if (mode === 'standalone') {
         const name = standalone?.name ?? current.filePath;
         if (format !== 'html') {
-          setExportError(
-            '獨立模式不支援 PDF/PNG；請用 htmlppt open 開啟檔案。'
-          );
+          setExportError(t('export.standaloneUnsupported'));
           return;
         }
         downloadHtml(serializeExport(current.master), name);
         void deleteDraft(draftKey(name));
         setRecoveryDraft(null);
-        setExportMessage(`已下載 ${exportFileName(name)}。`);
+        setExportMessage(t('export.downloaded', { name: exportFileName(name) }));
         return;
       }
       setExporting(format);
       try {
         const files = await exportDeck(format);
         setExportMessage(
-          `已匯出 ${files.length} 個檔案：${files.join('、')}`
+          t('export.exported', {
+            count: files.length,
+            files: files.join(locale === 'en' ? ', ' : '、')
+          })
         );
-        setAnnouncement(`已匯出 ${files.length} 個檔案。`);
+        setAnnouncement(
+          t('export.exportedAnnouncement', { count: files.length })
+        );
       } catch (cause) {
         setExportError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         setExporting(null);
       }
     },
-    [mode, standalone?.name]
+    [locale, mode, standalone?.name, t]
   );
 
   useEffect(() => {
@@ -2552,7 +2557,7 @@ export function App() {
               void deleteDraft(draftKey(name)).finally(() => {
                 downloadHtml(html, name, '.html');
                 setRecoveryDraft(null);
-                setAnnouncement('已下載 HTML 檔。');
+                setAnnouncement(t('export.downloadedAnnouncement'));
               });
             }
             return;
@@ -2664,6 +2669,7 @@ export function App() {
       stopPlay,
       openPresenter,
       requestPlayFullscreen,
+      t,
       zoomBy
     ]
   );
@@ -3010,7 +3016,7 @@ export function App() {
     let value: string | null = null;
     try {
       value = window.prompt(
-        '連結網址（http:、https:、mailto: 或 #片段；留空移除連結）',
+        t('app.linkPromptDetail'),
         current || 'https://'
       );
     } finally {
@@ -3047,7 +3053,7 @@ export function App() {
       });
       editable.focus();
     }
-  }, [endTextEditing]);
+  }, [endTextEditing, t]);
 
   const runInsertion = useCallback(async (request: InsertRequest) => {
     if (!actionsRef.current.settlePendingEdits()) return;
@@ -3102,13 +3108,10 @@ export function App() {
   );
 
   const handleInsertImageUrl = useCallback(() => {
-    const value = window.prompt(
-      '圖片網址（https:// 或 data:image/...）',
-      'https://'
-    );
+    const value = window.prompt(t('app.imageUrlPromptDetail'), 'https://');
     if (value === null) return;
     void runInsertion({ kind: 'image', url: value });
-  }, [runInsertion]);
+  }, [runInsertion, t]);
 
   useEffect(() => {
     if (!frameEpoch) return;
@@ -3171,10 +3174,14 @@ export function App() {
     .join('|');
 
   useEffect(() => {
-    if (previousSelectionKeyRef.current === selectionKey) return;
+    const localeChanged = previousAnnouncementLocaleRef.current !== locale;
+    if (previousSelectionKeyRef.current === selectionKey && !localeChanged) {
+      return;
+    }
     previousSelectionKeyRef.current = selectionKey;
+    previousAnnouncementLocaleRef.current = locale;
     if (!selectionKey) {
-      setAnnouncement('已取消選取');
+      setAnnouncement(describeSelection(null, 0, t));
       return;
     }
     const current = stateRef.current;
@@ -3182,13 +3189,13 @@ export function App() {
     const target = current.selection;
     const element =
       slide && target ? elementAtPath(slide.element, target.path) : null;
-    setAnnouncement(describeSelection(element, current.selections.length));
-  }, [selectionKey]);
+    setAnnouncement(describeSelection(element, current.selections.length, t));
+  }, [locale, selectionKey, t]);
 
   useEffect(() => {
     if (slides.length === 0) return;
-    setAnnouncement(describeSlide(activeIndex, slides.length));
-  }, [activeIndex, activeSlide?.id, slides.length]);
+    setAnnouncement(describeSlide(activeIndex, slides.length, t));
+  }, [activeIndex, activeSlide?.id, slides.length, t]);
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
   const styleState: InspectorStyleState | null = (() => {
@@ -3246,7 +3253,7 @@ export function App() {
       const data = chartDataOf(primaryObject as Element);
       return { type: data.type, title: data.title ?? '' };
     } catch {
-      return { type: 'invalid', title: '資料無效' };
+      return { type: 'invalid', title: t('app.invalidData') };
     }
   })();
   const overlayHandles =
@@ -3408,7 +3415,7 @@ export function App() {
             className="rounded border border-emerald-300/40 px-2 py-0.5 text-emerald-100"
             onClick={() => setExportMessage('')}
           >
-            關閉
+            {t('common.close')}
           </button>
         </div>
       )}
@@ -3420,7 +3427,7 @@ export function App() {
           className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/40 px-4 py-2 text-xs text-amber-100"
         >
           <span className="min-w-0 flex-1 truncate">
-            發現上次未儲存的編輯：{recoveryDraft.filePath}
+            {t('recovery.found', { path: recoveryDraft.filePath })}
           </span>
           <button
             type="button"
@@ -3431,7 +3438,7 @@ export function App() {
               setRecoveryDraft(null);
             }}
           >
-            恢復
+            {t('recovery.restore')}
           </button>
           <button
             type="button"
@@ -3442,7 +3449,7 @@ export function App() {
               setRecoveryDraft(null);
             }}
           >
-            捨棄
+            {t('recovery.discard')}
           </button>
         </div>
       )}
@@ -3455,11 +3462,13 @@ export function App() {
         >
           <span>
             {switchedFileConflict
-              ? '主機已切換到另一個檔案；只能重新載入。'
-              : '外部已修改檔案，本機有尚未儲存的變更。'}
+              ? t('conflict.switched')
+              : t('conflict.external')}
           </span>
           {!switchedFileConflict && state.pending && (
-            <span data-testid="pending-edit-instruction">請先套用或取消尚未完成的編輯，再覆寫。</span>
+            <span data-testid="pending-edit-instruction">
+              {t('editor.pendingEditInstruction')}
+            </span>
           )}
           <button
             type="button"
@@ -3469,7 +3478,7 @@ export function App() {
             className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
             onClick={() => resolveConflict('reload')}
           >
-            重新載入
+            {t('conflict.reload')}
           </button>
           {!switchedFileConflict && (
             <button
@@ -3480,7 +3489,7 @@ export function App() {
               className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
               onClick={() => resolveConflict('overwrite')}
             >
-              覆寫
+              {t('conflict.overwrite')}
             </button>
           )}
         </div>
@@ -3527,7 +3536,7 @@ export function App() {
                 <iframe
                   key={state.documentEpoch}
                   ref={frame}
-                  title="投影片預覽"
+                  title={t('rail.preview')}
                   sandbox="allow-same-origin"
                   srcDoc={srcDoc}
                   onLoad={onFrameLoad}
@@ -3566,9 +3575,9 @@ export function App() {
                 )}
               </div>
             ) : status === 'loading' ? (
-              <p className="text-sm text-zinc-400">載入中…</p>
+              <p className="text-sm text-zinc-400">{t('common.loading')}</p>
             ) : (
-              <p className="text-sm text-zinc-400">找不到投影片。</p>
+              <p className="text-sm text-zinc-400">{t('editor.noSlides')}</p>
             )}
           </main>
 

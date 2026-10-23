@@ -29,6 +29,10 @@ import {
 } from './object-ops';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
 import { clampSlideIndex } from './slide-index';
+import type { MessageKey, Translator } from './i18n';
+import { en } from './i18n/messages/en';
+
+const DEFAULT_TRANSLATE: Translator = (key: MessageKey) => en[key];
 
 export type SaveStatus =
   | 'loading'
@@ -155,6 +159,12 @@ export interface DeckControllerOptions {
    * absent, paste falls back to master-document geometry.
    */
   measurePastedObject?: PastedObjectMeasure;
+  /**
+   * Localizes controller-produced error text. The hook deliberately does not
+   * call useI18n so controller tests can run without a provider; App passes t
+   * and unit tests may pass a stub. Defaults to the English catalog.
+   */
+  translate?: Translator;
 }
 
 // Authored editor-only attributes are a contract error under the M1 host rules
@@ -239,6 +249,7 @@ export function useDeckController(
   );
   const measurePastedRef = useRef(options.measurePastedObject);
   measurePastedRef.current = options.measurePastedObject;
+  const translate = options.translate ?? DEFAULT_TRANSLATE;
 
   // Function refs break the cycle between the save queue, the autosave timer,
   // and the SSE drain: each callback is created below but may run after any
@@ -298,7 +309,7 @@ export function useDeckController(
         pendingEditsRef.current.delete(key);
         if (!edit.apply()) {
           pendingEditsRef.current.set(key, edit);
-          update({ error: '請先套用或取消尚未完成的編輯。' });
+          update({ error: translate('editor.pendingEditFailed') });
           return false;
         }
       }
@@ -307,7 +318,7 @@ export function useDeckController(
       settlingRef.current = false;
       syncPending();
     }
-  }, [syncPending, update]);
+  }, [syncPending, translate, update]);
 
   const enqueueSave = useCallback(
     (
@@ -1001,8 +1012,8 @@ export function useDeckController(
         await saveChainRef.current;
         const deck = provided ?? (await persistenceRef.current.load());
         await applyExternal(deck, editVersion, generation);
-      } catch (cause) {
-        update({ status: 'error', error: toMessage(cause) });
+      } catch {
+        update({ status: 'error', error: translate('editor.reloadFailed') });
       } finally {
         externalBusyRef.current = false;
         update({ recoveryBusy: false });
@@ -1010,7 +1021,7 @@ export function useDeckController(
         drainLiveEventsRef.current();
       }
     },
-    [applyExternal, update]
+    [applyExternal, translate, update]
   );
 
   const overwrite = useCallback(async () => {

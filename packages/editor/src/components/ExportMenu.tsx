@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useI18n, type MessageKey } from '../i18n';
 
 export type ExportFormat = 'html' | 'pdf' | 'png';
 
@@ -17,26 +18,26 @@ const ITEM =
 
 const FORMATS: {
   format: ExportFormat;
-  label: string;
-  hint: string;
+  label: MessageKey;
+  hint: MessageKey;
   hostOnly: boolean;
 }[] = [
   {
     format: 'html',
-    label: 'HTML 簡報',
-    hint: '匯出不含編輯器痕跡的靜態 HTML',
+    label: 'export.html',
+    hint: 'export.htmlHint',
     hostOnly: false
   },
   {
     format: 'pdf',
-    label: 'PDF 文件',
-    hint: '每張投影片一頁，需要本機 Chromium',
+    label: 'export.pdf',
+    hint: 'export.pdfHint',
     hostOnly: true
   },
   {
     format: 'png',
-    label: 'PNG 圖片',
-    hint: '每張投影片一張 2x 圖片，需要本機 Chromium',
+    label: 'export.png',
+    hint: 'export.pngHint',
     hostOnly: true
   }
 ];
@@ -47,6 +48,7 @@ export function ExportMenu({
   standalone,
   onExport
 }: ExportMenuProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
@@ -97,7 +99,7 @@ export function ExportMenu({
         aria-expanded={open}
         className={BUTTON}
         disabled={exporting !== null}
-        title="匯出（Ctrl+Shift+E）"
+        title={t('export.title')}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && open) {
@@ -107,13 +109,13 @@ export function ExportMenu({
           }
         }}
       >
-        {exporting ? '匯出中…' : '匯出'}
+        {exporting ? t('export.busy') : t('export.label')}
       </button>
       {open && (
         <div
           ref={menu}
           role="menu"
-          aria-label="匯出格式"
+          aria-label={t('export.format')}
           data-testid="export-menu"
           className="absolute right-0 top-full z-20 mt-1 flex w-56 flex-col gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl"
           onKeyDown={(event) => {
@@ -148,14 +150,14 @@ export function ExportMenu({
                 disabled={disabled}
                 title={
                   standalone && hostOnly
-                    ? '需要本機 host 與 Chromium；請使用 htmlppt open 開啟。'
-                    : hint
+                    ? t('export.hostOnlyHint')
+                    : t(hint)
                 }
                 onClick={() => choose(format)}
               >
-                <span className="block">{label}</span>
+                <span className="block">{t(label)}</span>
                 <span className="block text-[10px] text-zinc-400">
-                  {standalone && hostOnly ? '需要本機 host' : hint}
+                  {standalone && hostOnly ? t('export.hostOnly') : t(hint)}
                 </span>
               </button>
             );

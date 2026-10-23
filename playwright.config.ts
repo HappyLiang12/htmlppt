@@ -12,6 +12,10 @@ export default defineConfig({
   ],
   use: {
     viewport: { width: 1440, height: 900 },
+    // The editor copy is still migrated incrementally. Pin a Traditional
+    // Chinese browser locale so existing Chinese E2E assertions keep their
+    // first-visit experience; locale tests override this per describe block.
+    locale: 'zh-TW',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
