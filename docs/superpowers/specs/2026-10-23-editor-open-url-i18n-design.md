@@ -1,4 +1,4 @@
-# Editor URL, open-file, and localization design
+# Editor URL, open-file, localization, and theming design
 
 Date: 2026-10-23
 Status: Approved in chat, pending spec review
@@ -14,6 +14,9 @@ The local editor is opened with a tokenized URL such as
    HTML file requires the CLI or the standalone upload flow.
 3. Editor, play mode, presenter, and runtime controls are Traditional Chinese
    only.
+4. The editor chrome is dark-only; its colors are hardcoded Tailwind values with
+   no theme tokens, so light mode needs a token layer before any switch can be
+   added.
 
 The token is a per-process capability secret, not a user credential. It gates
 `/api/*` (bearer) and page/static requests (query token or HttpOnly cookie), and
@@ -28,6 +31,8 @@ deck. It must stay. The fix is to hide it from the visible URL, not remove it.
 - Editor UI, play mode, presenter window, and runtime controls in English,
   Traditional Chinese, and Simplified Chinese, selected from the browser
   language and overridable by the user.
+- Editor chrome in Light, Dark, or System mode, persisted per browser and
+  following OS changes while in System mode.
 
 ## Non-goals
 
@@ -37,8 +42,14 @@ deck. It must stay. The fix is to hide it from the visible URL, not remove it.
   messages produced by the host API.
 - Changing the one-deck-per-host model. A second deck gets a new host unless it
   is opened through the new open endpoint.
+- Theming deck content. Slides are arbitrary author HTML and keep their own
+  colors; the light theme never repaints them.
+- Theming play mode, the presenter stage, or the runtime control pill. These
+  surfaces sit on or over deck content and stay dark so authored slides keep
+  their intended contrast in every theme.
+- Per-deck theme metadata, custom accent colors, or a theme editor.
 
-## Decisions confirmed with the user
+## Decisions
 
 - Locales: English, Traditional Chinese, Simplified Chinese.
 - Scope: editor + play/presenter + runtime controls and notices. CLI/MCP stay
@@ -47,6 +58,11 @@ deck. It must stay. The fix is to hide it from the visible URL, not remove it.
 - Path input uses the host (keeps save/export); the file picker uses the
   existing standalone mode and writes through the File System Access handle.
 - Visible URL shape: `/d/<file-name>`.
+- Theme modes: Light, Dark, System; default System; persisted per browser.
+- Theme scope: editor chrome and editor-owned overlays only. Play mode,
+  presenter, and runtime controls stay dark as described in Non-goals. This
+  keeps arbitrary slide content untouched and avoids theming a stage that sits
+  over authored colors.
 
 ## 1. Friendly URL and cookie bootstrap
 
@@ -193,6 +209,59 @@ Error codes: `400` invalid path, `404` not found, `409` deck-already-open,
 - Exported decks keep the runtime script; their controls localize at view time
   from the viewer's browser.
 
+## 4. Light, dark, and system themes
+
+### Scope
+
+Theme follows the editor chrome only: toolbar, path input, locale and theme
+controls, sorter, thumbnail frames, inspector, text/table toolbars, insert and
+export menus, dialogs, recovery banner, standalone launcher, status text, and
+empty states. The slide stage inside the editor keeps its neutral presentation
+frame so authored slides render against a stable background.
+
+Play mode, the presenter stage, and the runtime control pill stay dark, as
+stated in Non-goals.
+
+### Tokens
+
+- `packages/editor/src/index.css` defines semantic CSS variables under
+  `:root[data-theme='light']` and `:root[data-theme='dark']`: canvas, surface,
+  raised surface, border, strong border, primary/secondary/faint text, accent,
+  on-accent, danger, warning, success, and overlay. Light and dark values are
+  the only two palettes.
+- Tailwind 4 `@theme inline` maps those variables to utilities used by
+  components (for example `bg-surface`, `border-line`, `text-secondary`,
+  `text-on-accent`). Components stop using raw `bg-zinc-*`, `bg-[#...]`,
+  `border-white/*`, and `text-white` classes for chrome.
+- Status colors keep their meaning: amber status text maps to the warning token,
+  red to danger. Contrast targets are WCAG AA for body text (4.5:1) and 3:1 for
+  borders and focus indicators in both palettes.
+- Deck content, thumbnails, and slide backgrounds are never recolored by the
+  theme.
+
+### Behavior
+
+- Modes: `light`, `dark`, `system`. Default is `system`.
+- `localStorage['htmlppt.theme']` stores the mode; an absent or invalid value
+  falls back to `system`.
+- System mode resolves through `matchMedia('(prefers-color-scheme: dark)')` and
+  updates live when the OS preference changes, removing the listener on
+  cleanup. Explicit light/dark modes ignore media changes.
+- The resolved value is written to `<html data-theme="light|dark">` and
+  `style.colorScheme`, so form controls and scrollbars match. Tests also read
+  `data-theme-mode` with the selected mode.
+- `packages/editor/index.html` runs a small inline bootstrap before the module
+  script: it reads the stored mode, falls back to the media query, and sets
+  `data-theme` to prevent a light flash before React mounts. The provider adopts
+  the same value on first render instead of repainting.
+- The toolbar gets a compact three-state control next to the language menu with
+  `data-testid="theme-select"` and a localized `aria-label`. Options are
+  localized Light, Dark, and System labels.
+- The provider lives in `packages/editor/src/theme/` with `ThemeProvider`,
+  `useTheme()`, and pure helpers for resolution and storage. It composes with
+  `LocaleProvider`; the phase ordering keeps theme labels in the dictionaries
+  from day one.
+
 ## Testing
 
 Host integration:
@@ -225,20 +294,39 @@ Runtime E2E:
 - `data-ppt-locale` overrides the browser language.
 - Presenter window uses the same locale.
 
+Theming unit tests:
+
+- Mode resolution: stored `light`/`dark` wins; missing or invalid values become
+  `system`; system reads the media query.
+- A media-query change re-resolves only in system mode and stops after the
+  provider unmounts.
+
+Theming E2E:
+
+- With `colorScheme: 'light'` and no stored preference, the chrome renders the
+  light palette; with `'dark'` it renders the dark palette.
+- Choosing Light or Dark overrides emulated OS preference, updates
+  `data-theme` and `data-theme-mode`, and survives reload.
+- Choosing System resumes following `colorScheme` changes.
+- Primary text against its surface meets a 4.5:1 contrast ratio in both
+  palettes, and focus outlines remain visible.
+- A slide's computed text and background colors are identical in both themes.
+
 Existing suites: `playwright.config.ts` sets `locale: 'zh-TW'` so the current
 Chinese assertions remain valid; new tests opt into other locales explicitly.
 Unit tests that render editor components wrap them in `LocaleProvider` with an
-explicit locale.
+explicit locale and in `ThemeProvider` with an explicit mode.
 
 ## Rollout
 
-Three independently verifiable phases, each with RED tests first, full
+Four independently verifiable phases, each with RED tests first, full
 `npm run verify`, and a green hosted CI run before the next phase:
 
 1. Friendly URL and cookie auth.
 2. `POST /api/open` plus editor path input and picker.
 3. i18n framework, editor copy migration, runtime/presenter localization.
+4. Theme tokens, provider, toolbar control, and light/dark/system E2E.
 
-Documentation updates: `README.md` (URL and open-file usage), `SECURITY.md`
-(cookie auth), `docs/architecture.md` (routes), and `docs/contract.md` (the
-optional `data-ppt-locale` author override).
+Documentation updates: `README.md` (URL, open-file usage, theme menu),
+`SECURITY.md` (cookie auth), `docs/architecture.md` (routes and provider state),
+and `docs/contract.md` (the optional `data-ppt-locale` author override).
