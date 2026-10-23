@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DeckRevisionEvent } from './live-sync';
 import {
+  DeckConflictError,
   deckEventsUrl,
   exportDeck,
   fetchDeck,
@@ -54,6 +55,30 @@ describe('host API authentication', () => {
 
   it('opens the event stream at the same-origin endpoint', () => {
     expect(deckEventsUrl()).toBe('/api/events');
+  });
+
+  it('carries the deck path from a 409 save conflict', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: 'conflict',
+          revision: 'r3',
+          filePath: '/decks/second.html'
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await saveDeck('<main data-ppt-deck></main>', 'r1').catch(
+      (cause: unknown) => cause
+    );
+
+    expect(error).toBeInstanceOf(DeckConflictError);
+    expect(error).toMatchObject({
+      revision: 'r3',
+      filePath: '/decks/second.html'
+    });
   });
 
   it('parses the opened file path from a revision event', () => {

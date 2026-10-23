@@ -589,4 +589,60 @@ describe('useDeckController', () => {
       '主機已切換到另一個檔案；只能重新載入。'
     );
   });
+
+  it('keeps a switched-file conflict after a later conflict without a path', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    act(() => {
+      controller.actions.applySlideMutation(0, (slide) => {
+        const heading = slide.querySelector('h1');
+        if (!heading) throw new Error('Missing heading.');
+        heading.textContent = 'Local edit';
+      });
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: 'revision-other',
+        source: 'external',
+        filePath: 'other.html'
+      });
+    });
+    expect(controller.state.conflict).toEqual({
+      revision: 'revision-other',
+      source: 'external',
+      filePath: 'other.html'
+    });
+
+    // The new deck's next save or external sync is an ordinary revision for
+    // that file, so the event carries no path. The switched marker must
+    // survive until the tab reloads.
+    act(() => {
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: 'revision-other-2',
+        source: 'external'
+      });
+    });
+
+    expect(controller.state.conflict).toEqual({
+      revision: 'revision-other-2',
+      source: 'external',
+      filePath: 'other.html'
+    });
+    expect(controller.state.status).toBe('conflict');
+
+    await act(async () => {
+      await controller.actions.overwrite();
+    });
+
+    expect(saveCalls).toEqual([]);
+    expect(controller.state.conflict).toEqual({
+      revision: 'revision-other-2',
+      source: 'external',
+      filePath: 'other.html'
+    });
+    expect(controller.state.error).toBe(
+      '主機已切換到另一個檔案；只能重新載入。'
+    );
+  });
 });

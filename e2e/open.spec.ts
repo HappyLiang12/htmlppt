@@ -556,8 +556,6 @@ test(
       await expect(frameHeading(page)).toContainText('Second deck');
       await expect(page).toHaveURL(/\/d\/second\.html$/);
 
-      const secondBefore = await readFile(secondPath);
-
       releaseSave?.();
 
       await expect(other.getByTestId('conflict-banner')).toBeVisible();
@@ -567,11 +565,27 @@ test(
       await expect(other.getByTestId('conflict-overwrite')).toHaveCount(0);
       await expect(other.getByTestId('conflict-reload')).toBeVisible();
 
+      // An ordinary revision of the newly opened deck must not clear the
+      // switched-file marker and bring the overwrite button back.
+      const updatedSecond = (await readFile(secondPath, 'utf8')).replace(
+        'Second deck',
+        'Second deck updated'
+      );
+      await writeFile(secondPath, updatedSecond, 'utf8');
+      await expect(frameHeading(page)).toContainText('Second deck updated');
+
+      await expect(other.getByTestId('conflict-banner')).toBeVisible();
+      await expect(other.getByTestId('conflict-banner')).toContainText(
+        '主機已切換到另一個檔案；只能重新載入。'
+      );
+      await expect(other.getByTestId('conflict-overwrite')).toHaveCount(0);
+      const secondAfter = await readFile(secondPath);
+
       await other.getByTestId('conflict-reload').click();
       await expect(other).toHaveURL(/\/d\/second\.html$/);
-      await expect(frameHeading(other)).toContainText('Second deck');
+      await expect(frameHeading(other)).toContainText('Second deck updated');
       await expect(other.getByTestId('conflict-banner')).toHaveCount(0);
-      expect(await readFile(secondPath)).toEqual(secondBefore);
+      expect(await readFile(secondPath)).toEqual(secondAfter);
     } finally {
       releaseSave?.();
       await other?.close();

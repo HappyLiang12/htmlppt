@@ -85,11 +85,12 @@ not a parent pointer; there is no merge history in the file.
   Windows) and returns 404 otherwise.
 - **Host:** `GET /api/deck` returns `{ html, revision, filePath }`. `PUT`
   accepts `{ html, baseRevision, force? }`. A stale `baseRevision` returns
-  `409 { error: "conflict", revision }` before validation. The atomic write
-  re-checks the on-disk hash before and after staging the temporary file; a
-  change in that window also returns `409`. `force: true` skips the base check
-  and is used only when the person chooses **overwrite** in the conflict
-  banner. Deck updates are capped at 16 MiB and export requests at 64 KiB
+  `409 { error: "conflict", revision, filePath }` before validation. The atomic
+  write re-checks the on-disk hash before and after staging the temporary file;
+  a change in that window also returns `409` with the same payload.
+  `force: true` skips the base check and is used only when the person chooses
+  **overwrite** in the conflict banner. Deck updates are capped at 16 MiB and
+  export requests at 64 KiB
   (`413 payload-too-large`). Page and API requests accept the HttpOnly session
   cookie set by the tokenized bootstrap redirect; bearer auth remains for CLI,
   MCP, and tests, and only `GET /api/events` may carry the token in the query
@@ -97,9 +98,10 @@ not a parent pointer; there is no merge history in the file.
 - **Open:** `POST /api/open { path }` normalizes quotes, `file://`, `~`, and
   relative paths, validates the target deck, rejects a target already served by
   another live host with `409`, and rebinds the watcher, revision, and SSE state
-  inside the save lock. The rebind broadcasts a `revision` event that carries the
-  new `filePath`, so a dirty tab can distinguish a same-deck update from a deck
-  switch and refuses to force-write over the newly opened file. The CLI callback
+  inside the save lock. Every `revision` event carries the deck's `filePath`
+  (after a rebind, the new one), so a dirty tab can distinguish a same-deck
+  update from a deck switch, keeps that switched marker across later events,
+  and refuses to force-write over the newly opened file. The CLI callback
   moves the session registry entry.
 - **Editor:** saves are serialized through one promise chain; a pending save is
   restarted by new edits, and a save that started before a reload/load is

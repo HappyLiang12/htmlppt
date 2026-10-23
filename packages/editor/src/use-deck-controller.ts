@@ -342,7 +342,10 @@ export function useDeckController(
             // Never retry a conflict: the banner offers reload or overwrite.
             autosaveRef.current?.cancel();
             update({
-              conflict: { revision: cause.revision },
+              conflict: {
+                revision: cause.revision,
+                ...(cause.filePath ? { filePath: cause.filePath } : {})
+              },
               status: 'conflict',
               error: ''
             });
@@ -537,11 +540,16 @@ export function useDeckController(
           // The pending autosave would write stale content; drop it. The
           // banner is the only recovery path.
           autosaveRef.current?.cancel();
+          // A switched-deck conflict is sticky: later events for that deck
+          // (an ordinary save or external sync) may omit the path, and only a
+          // load, reload, or applied external revision may clear the marker.
+          const conflictFilePath =
+            decision.filePath ?? stateRef.current.conflict?.filePath;
           update({
             conflict: {
               revision: decision.revision,
               source: decision.source,
-              ...(decision.filePath ? { filePath: decision.filePath } : {})
+              ...(conflictFilePath ? { filePath: conflictFilePath } : {})
             },
             status: 'conflict',
             error: ''

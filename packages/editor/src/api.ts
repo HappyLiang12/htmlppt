@@ -53,15 +53,18 @@ export async function fetchDeck(): Promise<DeckResponse> {
 
 /**
  * The host rejected a save because the deck moved on. The current host
- * revision travels with the error so the banner can reload the exact state.
+ * revision travels with the error so the banner can reload the exact state,
+ * and `filePath` names the deck when it is a different one (a switch).
  */
 export class DeckConflictError extends Error {
   readonly revision: string;
+  readonly filePath?: string;
 
-  constructor(revision: string) {
+  constructor(revision: string, filePath?: string) {
     super('Deck was modified outside the editor');
     this.name = 'DeckConflictError';
     this.revision = revision;
+    this.filePath = filePath;
   }
 }
 
@@ -70,10 +73,17 @@ function conflictFromPayload(
   payload: unknown
 ): DeckConflictError | null {
   if (payload !== null && typeof payload === 'object') {
-    const body = payload as { error?: unknown; revision?: unknown };
+    const body = payload as {
+      error?: unknown;
+      revision?: unknown;
+      filePath?: unknown;
+    };
     if (body.error === 'conflict') {
       return new DeckConflictError(
-        typeof body.revision === 'string' ? body.revision : ''
+        typeof body.revision === 'string' ? body.revision : '',
+        typeof body.filePath === 'string' && body.filePath
+          ? body.filePath
+          : undefined
       );
     }
   }

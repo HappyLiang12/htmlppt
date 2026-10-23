@@ -371,7 +371,11 @@ async function hostDeck(page: Page, editor: EditorHarness) {
     headers: { authorization: `Bearer ${url.searchParams.get('token')}` }
   });
   expect(response.status()).toBe(200);
-  return await response.json() as { html: string; revision: string };
+  return await response.json() as {
+    html: string;
+    revision: string;
+    filePath: string;
+  };
 }
 
 async function createRealSaveConflict(page: Page, editor: EditorHarness) {
@@ -388,12 +392,17 @@ async function createRealSaveConflict(page: Page, editor: EditorHarness) {
     held.release();
     const response = await held.response;
     expect(response.status()).toBe(409);
-    expect(await response.json()).toEqual({ error: 'conflict', revision: external.revision });
+    expect(await response.json()).toEqual({
+      error: 'conflict',
+      revision: external.revision,
+      filePath: external.filePath
+    });
     await expect(page.getByTestId('conflict-banner')).toBeVisible();
     await expect(page.getByTestId('save-status')).toHaveText('衝突');
     expect((await inlineGeometryOf(editor.frame.locator('[data-ppt-el="box1"]'))).left).toBe(121);
     expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('120px');
     expect(await savedDocument(editor)).toContain('External conflict');
+    return external;
   } finally {
     held.release();
     await page.unroute('**/api/deck');
@@ -3581,7 +3590,11 @@ test('pending recovery generation rejects an older clean GET after a newer reloa
       await expect(page.getByTestId('conflict-banner')).toBeVisible();
       await writeExternalHeading(editor, 'New reload snapshot');
       const external = await hostDeck(page, editor);
-      await expect.poll(() => observed.events).toContainEqual({ revision: external.revision, source: 'external' });
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: external.revision,
+        source: 'external',
+        filePath: external.filePath
+      });
       await page.getByTestId('conflict-reload').click();
       const response = await reload.forwarded.promise;
       expect(response.status()).toBe(200);
@@ -3744,13 +3757,18 @@ test(
     if (!held) throw new Error('Missing response gate');
     try {
       await expect.poll(() => observed.events.length).toBe(1);
+      const editorDeck = await hostDeck(page, editor);
       await editor.frame.locator('[data-ppt-el="box1"]').click();
       await page.keyboard.press('ArrowRight');
       await page.keyboard.press('Control+s');
       const response = await held.forwarded.promise;
       expect(response.status()).toBe(200);
       const { revision } = await response.json() as { revision: string };
-      await expect.poll(() => observed.events).toContainEqual({ revision, source: 'editor' });
+      await expect.poll(() => observed.events).toContainEqual({
+        revision,
+        source: 'editor',
+        filePath: editorDeck.filePath
+      });
       await expect(page.getByTestId('save-status')).toHaveText('儲存中…');
       expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
       await observed.healthy();
@@ -3788,7 +3806,7 @@ test(
       expect(firstResponse.status()).toBe(200);
       const firstSaved = await firstResponse.json() as { revision: string };
       await expect.poll(() => observed.events).toContainEqual({
-        revision: firstSaved.revision, source: 'editor'
+        revision: firstSaved.revision, source: 'editor', filePath: initial.filePath
       });
       await page.keyboard.press('Shift+ArrowRight');
       await page.keyboard.press('Control+s');
@@ -3799,7 +3817,7 @@ test(
       const secondSaved = await secondResponse.json() as { revision: string };
       expect(secondSaved.revision).not.toBe(firstSaved.revision);
       await expect.poll(() => observed.events).toContainEqual({
-        revision: secondSaved.revision, source: 'editor'
+        revision: secondSaved.revision, source: 'editor', filePath: initial.filePath
       });
       expect(observed.saves).toHaveLength(2);
       expect(observed.saves[0]?.postDataJSON()).toMatchObject({ baseRevision: initial.revision });
@@ -3835,14 +3853,18 @@ test(
     const editor = await openNudgeDeck(page);
     let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
     try {
-      await createRealSaveConflict(page, editor);
+      const savedDeck = await createRealSaveConflict(page, editor);
       [held] = await holdDeckResponses(page);
       if (!held) throw new Error('Missing response gate');
       await page.getByTestId('conflict-overwrite').click();
       const response = await held.forwarded.promise;
       expect(response.status()).toBe(200);
       const saved = await response.json() as { revision: string };
-      await expect.poll(() => observed.events).toContainEqual({ revision: saved.revision, source: 'editor' });
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: saved.revision,
+        source: 'editor',
+        filePath: savedDeck.filePath
+      });
       expect(observed.saves).toHaveLength(2);
       expect(observed.saves[1]?.postDataJSON()).toHaveProperty('force', true);
       expect((await savedNudgeBoxStyle(editor.directory, editor.file)).left).toBe('121px');
@@ -3882,21 +3904,29 @@ test(
     const editor = await openNudgeDeck(page);
     let held: Awaited<ReturnType<typeof holdDeckResponses>>[number] | undefined;
     try {
-      await createRealSaveConflict(page, editor);
+      const conflictDeck = await createRealSaveConflict(page, editor);
       [held] = await holdDeckResponses(page);
       if (!held) throw new Error('Missing response gate');
       await page.getByTestId('conflict-overwrite').click();
       const response = await held.forwarded.promise;
       expect(response.status()).toBe(200);
       const saved = await response.json() as { revision: string };
-      await expect.poll(() => observed.events).toContainEqual({ revision: saved.revision, source: 'editor' });
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: saved.revision,
+        source: 'editor',
+        filePath: conflictDeck.filePath
+      });
       const box = editor.frame.locator('[data-ppt-el="box1"]');
       await box.click();
       await page.keyboard.press('Shift+ArrowRight');
       await writeExternalHeading(editor, 'Newer external conflict');
       const external = await hostDeck(page, editor);
       expect(external.revision).not.toBe(saved.revision);
-      await expect.poll(() => observed.events).toContainEqual({ revision: external.revision, source: 'external' });
+      await expect.poll(() => observed.events).toContainEqual({
+        revision: external.revision,
+        source: 'external',
+        filePath: external.filePath
+      });
       held.gate.resolve();
       await held.delivered.promise;
       await expect(page.getByTestId('save-status')).toHaveText('衝突');

@@ -944,6 +944,11 @@ describe('host', () => {
       })
     });
     expect(saveResponse.status).toBe(409);
+    expect(await saveResponse.json()).toEqual({
+      error: 'conflict',
+      revision: deckBody.revision,
+      filePath: ctx.deckPath
+    });
     expect(await readFile(ctx.deckPath, 'utf8')).toBe(externalHtml);
 
     const followUp = await fetch(`${ctx.base}/api/deck`, {
@@ -1163,7 +1168,11 @@ describe('host', () => {
       await writeFile(nextPath, updated, 'utf8');
       expect(await events.next()).toEqual({
         event: 'revision',
-        data: { revision: sha256(updated), source: 'external' }
+        data: {
+          revision: sha256(updated),
+          source: 'external',
+          filePath: await realpath(nextPath)
+        }
       });
 
       const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
@@ -1457,6 +1466,11 @@ describe('host', () => {
     });
 
     expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'conflict',
+      revision: ctx.revision,
+      filePath: ctx.deckPath
+    });
   });
 
   it('rejects an empty token at startup', async () => {
@@ -1521,7 +1535,8 @@ describe('host', () => {
           event: 'revision',
           data: {
             revision: sha256(externalHtml),
-            source: 'external'
+            source: 'external',
+            filePath: ctx.deckPath
           }
         });
       } finally {
@@ -1545,7 +1560,11 @@ describe('host', () => {
 
         expect(await events.next()).toEqual({
           event: 'revision',
-          data: { revision: body.revision, source: 'editor' }
+          data: {
+            revision: body.revision,
+            source: 'editor',
+            filePath: ctx.deckPath
+          }
         });
         // The watcher must not report our own write as an external change.
         await events.expectNoEvent(500);
@@ -1571,7 +1590,11 @@ describe('host', () => {
 
         expect(await events.next()).toEqual({
           event: 'revision',
-          data: { revision: body.revision, source: 'mcp' }
+          data: {
+            revision: body.revision,
+            source: 'mcp',
+            filePath: ctx.deckPath
+          }
         });
       } finally {
         await events.close();
@@ -1631,7 +1654,11 @@ describe('host', () => {
         const firstBody = (await firstResponse.json()) as { revision: string };
         expect(await events.next()).toEqual({
           event: 'revision',
-          data: { revision: firstBody.revision, source: 'editor' }
+          data: {
+            revision: firstBody.revision,
+            source: 'editor',
+            filePath: ctx.deckPath
+          }
         });
 
         const forced = ctx.deckHtml.replace('Basic deck', 'Forced overwrite');
@@ -1644,7 +1671,11 @@ describe('host', () => {
         expect(forcedBody.revision).toBe(sha256(forced));
         expect(await events.next()).toEqual({
           event: 'revision',
-          data: { revision: forcedBody.revision, source: 'editor' }
+          data: {
+            revision: forcedBody.revision,
+            source: 'editor',
+            filePath: ctx.deckPath
+          }
         });
         expect(await readFile(ctx.deckPath, 'utf8')).toBe(forced);
       } finally {

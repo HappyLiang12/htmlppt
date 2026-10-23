@@ -346,7 +346,10 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     html = snapshot.html;
     revision = snapshot.hash;
     remember('external');
-    broadcast('revision', { revision, source: 'external' });
+    // Every revision carries the deck it belongs to: a dirty tab compares it
+    // with the file it loaded so an ordinary edit to a switched deck cannot
+    // clear the switched-file conflict.
+    broadcast('revision', { revision, source: 'external', filePath });
   }
 
   const app = new Hono();
@@ -489,7 +492,9 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         typeof baseRevision === 'string' &&
         baseRevision !== revision
       ) {
-        return c.json({ error: 'conflict', revision }, 409);
+        // The rejected save may be the first signal of a deck switch when the
+        // SSE event is delayed or lost, so the conflict names the deck too.
+        return c.json({ error: 'conflict', revision, filePath }, 409);
       }
 
       const result = validateDeck(parseDeckHtml(nextHtml));
@@ -516,7 +521,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
               throw syncError;
             }
           }
-          return c.json({ error: 'conflict', revision }, 409);
+          return c.json({ error: 'conflict', revision, filePath }, 409);
         }
         if (isUnreadable(error)) {
           return c.json(deckUnreadable(), 500);
@@ -528,7 +533,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         html = nextHtml;
         revision = writtenHash;
         remember(source);
-        broadcast('revision', { revision, source });
+        broadcast('revision', { revision, source, filePath });
       }
       return c.json({ revision });
     });
