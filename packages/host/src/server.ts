@@ -100,6 +100,27 @@ function readCookie(header: string | undefined, name: string): string | null {
   return null;
 }
 
+function tokenCookie(token: string): string {
+  return `${TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`;
+}
+
+function friendlyDeckPath(filePath: string): string {
+  return `/d/${encodeURIComponent(path.basename(filePath))}`;
+}
+
+function matchesDeckName(name: string, filePath: string): boolean {
+  if (!name || name === '.' || name === '..') {
+    return false;
+  }
+  if (name.includes('/') || name.includes('\\')) {
+    return false;
+  }
+  const expected = path.basename(filePath);
+  return process.platform === 'win32'
+    ? name.toLowerCase() === expected.toLowerCase()
+    : name === expected;
+}
+
 let saveChain: Promise<unknown> = Promise.resolve();
 
 function withSaveLock<T>(task: () => Promise<T>): Promise<T> {
@@ -658,9 +679,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     return new Response(stream, { headers: SSE_HEADERS });
   });
 
-  // The page, its assets, and any other static file require the session token,
-  // supplied once through the printed URL and then carried by an HttpOnly
-  // cookie so module and stylesheet subrequests stay authorized.
+  async function renderEditor(): Promise<string> {
+    return readFile(path.join(options.editorDir, 'index.html'), 'utf8');
+  }
+
+  // The printed bootstrap URL carries the token once. Document navigations
+  // exchange it for the HttpOnly cookie and a readable deck URL; assets accept
+  // either form so module and stylesheet subrequests stay authorized.
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);
     if (url.pathname.startsWith('/api/')) {
@@ -675,22 +700,27 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         401
       );
     }
-    if (url.pathname === '/') {
-      c.header(
-        'Set-Cookie',
-        `${TOKEN_COOKIE}=${encodeURIComponent(options.token)}; HttpOnly; SameSite=Strict; Path=/`
-      );
+    if (queryToken === options.token) {
+      c.header('Set-Cookie', tokenCookie(options.token));
     }
     await next();
   });
 
-  app.get('/', async (c) => {
-    const editorHtml = await readFile(
-      path.join(options.editorDir, 'index.html'),
-      'utf8'
-    );
-    return c.html(editorHtml);
+  app.get('/', (c) => c.redirect(friendlyDeckPath(options.filePath), 302));
+
+  app.get('/d/:name', async (c) => {
+    const url = new URL(c.req.url);
+    if (url.searchParams.has('token')) {
+      return c.redirect(url.pathname, 302);
+    }
+    if (!matchesDeckName(c.req.param('name'), options.filePath)) {
+      return c.notFound();
+    }
+    return c.html(await renderEditor());
   });
+
+  app.get('/d', (c) => c.notFound());
+  app.get('/d/*', (c) => c.notFound());
   app.use('/*', serveStatic({ root: options.editorDir }));
 
   const server = await new Promise<ReturnType<typeof serve>>((resolve, reject) => {

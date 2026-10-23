@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -310,6 +310,13 @@ async function setup(): Promise<Context> {
   }
 }
 
+async function bootstrapCookie(ctx: Context): Promise<string> {
+  const response = await fetch(ctx.host.url, { redirect: 'manual' });
+  expect(response.status).toBe(302);
+  const setCookie = response.headers.get('set-cookie') ?? '';
+  return setCookie.split(';')[0] ?? '';
+}
+
 afterEach(async () => {
   const ctx = context;
   context = undefined;
@@ -342,12 +349,13 @@ describe('isAllowedOrigin', () => {
 });
 
 describe('host', () => {
-  it('serves the editor and the deck', async () => {
+  it('redirects the tokenized root and serves the deck', async () => {
     const ctx = await setup();
+    const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
 
-    const page = await fetch(ctx.host.url);
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain('editor-shell');
+    const page = await fetch(ctx.host.url, { redirect: 'manual' });
+    expect(page.status).toBe(302);
+    expect(page.headers.get('location')).toBe(friendlyPath);
     const setCookie = page.headers.get('set-cookie') ?? '';
     expect(setCookie).toContain(
       `htmlppt_token=${encodeURIComponent(ctx.token)}`
@@ -355,6 +363,12 @@ describe('host', () => {
     expect(setCookie.toLowerCase()).toContain('httponly');
     expect(setCookie).toContain('SameSite=Strict');
     expect(setCookie).toContain('Path=/');
+
+    const friendly = await fetch(`${ctx.base}${friendlyPath}`, {
+      headers: { cookie: setCookie.split(';')[0] ?? '' }
+    });
+    expect(friendly.status).toBe(200);
+    expect(await friendly.text()).toContain('editor-shell');
 
     const response = await fetch(`${ctx.base}/api/deck`, {
       headers: { authorization: `Bearer ${ctx.token}` }
@@ -386,11 +400,19 @@ describe('host', () => {
 
   it('serves the page and assets with the session cookie', async () => {
     const ctx = await setup();
-    const page = await fetch(ctx.host.url);
+    const page = await fetch(ctx.host.url, { redirect: 'manual' });
     const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
     expect(cookie).toBe(`htmlppt_token=${encodeURIComponent(ctx.token)}`);
 
-    const withCookie = await fetch(`${ctx.base}/`, {
+    const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+    const rootWithCookie = await fetch(`${ctx.base}/`, {
+      headers: { cookie },
+      redirect: 'manual'
+    });
+    expect(rootWithCookie.status).toBe(302);
+    expect(rootWithCookie.headers.get('location')).toBe(friendlyPath);
+
+    const withCookie = await fetch(`${ctx.base}${friendlyPath}`, {
       headers: { cookie }
     });
     expect(withCookie.status).toBe(200);
@@ -406,6 +428,72 @@ describe('host', () => {
       `${ctx.base}/app.js?token=${encodeURIComponent(ctx.token)}`
     );
     expect(queryAsset.status).toBe(200);
+  });
+
+  it('requires auth for the friendly deck route', async () => {
+    const ctx = await setup();
+    const path = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+
+    const response = await fetch(`${ctx.base}${path}`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 404 for a deck name that does not match', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await fetch(`${ctx.base}/d/other.html`, {
+      headers: { cookie }
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('cleans the token query on a deck page', async () => {
+    const ctx = await setup();
+    const path = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+
+    const response = await fetch(
+      `${ctx.base}${path}?token=${encodeURIComponent(ctx.token)}`,
+      { redirect: 'manual' }
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(path);
+    expect(response.headers.get('set-cookie')).toContain(
+      `htmlppt_token=${encodeURIComponent(ctx.token)}`
+    );
+  });
+
+  it('matches the deck name case-insensitively on Windows only', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const name = basename(ctx.deckPath);
+    const first = name[0] ?? '';
+    const alternate =
+      first === first.toUpperCase()
+        ? `${first.toLowerCase()}${name.slice(1)}`
+        : `${first.toUpperCase()}${name.slice(1)}`;
+
+    const response = await fetch(
+      `${ctx.base}/d/${encodeURIComponent(alternate)}`,
+      { headers: { cookie } }
+    );
+
+    expect(response.status).toBe(process.platform === 'win32' ? 200 : 404);
+  });
+
+  it('rejects path separators in the deck name', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await fetch(
+      `${ctx.base}/d/${encodeURIComponent('../basic.deck.html')}`,
+      { headers: { cookie } }
+    );
+
+    expect(response.status).toBe(404);
   });
 
   it('sets security headers on API responses', async () => {
