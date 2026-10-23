@@ -646,6 +646,14 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         );
       }
 
+      // close() does not take the save lock, so it can run while the reads
+      // above are in flight. Check it once every await is done and stay
+      // synchronous through watchFile: a closing host must not install a
+      // watcher that close() already ran past.
+      if (closed) {
+        return c.json({ error: 'host-closing' }, 503);
+      }
+
       const previousPath = filePath;
       unwatchFile(filePath, onFileChange);
       if (syncTimer) {

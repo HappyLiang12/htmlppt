@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { basename, join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   HOST_VERSION,
   isAllowedOrigin,
@@ -1118,24 +1118,53 @@ describe('host', () => {
     }
   });
 
-  it('keeps the old file unwatched after opening another deck', async () => {
+  it('rebinds the watcher to the opened deck and stops watching the old one', async () => {
     const ctx = await setup();
     const nextPath = await addDeck(ctx, 'second.html', 'Second deck');
+    const secondHtml = await readFile(nextPath, 'utf8');
     const cookie = await bootstrapCookie(ctx);
     // setup() already installed the host's single watcher, so a rebind must
     // swap it rather than add a second one.
     const before = countStatWatchers();
+    const events = await connectEvents(ctx);
+    try {
+      expect(await events.next()).toEqual({
+        event: 'hello',
+        data: { revision: ctx.revision }
+      });
 
-    const open = await openDeck(ctx, cookie, nextPath);
-    expect(open.status).toBe(200);
-    expect(countStatWatchers()).toBe(before);
+      const open = await openDeck(ctx, cookie, nextPath);
+      expect(open.status).toBe(200);
+      const opened = (await open.json()) as { revision: string };
+      expect(await events.next()).toEqual({
+        event: 'revision',
+        data: { revision: opened.revision, source: 'external' }
+      });
+      expect(countStatWatchers()).toBe(before);
 
-    await writeFile(ctx.deckPath, `${ctx.deckHtml}\n<!-- old -->`, 'utf8');
-    const health = await fetch(`${ctx.base}/api/health`, {
-      headers: { cookie }
-    });
-    const afterOldWrite = (await health.json()) as { filePath: string };
-    expect(afterOldWrite.filePath).toBe(await realpath(nextPath));
+      // The old deck is no longer watched, so writing it must not surface.
+      await writeFile(ctx.deckPath, `${ctx.deckHtml}\n<!-- old -->`, 'utf8');
+      await events.expectNoEvent(500);
+
+      // The new deck is watched, so its next write becomes an external
+      // revision and the deck API serves the new content.
+      const updated = secondHtml.replace('Second deck', 'Second deck updated');
+      await writeFile(nextPath, updated, 'utf8');
+      expect(await events.next()).toEqual({
+        event: 'revision',
+        data: { revision: sha256(updated), source: 'external' }
+      });
+
+      const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+      expect(deck.status).toBe(200);
+      expect(await deck.json()).toMatchObject({
+        html: updated,
+        filePath: await realpath(nextPath),
+        revision: sha256(updated)
+      });
+    } finally {
+      await events.close();
+    }
   });
 
   it('no-ops when the requested deck is already current', async () => {
@@ -1177,14 +1206,71 @@ describe('host', () => {
     });
   });
 
+  it('rejects an open request without a usable path', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    for (const body of ['{}', '{"path":42}', '{"path":"   "}', 'null']) {
+      const response = await fetch(`${ctx.base}/api/open`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body
+      });
+      expect(response.status, body).toBe(400);
+      expect(await response.json(), body).toMatchObject({
+        error: 'invalid-path'
+      });
+    }
+  });
+
+  it('rejects an open request over 64 KiB', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await fetch(`${ctx.base}/api/open`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'x'.repeat(70 * 1024) })
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: 'payload-too-large'
+    });
+
+    const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+    expect(await deck.json()).toMatchObject({
+      filePath: ctx.deckPath,
+      revision: ctx.revision
+    });
+  });
+
+  it('returns deck-unreadable when the opened path is a directory', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const blocked = join(ctx.dir, 'blocked.html');
+    await mkdir(blocked);
+
+    const response = await openDeck(ctx, cookie, blocked);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: 'deck-unreadable' });
+
+    const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+    expect(await deck.json()).toMatchObject({
+      filePath: ctx.deckPath,
+      revision: ctx.revision
+    });
+  });
+
   it('rejects a deck already served by another live host', async () => {
     const ctx = await setup();
     const home = await makeTempDir('htmlppt-home-');
     const previousHome = process.env.HTMLPPT_HOME;
-    process.env.HTMLPPT_HOME = home;
     const other = join(ctx.dir, 'shared.html');
-    await writeFile(other, ctx.deckHtml, 'utf8');
     try {
+      process.env.HTMLPPT_HOME = home;
+      await writeFile(other, ctx.deckHtml, 'utf8');
       await writeSession({
         path: await realpath(other),
         port: ctx.host.port + 1,
@@ -1212,9 +1298,10 @@ describe('host', () => {
     }
   });
 
-  it('reports the opened deck through onDeckOpened', async () => {
+  it('reports the opened deck through onDeckOpened even when it rejects', async () => {
     const dir = await makeTempDir('htmlppt-host-callback-');
     let host: Awaited<ReturnType<typeof startHost>> | undefined;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const editorDir = join(dir, 'editor');
       await mkdir(editorDir);
@@ -1244,6 +1331,7 @@ describe('host', () => {
         port: 0,
         onDeckOpened: (event) => {
           opened.push(event);
+          throw new Error('registry offline');
         }
       });
       const base = new URL(host.url).origin;
@@ -1266,7 +1354,11 @@ describe('host', () => {
           revision: body.revision
         }
       ]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to move the session registry')
+      );
     } finally {
+      errorSpy.mockRestore();
       await host?.close();
       await rm(dir, { recursive: true, force: true });
     }
