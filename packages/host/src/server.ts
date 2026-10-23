@@ -651,7 +651,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       // synchronous through watchFile: a closing host must not install a
       // watcher that close() already ran past.
       if (closed) {
-        return c.json({ error: 'host-closing' }, 503);
+        return c.json(
+          {
+            error: 'host-closing',
+            message: 'The host is closing; retry after it has restarted.'
+          },
+          503
+        );
       }
 
       const previousPath = filePath;
@@ -671,7 +677,9 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         source: 'external'
       });
       watchFile(filePath, { interval: WATCH_INTERVAL_MS }, onFileChange);
-      broadcast('revision', { revision, source: 'external' });
+      // A deck switch is a different document, not an edit of the current one;
+      // the file path lets a dirty tab refuse to force-write into the new deck.
+      broadcast('revision', { revision, source: 'external', filePath });
 
       try {
         await options.onDeckOpened?.({

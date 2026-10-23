@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DeckRevisionEvent } from './live-sync';
 import {
   deckEventsUrl,
   exportDeck,
   fetchDeck,
   flushDeck,
   openDeck,
+  openDeckEvents,
   saveDeck
 } from './api';
 
@@ -52,6 +54,42 @@ describe('host API authentication', () => {
 
   it('opens the event stream at the same-origin endpoint', () => {
     expect(deckEventsUrl()).toBe('/api/events');
+  });
+
+  it('parses the opened file path from a revision event', () => {
+    class FakeEventSource {
+      static latest: FakeEventSource | null = null;
+      readonly listeners = new Map<string, (event: Event) => void>();
+      constructor(readonly url: string) {
+        FakeEventSource.latest = this;
+      }
+      addEventListener(type: string, listener: (event: Event) => void) {
+        this.listeners.set(type, listener);
+      }
+      emit(type: string, data: unknown): void {
+        this.listeners.get(type)?.({
+          data: JSON.stringify(data)
+        } as MessageEvent<string>);
+      }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const events: DeckRevisionEvent[] = [];
+
+    openDeckEvents((event) => events.push(event));
+    FakeEventSource.latest?.emit('revision', {
+      revision: 'r2',
+      source: 'external',
+      filePath: '/decks/second.html'
+    });
+
+    expect(events).toEqual([
+      {
+        type: 'revision',
+        revision: 'r2',
+        source: 'external',
+        filePath: '/decks/second.html'
+      }
+    ]);
   });
 
   it('opens a deck path and surfaces its error code', async () => {

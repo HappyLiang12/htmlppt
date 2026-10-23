@@ -54,6 +54,67 @@ describe('decideRevision', () => {
       )
     ).toEqual({ type: 'conflict', revision: 'r2', source: 'mcp' });
   });
+
+  it('carries the opened file path into apply and conflict decisions', () => {
+    const event = {
+      type: 'revision' as const,
+      revision: 'r2',
+      source: 'external' as const,
+      filePath: '/decks/second.html'
+    };
+    expect(decideRevision(event, { revision: 'r1', dirty: false })).toEqual({
+      type: 'apply',
+      revision: 'r2',
+      source: 'external',
+      filePath: '/decks/second.html'
+    });
+    expect(decideRevision(event, { revision: 'r1', dirty: true })).toEqual({
+      type: 'conflict',
+      revision: 'r2',
+      source: 'external',
+      filePath: '/decks/second.html'
+    });
+  });
+
+  it('treats a different file path as a switch even when revisions match', () => {
+    const event = {
+      type: 'revision' as const,
+      revision: 'r1',
+      source: 'external' as const,
+      filePath: '/decks/second.html'
+    };
+    expect(
+      decideRevision(event, {
+        revision: 'r1',
+        dirty: false,
+        filePath: '/decks/first.html'
+      })
+    ).toEqual({
+      type: 'apply',
+      revision: 'r1',
+      source: 'external',
+      filePath: '/decks/second.html'
+    });
+    expect(
+      decideRevision(event, {
+        revision: 'r1',
+        dirty: true,
+        filePath: '/decks/first.html'
+      })
+    ).toEqual({
+      type: 'conflict',
+      revision: 'r1',
+      source: 'external',
+      filePath: '/decks/second.html'
+    });
+    expect(
+      decideRevision(event, {
+        revision: 'r1',
+        dirty: true,
+        filePath: '/decks/second.html'
+      })
+    ).toEqual({ type: 'ignore' });
+  });
 });
 
 describe('planConflictResolution', () => {

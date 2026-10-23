@@ -408,6 +408,180 @@ test(
 );
 
 test(
+  'saves pending edits before opening and keeps the deck when the save fails',
+  { tag: '@feature:editor-core' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-open-save-gate-'));
+    let host: StartedHost | undefined;
+    let releaseSave: (() => void) | undefined;
+    try {
+      await createDeck(directory, 'first.html', 2);
+      const secondPath = await createSecondDeck(directory);
+      host = await startCliHost(cliPath, directory, 'first.html');
+
+      await page.goto(host.url);
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      const secondBefore = await readFile(secondPath);
+
+      let openRequests = 0;
+      page.on('request', (request) => {
+        if (isOpenRequest(request)) openRequests += 1;
+      });
+
+      const saveGate = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let markSaveStarted: (() => void) | undefined;
+      const saveStarted = new Promise<void>((resolve) => {
+        markSaveStarted = resolve;
+      });
+      await page.route('**/api/deck', async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.continue();
+          return;
+        }
+        markSaveStarted?.();
+        await saveGate;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'save-failed' })
+        });
+      });
+
+      const heading = frameHeading(page);
+      await heading.dblclick();
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('Unsaved local edit');
+
+      await pathInput(page).fill(secondPath);
+      await pathInput(page).press('Enter');
+      await saveStarted;
+
+      // The save is still held, so no open may have been attempted. A health
+      // request proves the page had a chance to send one.
+      const health = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/health' && response.ok()
+      );
+      await page.evaluate(() => fetch('/api/health'));
+      await health;
+      expect(openRequests).toBe(0);
+
+      releaseSave?.();
+
+      await expect(page.locator('#deck-path-error')).toContainText(
+        'Save failed (500)'
+      );
+      expect(openRequests).toBe(0);
+      await expect(frameHeading(page)).not.toContainText('Second deck');
+      await expect(page).toHaveURL(/\/d\/first\.html$/);
+      expect(await readFile(secondPath)).toEqual(secondBefore);
+    } finally {
+      releaseSave?.();
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'a dirty tab cannot overwrite a deck another tab just opened',
+  { tag: '@feature:live-sync' },
+  async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-open-dirty-'));
+    let host: StartedHost | undefined;
+    let other: Page | undefined;
+    let releaseSave: (() => void) | undefined;
+    try {
+      await createDeck(directory, 'first.html', 2);
+      const secondPath = await createSecondDeck(directory);
+      host = await startCliHost(cliPath, directory, 'first.html');
+
+      await page.goto(host.url);
+      await expect(frameHeading(page)).toContainText('Untitled deck');
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+      other = await context.newPage();
+      const liveStream = other.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/events' && response.ok()
+      );
+      await other.goto(host.url);
+      await liveStream;
+      await expect(frameHeading(other)).toContainText('Untitled deck');
+      await expect(other.getByTestId('save-status')).toHaveText('已同步');
+
+      // Hold the dirty tab's autosave so the deck-switch broadcast arrives
+      // while the tab still owns unsaved content, then fail that save.
+      const saveGate = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let markSaveStarted: (() => void) | undefined;
+      const saveStarted = new Promise<void>((resolve) => {
+        markSaveStarted = resolve;
+      });
+      await other.route('**/api/deck', async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.continue();
+          return;
+        }
+        markSaveStarted?.();
+        await saveGate;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'save-failed' })
+        });
+      });
+
+      const heading = frameHeading(other);
+      await heading.dblclick();
+      await expect(heading).toHaveAttribute('contenteditable', 'true');
+      await other.keyboard.press('Control+a');
+      await other.keyboard.type('Dirty local edit');
+      // Blur commits the text edit, which makes the tab dirty and schedules
+      // the autosave that the route below holds open.
+      await other
+        .getByTestId('canvas-preview')
+        .click({ position: { x: 4, y: 4 } });
+      await saveStarted;
+
+      await pathInput(page).fill(secondPath);
+      await pathInput(page).press('Enter');
+      await expect(frameHeading(page)).toContainText('Second deck');
+      await expect(page).toHaveURL(/\/d\/second\.html$/);
+
+      const secondBefore = await readFile(secondPath);
+
+      releaseSave?.();
+
+      await expect(other.getByTestId('conflict-banner')).toBeVisible();
+      await expect(other.getByTestId('conflict-banner')).toContainText(
+        '主機已切換到另一個檔案；只能重新載入。'
+      );
+      await expect(other.getByTestId('conflict-overwrite')).toHaveCount(0);
+      await expect(other.getByTestId('conflict-reload')).toBeVisible();
+
+      await other.getByTestId('conflict-reload').click();
+      await expect(other).toHaveURL(/\/d\/second\.html$/);
+      await expect(frameHeading(other)).toContainText('Second deck');
+      await expect(other.getByTestId('conflict-banner')).toHaveCount(0);
+      expect(await readFile(secondPath)).toEqual(secondBefore);
+    } finally {
+      releaseSave?.();
+      await other?.close();
+      await host?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
   'moves the CLI registry so open and stop find the new deck',
   { tag: '@feature:skeleton' },
   async () => {

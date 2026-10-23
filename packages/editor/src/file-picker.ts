@@ -21,6 +21,13 @@ const PICKER_TYPES = [
 ];
 
 /**
+ * How long after the window regains focus to wait for a change event before
+ * treating the dialog as dismissed. Browsers without a `cancel` event (older
+ * Safari) never resolve the hidden-input promise otherwise.
+ */
+const FOCUS_FALLBACK_DELAY_MS = 300;
+
+/**
  * Opens one HTML deck through the File System Access picker when available.
  * The returned handle keeps standalone saves writing back to the same file;
  * the hidden-input fallback has no handle, so callers offer a download instead.
@@ -44,16 +51,50 @@ export async function pickHtmlFile(): Promise<PickedHtmlFile | null> {
     input.accept = '.html,.htm,text/html';
     input.style.display = 'none';
     input.dataset.testid = 'file-picker-input';
-    const cleanup = (): void => input.remove();
-    input.addEventListener('change', () => {
+    let settled = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (picked: PickedHtmlFile | null): void => {
+      if (settled) return;
+      settled = true;
+      if (fallbackTimer !== undefined) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = undefined;
+      }
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      input.removeEventListener('change', onChange);
+      input.removeEventListener('cancel', onCancel);
+      input.remove();
+      resolve(picked);
+    };
+
+    const onChange = (): void => {
       const file = input.files?.[0] ?? null;
-      cleanup();
-      resolve(file ? { file, handle: null } : null);
-    });
-    input.addEventListener('cancel', () => {
-      cleanup();
-      resolve(null);
-    });
+      settle(file ? { file, handle: null } : null);
+    };
+
+    const onCancel = (): void => settle(null);
+
+    const checkFocus = (): void => {
+      if (settled || fallbackTimer !== undefined) return;
+      // A selected file's change event is authoritative. The delay gives it a
+      // chance to land before an empty picker is treated as dismissed.
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = undefined;
+        if (!settled && !input.files?.length) settle(null);
+      }, FOCUS_FALLBACK_DELAY_MS);
+    };
+
+    const onFocus = (): void => checkFocus();
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') checkFocus();
+    };
+
+    input.addEventListener('change', onChange);
+    input.addEventListener('cancel', onCancel);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     document.body.append(input);
     input.click();
   });

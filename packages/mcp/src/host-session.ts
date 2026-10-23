@@ -30,7 +30,17 @@ export async function findLiveSession(
   try {
     resolved = await realpath(resolved);
   } catch {
-    // A missing deck cannot have a live session; keep the resolved spelling.
+    // The deck may be deleted while its host is still alive. Resolving the
+    // parent keeps the registry key canonical when the parent is a symlink or
+    // junction; rejoining the basename always yields the entry's spelling.
+    try {
+      resolved = path.join(
+        await realpath(path.dirname(resolved)),
+        path.basename(resolved)
+      );
+    } catch {
+      // Keep the resolved spelling when the parent is gone too.
+    }
   }
   const sessionFile = path.join(
     sessionsDirectory(),
@@ -76,14 +86,28 @@ async function checkHost(entry: SessionEntry): Promise<HealthStatus> {
       // different service on the recorded port.
       return response.status >= 500 ? 'unknown' : 'unhealthy';
     }
-    let payload: { ok?: unknown } | null;
+    let payload: { ok?: unknown; filePath?: unknown } | null;
     try {
-      payload = (await response.json()) as { ok?: unknown } | null;
+      payload = (await response.json()) as {
+        ok?: unknown;
+        filePath?: unknown;
+      } | null;
     } catch (error) {
       // The signal also bounds reading the body.
       return isAbortError(error) ? 'unknown' : 'unhealthy';
     }
-    return payload?.ok === true ? 'healthy' : 'unhealthy';
+    if (payload?.ok !== true) {
+      return 'unhealthy';
+    }
+    // A host that switched decks under the recorded port is not serving this
+    // entry. Older payloads omit filePath, which stays compatible.
+    if (
+      payload.filePath !== undefined &&
+      payload.filePath !== entry.path
+    ) {
+      return 'unhealthy';
+    }
+    return 'healthy';
   } catch (error) {
     // Timeouts say nothing about whether the host is alive: it may simply be
     // busy behind its save lock, so keep the entry for later calls.

@@ -1091,7 +1091,11 @@ describe('host', () => {
       const revisionEvent = await events.next();
       expect(revisionEvent).toEqual({
         event: 'revision',
-        data: { revision: opened.revision, source: 'external' }
+        data: {
+          revision: opened.revision,
+          source: 'external',
+          filePath: opened.filePath
+        }
       });
 
       const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
@@ -1135,10 +1139,17 @@ describe('host', () => {
 
       const open = await openDeck(ctx, cookie, nextPath);
       expect(open.status).toBe(200);
-      const opened = (await open.json()) as { revision: string };
+      const opened = (await open.json()) as {
+        revision: string;
+        filePath: string;
+      };
       expect(await events.next()).toEqual({
         event: 'revision',
-        data: { revision: opened.revision, source: 'external' }
+        data: {
+          revision: opened.revision,
+          source: 'external',
+          filePath: opened.filePath
+        }
       });
       expect(countStatWatchers()).toBe(before);
 

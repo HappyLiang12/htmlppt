@@ -43,6 +43,22 @@ export type SaveStatus =
 export interface DeckConflict {
   revision: string;
   source?: string;
+  /** The deck the host moved to when the conflict came from /api/open. */
+  filePath?: string;
+}
+
+/**
+ * A conflict that belongs to a different file than the one this tab loaded.
+ * Force-writing would replace the deck another tab just opened, so the only
+ * safe resolution is reload.
+ */
+export function isSwitchedFileConflict(
+  conflict: DeckConflict | null,
+  filePath: string
+): boolean {
+  return Boolean(
+    conflict?.filePath && filePath && conflict.filePath !== filePath
+  );
 }
 
 export interface DeckControllerState {
@@ -403,6 +419,7 @@ export function useDeckController(
           status: 'ready',
           dirty: false,
           conflict: null,
+          documentEpoch: stateRef.current.documentEpoch + 1,
           filePath: deck.filePath,
           error: ''
         });
@@ -419,7 +436,15 @@ export function useDeckController(
       if (operationGenerationRef.current !== generation) return;
       if (editVersionRef.current !== editVersion) {
         autosaveRef.current?.cancel();
-        update({ conflict: { revision: deck.revision, source }, status: 'conflict', error: '' });
+        update({
+          conflict: {
+            revision: deck.revision,
+            source,
+            filePath: deck.filePath
+          },
+          status: 'conflict',
+          error: ''
+        });
         return;
       }
       autosaveRef.current?.cancel();
@@ -501,7 +526,11 @@ export function useDeckController(
         if (!event) break;
         const decision = decideRevision(event, {
           revision: revisionRef.current,
-          dirty: stateRef.current.dirty || stateRef.current.pending || stateRef.current.conflict !== null
+          dirty:
+            stateRef.current.dirty ||
+            stateRef.current.pending ||
+            stateRef.current.conflict !== null,
+          filePath: stateRef.current.filePath
         });
         if (decision.type === 'ignore') continue;
         if (decision.type === 'conflict') {
@@ -511,7 +540,8 @@ export function useDeckController(
           update({
             conflict: {
               revision: decision.revision,
-              source: decision.source
+              source: decision.source,
+              ...(decision.filePath ? { filePath: decision.filePath } : {})
             },
             status: 'conflict',
             error: ''
@@ -525,7 +555,11 @@ export function useDeckController(
         try {
           const deck = await persistenceRef.current.load();
           if (operationGenerationRef.current !== generation) continue;
-          if (deck.revision === revisionRef.current && editVersionRef.current === editVersion) {
+          if (
+            deck.revision === revisionRef.current &&
+            deck.filePath === stateRef.current.filePath &&
+            editVersionRef.current === editVersion
+          ) {
             update({ status: 'ready' });
             continue;
           }
@@ -967,6 +1001,19 @@ export function useDeckController(
   );
 
   const overwrite = useCallback(async () => {
+    if (
+      isSwitchedFileConflict(
+        stateRef.current.conflict,
+        stateRef.current.filePath
+      )
+    ) {
+      // Force-writing here would replace the deck another tab just opened.
+      update({
+        status: 'conflict',
+        error: '主機已切換到另一個檔案；只能重新載入。'
+      });
+      return;
+    }
     const master = masterRef.current;
     if (!master || externalBusyRef.current) return;
     if (pendingEditsRef.current.size) {

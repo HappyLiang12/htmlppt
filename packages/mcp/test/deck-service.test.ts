@@ -657,6 +657,55 @@ describe('findLiveSession', () => {
       await healthy.close();
     }
   });
+
+  it('finds a live session for a missing deck under a directory alias', async () => {
+    const realDirectory = join(dir, 'real-missing');
+    await mkdir(realDirectory);
+    const canonicalDirectory = await realpath(realDirectory);
+    const missingDeck = join(canonicalDirectory, 'deleted.html');
+    const aliasDirectory = join(dir, 'alias-missing');
+    await symlink(
+      realDirectory,
+      aliasDirectory,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, filePath: missingDeck }));
+    });
+    try {
+      const entry = staleEntry({ path: missingDeck, port: healthy.port });
+      await writeSession(entry);
+
+      const found = await findLiveSession(
+        join(aliasDirectory, 'deleted.html')
+      );
+
+      expect(found).toEqual(entry);
+      expect(await readSession(sessionFilePath(missingDeck))).toEqual(entry);
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  it('removes a session whose health payload reports a different deck', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const otherDeck = join(dir, 'other-health.html');
+    const mismatched = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, filePath: otherDeck }));
+    });
+    try {
+      await writeSession(staleEntry({ port: mismatched.port }));
+
+      expect(await findLiveSession(deckPath)).toBeNull();
+      await expect(
+        readFile(sessionFilePath(deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await mismatched.close();
+    }
+  });
 });
 
 describe('createDeckService', () => {

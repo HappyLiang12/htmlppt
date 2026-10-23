@@ -1,7 +1,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { DeckResponse } from './api.js';
+import type { DeckPersistence, DeckResponse } from './api.js';
 import { parseDeck } from './slide-doc.js';
 import {
   hasEditorArtifacts,
@@ -27,13 +27,24 @@ const DECK: DeckResponse = {
 let container: HTMLDivElement;
 let root: Root;
 let controller!: DeckController;
+let persistence: DeckPersistence;
+const saveCalls: Array<{ force?: boolean }> = [];
 
 function Probe() {
-  controller = useDeckController({});
+  controller = useDeckController({ persistence });
   return null;
 }
 
 beforeEach(async () => {
+  saveCalls.length = 0;
+  persistence = {
+    load: () => Promise.reject(new Error('Unexpected load.')),
+    save: async (_html, _baseRevision, options) => {
+      saveCalls.push(options ?? {});
+      return { revision: 'saved-revision' };
+    },
+    flush: () => undefined
+  };
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -523,5 +534,59 @@ describe('useDeckController', () => {
       elementId: 'e1'
     });
     expect(controller.state.srcDoc).toContain('Second external');
+  });
+
+  it('bumps documentEpoch when a load replaces the document', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    const firstEpoch = controller.state.documentEpoch;
+
+    await act(async () => {
+      await controller.actions.load({
+        ...DECK,
+        revision: 'revision-2',
+        filePath: 'other.html'
+      });
+    });
+
+    expect(controller.state.documentEpoch).toBe(firstEpoch + 1);
+    expect(controller.state.filePath).toBe('other.html');
+  });
+
+  it('refuses to overwrite a conflict raised by a deck switch', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    act(() => {
+      controller.actions.applySlideMutation(0, (slide) => {
+        const heading = slide.querySelector('h1');
+        if (!heading) throw new Error('Missing heading.');
+        heading.textContent = 'Local edit';
+      });
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: 'revision-other',
+        source: 'external',
+        filePath: 'other.html'
+      });
+    });
+    expect(controller.state.conflict).toEqual({
+      revision: 'revision-other',
+      source: 'external',
+      filePath: 'other.html'
+    });
+    expect(controller.state.status).toBe('conflict');
+
+    await act(async () => {
+      await controller.actions.overwrite();
+    });
+
+    expect(saveCalls).toEqual([]);
+    expect(controller.state.conflict).not.toBeNull();
+    expect(controller.state.dirty).toBe(true);
+    expect(controller.state.error).toBe(
+      '主機已切換到另一個檔案；只能重新載入。'
+    );
   });
 });

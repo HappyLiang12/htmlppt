@@ -192,6 +192,7 @@ import {
 } from './slide-ops';
 import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
 import {
+  isSwitchedFileConflict,
   useDeckController,
   type DeckControllerState
 } from './use-deck-controller';
@@ -487,6 +488,8 @@ export function App() {
     dirty,
     conflict
   } = state;
+
+  const switchedFileConflict = isSwitchedFileConflict(conflict, filePath);
 
   const activeSlide = slides[activeIndex];
 
@@ -864,6 +867,15 @@ export function App() {
   }, [playing, activeIndex, slides.length, closePresenter]);
 
   const resolveConflict = useCallback((choice: ConflictResolution) => {
+    if (
+      choice === 'overwrite' &&
+      isSwitchedFileConflict(
+        stateRef.current.conflict,
+        stateRef.current.filePath
+      )
+    ) {
+      return;
+    }
     const plan = planConflictResolution(choice);
     if (plan.applyExternal) {
       void actionsRef.current.reload();
@@ -3441,8 +3453,12 @@ export function App() {
           role="alert"
           className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/50 px-4 py-2 text-xs text-amber-100"
         >
-          <span>外部已修改檔案，本機有尚未儲存的變更。</span>
-          {state.pending && (
+          <span>
+            {switchedFileConflict
+              ? '主機已切換到另一個檔案；只能重新載入。'
+              : '外部已修改檔案，本機有尚未儲存的變更。'}
+          </span>
+          {!switchedFileConflict && state.pending && (
             <span data-testid="pending-edit-instruction">請先套用或取消尚未完成的編輯，再覆寫。</span>
           )}
           <button
@@ -3455,16 +3471,18 @@ export function App() {
           >
             重新載入
           </button>
-          <button
-            type="button"
-            data-testid="conflict-overwrite"
-            disabled={state.recoveryBusy || state.pending}
-            onPointerDown={(event) => event.preventDefault()}
-            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
-            onClick={() => resolveConflict('overwrite')}
-          >
-            覆寫
-          </button>
+          {!switchedFileConflict && (
+            <button
+              type="button"
+              data-testid="conflict-overwrite"
+              disabled={state.recoveryBusy || state.pending}
+              onPointerDown={(event) => event.preventDefault()}
+              className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
+              onClick={() => resolveConflict('overwrite')}
+            >
+              覆寫
+            </button>
+          )}
         </div>
       )}
 

@@ -97,7 +97,10 @@ not a parent pointer; there is no merge history in the file.
 - **Open:** `POST /api/open { path }` normalizes quotes, `file://`, `~`, and
   relative paths, validates the target deck, rejects a target already served by
   another live host with `409`, and rebinds the watcher, revision, and SSE state
-  inside the save lock. The CLI callback moves the session registry entry.
+  inside the save lock. The rebind broadcasts a `revision` event that carries the
+  new `filePath`, so a dirty tab can distinguish a same-deck update from a deck
+  switch and refuses to force-write over the newly opened file. The CLI callback
+  moves the session registry entry.
 - **Editor:** saves are serialized through one promise chain; a pending save is
   restarted by new edits, and a save that started before a reload/load is
   invalidated. The controller tracks the last acknowledged revision, ignores

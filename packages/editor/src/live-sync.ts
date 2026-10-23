@@ -11,17 +11,34 @@ export interface DeckRevisionEvent {
   type: 'hello' | 'revision';
   revision: string;
   source?: RevisionSource;
+  /**
+   * The deck this revision belongs to when the host rebinds via /api/open.
+   * Absent for ordinary writes to the current deck.
+   */
+  filePath?: string;
 }
 
 export interface SyncSnapshot {
   revision: string;
   dirty: boolean;
+  /** The deck currently loaded, when the caller knows its path. */
+  filePath?: string;
 }
 
 export type RevisionDecision =
   | { type: 'ignore' }
-  | { type: 'apply'; revision: string; source?: RevisionSource }
-  | { type: 'conflict'; revision: string; source?: RevisionSource };
+  | {
+      type: 'apply';
+      revision: string;
+      source?: RevisionSource;
+      filePath?: string;
+    }
+  | {
+      type: 'conflict';
+      revision: string;
+      source?: RevisionSource;
+      filePath?: string;
+    };
 
 /**
  * Decides what a revision event means for the editor. Self writes are
@@ -34,17 +51,34 @@ export function decideRevision(
   event: DeckRevisionEvent,
   snapshot: SyncSnapshot
 ): RevisionDecision {
-  if (!event.revision || event.revision === snapshot.revision) {
+  // Two decks can be byte-identical and therefore share a revision. A file
+  // switch is still a different document, so revision equality alone must not
+  // hide it from the tab.
+  const switchedFile =
+    event.filePath !== undefined &&
+    snapshot.filePath !== undefined &&
+    event.filePath !== snapshot.filePath;
+  if (
+    !event.revision ||
+    (event.revision === snapshot.revision && !switchedFile)
+  ) {
     return { type: 'ignore' };
   }
+  const filePath = event.filePath ? { filePath: event.filePath } : {};
   if (snapshot.dirty) {
     return {
       type: 'conflict',
       revision: event.revision,
-      source: event.source
+      source: event.source,
+      ...filePath
     };
   }
-  return { type: 'apply', revision: event.revision, source: event.source };
+  return {
+    type: 'apply',
+    revision: event.revision,
+    source: event.source,
+    ...filePath
+  };
 }
 
 export type ConflictResolution = 'reload' | 'overwrite';

@@ -236,13 +236,20 @@ function parseRevisionEvent(
     return null;
   }
   if (payload === null || typeof payload !== 'object') return null;
-  const body = payload as { revision?: unknown; source?: unknown };
+  const body = payload as {
+    revision?: unknown;
+    source?: unknown;
+    filePath?: unknown;
+  };
   if (typeof body.revision !== 'string' || !body.revision) return null;
   return {
     type,
     revision: body.revision,
     ...(type === 'revision'
       ? { source: revisionSource(body.source) }
+      : {}),
+    ...(typeof body.filePath === 'string' && body.filePath
+      ? { filePath: body.filePath }
       : {})
   };
 }
