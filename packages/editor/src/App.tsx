@@ -489,6 +489,7 @@ export function App() {
   const [openingStandalone, setOpeningStandalone] = useState(false);
   const [recoveryDraft, setRecoveryDraft] = useState<DraftRecord | null>(null);
   const recoveryCheckedRef = useRef<string | null>(null);
+  const downloadedDraftRef = useRef<string | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
@@ -1385,6 +1386,10 @@ export function App() {
     const key = draftKey(name);
     if (!key) return;
     const html = serializeDeck(master);
+    // An explicit download already persisted this content; a pending debounce
+    // must not resurrect the draft it just deleted.
+    if (downloadedDraftRef.current === html) return;
+    downloadedDraftRef.current = null;
     const timer = window.setTimeout(() => {
       void writeDraft({ key, filePath: name, html, savedAt: Date.now() });
     }, 250);
@@ -2388,10 +2393,15 @@ export function App() {
             const savedMaster = stateRef.current.master;
             const name = standaloneRef.current.name;
             if (savedMaster) {
-              downloadHtml(serializeDeck(savedMaster), name, '.html');
-              void deleteDraft(draftKey(name));
-              setRecoveryDraft(null);
-              setAnnouncement('已下載 HTML 檔。');
+              const html = serializeDeck(savedMaster);
+              downloadedDraftRef.current = html;
+              // Await the delete: reloading immediately after the download can
+              // otherwise abort the IndexedDB transaction and keep the draft.
+              void deleteDraft(draftKey(name)).finally(() => {
+                downloadHtml(html, name, '.html');
+                setRecoveryDraft(null);
+                setAnnouncement('已下載 HTML 檔。');
+              });
             }
             return;
           }
