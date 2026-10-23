@@ -45,6 +45,13 @@ HttpOnly session cookie and lands on
 for that session. CLI and MCP output still print the tokenized bootstrap URL for
 automation.
 
+Inside the editor, type an absolute path or `file://` URL into the path field and
+press Enter to switch this host to another HTML deck. A successful switch keeps
+the host, its token, and its session; the address bar becomes
+`/d/<new-deck-name>` and saves go to the new file. Use the folder button to pick
+a file through the standalone editor instead, which writes through the File
+System Access handle.
+
 ### MCP setup
 
 Add the stdio server to an MCP client:
