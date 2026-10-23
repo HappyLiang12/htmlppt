@@ -37,7 +37,7 @@ export async function resolveDeckPath(
   let value = unquote(input);
   if (!value) throw new OpenPathError('invalid-path');
 
-  if (value.startsWith('file://')) {
+  if (value.toLowerCase().startsWith('file://')) {
     try {
       value = fileURLToPath(value);
     } catch {
