@@ -166,7 +166,14 @@ export guarantees in full.
   upload/download mode: File System Access writes the original file when
   available, otherwise Ctrl+S or Export downloads it.
 
-Editor chrome labels are currently Traditional Chinese.
+## Localization
+
+The editor, play mode, presenter, and runtime controls support English,
+Traditional Chinese, and Simplified Chinese. The first visit follows the
+browser language; the toolbar language menu persists a manual choice.
+
+Exported decks localize at view time from the viewer's browser unless the deck
+sets `data-ppt-locale="en"`, `"zh-Hant"`, or `"zh-Hans"` on `<html>`.
 
 ## Export formats
 
