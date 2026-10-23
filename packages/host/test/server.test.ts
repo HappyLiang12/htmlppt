@@ -1333,6 +1333,63 @@ describe('host', () => {
     }
   });
 
+  it('reports the different host when a same-port entry matches first', async () => {
+    const ctx = await setup();
+    const home = await makeTempDir('htmlppt-home-');
+    const previousHome = process.env.HTMLPPT_HOME;
+    const other = join(ctx.dir, 'shared.html');
+    try {
+      process.env.HTMLPPT_HOME = home;
+      await writeFile(other, ctx.deckHtml, 'utf8');
+      // Two spellings of the same deck: the same-port duplicate sorts first,
+      // so a scan that stops at the first match would hide the other host.
+      const sameAlias = join(ctx.dir, 'shared-alias-a');
+      const otherAlias = join(ctx.dir, 'shared-alias-b');
+      await symlink(
+        ctx.dir,
+        sameAlias,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
+      await symlink(
+        ctx.dir,
+        otherAlias,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
+      await writeSession({
+        path: join(sameAlias, 'shared.html'),
+        port: ctx.host.port,
+        token: 'same-host-token',
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: ctx.revision
+      });
+      await writeSession({
+        path: join(otherAlias, 'shared.html'),
+        port: ctx.host.port + 1,
+        token: 'other-token',
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: ctx.revision
+      });
+      const cookie = await bootstrapCookie(ctx);
+
+      const response = await openDeck(ctx, cookie, other);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: 'deck-already-open',
+        url: `http://127.0.0.1:${ctx.host.port + 1}/?token=other-token`
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HTMLPPT_HOME;
+      } else {
+        process.env.HTMLPPT_HOME = previousHome;
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('reports the opened deck through onDeckOpened even when it rejects', async () => {
     const dir = await makeTempDir('htmlppt-host-callback-');
     let host: Awaited<ReturnType<typeof startHost>> | undefined;

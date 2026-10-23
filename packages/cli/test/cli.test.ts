@@ -9,6 +9,7 @@ import {
   readdir,
   rm,
   stat,
+  symlink,
   writeFile
 } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -1313,6 +1314,59 @@ describe('htmlppt cli as a real process', () => {
       expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
         raw
       );
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      open?.kill();
+      await silent.close();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
+  it('refuses a busy host registered under an alias spelling', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const aliasDir = join(workspace.cwd, 'basic-alias');
+    await symlink(
+      workspace.cwd,
+      aliasDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+    const silent = await silentHost();
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(
+        workspace,
+        join(aliasDir, 'basic.deck.html'),
+        { pid, port: silent.port }
+      );
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stderr).toContain('htmlppt stop');
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      expect(
+        await readFile(
+          sessionFilePath(workspace, join(aliasDir, 'basic.deck.html')),
+          'utf8'
+        )
+      ).toBe(raw);
       expect(await sessionCount(workspace)).toBe(1);
       expect(() => process.kill(pid, 0)).not.toThrow();
     } finally {

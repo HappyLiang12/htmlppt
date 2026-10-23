@@ -600,9 +600,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
       // Registry keys keep the spelling their writer used, so a direct key
       // lookup can miss an entry for the same deck. Scan instead and compare
-      // through realpath; target is already canonical.
+      // through realpath; target is already canonical. Skip entries on this
+      // host's own port so a duplicate cannot mask another host.
       let existing: SessionEntry | undefined;
       for (const entry of await listSessions()) {
+        if (entry.port === port) {
+          continue;
+        }
         try {
           if ((await realpath(entry.path)) === target) {
             existing = entry;
@@ -612,7 +616,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
           // A vanished or unreadable entry cannot name this target.
         }
       }
-      if (existing && existing.port !== port) {
+      if (existing) {
         return c.json(
           {
             error: 'deck-already-open',

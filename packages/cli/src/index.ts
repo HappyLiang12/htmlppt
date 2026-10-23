@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
 import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
-import { join, parse, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -132,34 +132,50 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
 }
 
 /**
+ * Resolves a deck path to its canonical spelling. A missing deck still resolves
+ * through its parent so an alias under a symlink or junction parent keeps a
+ * stable identity.
+ */
+async function canonicalDeckPath(filePath: string): Promise<string> {
+  const resolved = resolve(filePath);
+  try {
+    return await realpath(resolved);
+  } catch {
+    try {
+      return join(await realpath(dirname(resolved)), parse(resolved).base);
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+/**
  * A health timeout or 5xx keeps the registry entry even though no live session
  * can be confirmed. Starting another host would overwrite that entry and orphan
  * the process that may still own the socket, so a recorded live pid blocks the
  * new host until the user retries or stops it.
+ *
+ * Registry keys keep the spelling their writer used, so the caller-spelling key
+ * can be absent after an open moved the entry to the host's canonical path.
+ * Scan the registry and compare canonical paths instead; `listSessions` already
+ * drops entries whose process is gone.
  */
 async function hasUnresponsiveRegisteredHost(
   filePath: string
 ): Promise<boolean> {
-  let raw: string;
-  try {
-    raw = await readFile(sessionFilePath(filePath), 'utf8');
-  } catch {
-    return false;
+  const target = await canonicalDeckPath(filePath);
+  for (const entry of await listSessions()) {
+    let entryPath: string;
+    try {
+      entryPath = await realpath(entry.path);
+    } catch {
+      entryPath = resolve(entry.path);
+    }
+    if (entryPath === target) {
+      return true;
+    }
   }
-  let entry: { path?: unknown; pid?: unknown };
-  try {
-    entry = JSON.parse(raw) as { path?: unknown; pid?: unknown };
-  } catch {
-    return false;
-  }
-  return (
-    typeof entry.path === 'string' &&
-    resolve(entry.path) === filePath &&
-    typeof entry.pid === 'number' &&
-    Number.isInteger(entry.pid) &&
-    entry.pid > 0 &&
-    processIsAlive(entry.pid)
-  );
+  return false;
 }
 
 async function openBrowser(url: string, io: CliIO): Promise<void> {
