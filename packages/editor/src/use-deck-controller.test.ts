@@ -29,7 +29,7 @@ let root: Root;
 let controller!: DeckController;
 
 function Probe() {
-  controller = useDeckController({ token: '' });
+  controller = useDeckController({});
   return null;
 }
 

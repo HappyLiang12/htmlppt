@@ -85,7 +85,7 @@ function props(overrides: Partial<InspectorInputs> = {}): InspectorInputs {
 }
 
 function InspectorHarness(inputs: InspectorInputs) {
-  const { actions } = useDeckController({ token: '' });
+  const { actions } = useDeckController({});
   return createElement(Inspector, { ...inputs, pendingActions: actions });
 }
 

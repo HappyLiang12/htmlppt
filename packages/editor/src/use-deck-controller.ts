@@ -8,7 +8,6 @@ import {
 import {
   DeckConflictError,
   hostPersistence,
-  tokenFromLocation,
   type DeckPersistence,
   type DeckResponse
 } from './api';
@@ -129,7 +128,6 @@ export interface DeckController {
 }
 
 export interface DeckControllerOptions {
-  token?: string;
   /**
    * Overrides host HTTP persistence; standalone tabs supply a local adapter.
    */
@@ -219,9 +217,8 @@ export function useDeckController(
   const settlingRef = useRef(false);
   const historyRef = useRef(new History<string, number>());
   const clipboardRef = useRef<string[]>([]);
-  const tokenRef = useRef(options.token ?? tokenFromLocation());
   const persistenceRef = useRef<DeckPersistence>(
-    options.persistence ?? hostPersistence(tokenRef.current)
+    options.persistence ?? hostPersistence()
   );
   const measurePastedRef = useRef(options.measurePastedObject);
   measurePastedRef.current = options.measurePastedObject;

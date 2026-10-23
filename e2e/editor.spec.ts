@@ -28,6 +28,7 @@ interface EditorHarness {
   file: string;
   host: Awaited<ReturnType<typeof startCliHost>>;
   frame: FrameLocator;
+  friendlyPath: string;
 }
 
 function isDeckSaveRequest(request: Request): boolean {
@@ -175,10 +176,12 @@ async function openDeck(
     await prepare(directory, file);
     host = await startCliHost(cliPath, directory, file);
     await page.goto(host.url);
+    const friendlyPath = `/d/${encodeURIComponent(file)}`;
+    await expect.poll(() => new URL(page.url()).pathname).toBe(friendlyPath);
     const frame = page.frameLocator(FRAME_SELECTOR);
     await ready(frame);
     await expect(page.getByTestId('save-status')).toHaveText('已同步');
-    return { directory, file, host, frame };
+    return { directory, file, host, frame, friendlyPath };
   } catch (error) {
     if (host) await host.stop();
     await rm(directory, { recursive: true, force: true });
@@ -3543,7 +3546,7 @@ for (const kind of ['pending', 'dirty'] as const) {
           expect(String(cause)).toContain('ERR_ABORTED');
         });
         expect(dialogs).toEqual(['beforeunload']);
-        expect(page.url()).toBe(editor.host.url);
+        expect(page.url()).toBe(new URL(editor.friendlyPath, editor.host.url).href);
         if (kind === 'pending') {
           await expect(page.getByTestId('background-value')).toHaveValue('Unapplied unload draft');
           expect(observed.saves).toHaveLength(0);

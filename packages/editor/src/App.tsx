@@ -68,7 +68,6 @@ import {
   flushDeck,
   openDeckEvents,
   saveDeck,
-  tokenFromLocation,
   type DeckPersistence,
   type ExportFormat
 } from './api';
@@ -413,23 +412,23 @@ export function App() {
     () => createStandalonePersistence(() => standaloneRef.current),
     []
   );
-  const persistence = useMemo<DeckPersistence>(() => {
-    const token = tokenFromLocation();
-    return {
-      load: () => fetchDeck(token),
+  const persistence = useMemo<DeckPersistence>(
+    () => ({
+      load: () => fetchDeck(),
       save: (html, baseRevision, options) =>
         standaloneRef.current
           ? standalonePersistence.save(html, baseRevision, options)
-          : saveDeck(token, html, baseRevision, options),
+          : saveDeck(html, baseRevision, options),
       flush: (html, baseRevision) => {
         if (standaloneRef.current) {
           standalonePersistence.flush(html, baseRevision);
         } else {
-          flushDeck(token, html, baseRevision);
+          flushDeck(html, baseRevision);
         }
       }
-    };
-  }, [standalonePersistence]);
+    }),
+    [standalonePersistence]
+  );
 
   const { state, actions } = useDeckController({ measurePastedObject, persistence });
   const {
@@ -1334,7 +1333,7 @@ export function App() {
       }
       setExporting(format);
       try {
-        const files = await exportDeck(tokenFromLocation(), format);
+        const files = await exportDeck(format);
         setExportMessage(
           `已匯出 ${files.length} 個檔案：${files.join('、')}`
         );
@@ -1352,7 +1351,7 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const deck = await fetchDeck(tokenFromLocation());
+        const deck = await fetchDeck();
         if (cancelled) return;
         setMode('host');
         await actions.load(deck);
@@ -1434,13 +1433,11 @@ export function App() {
    */
   const liveEventsRef = useRef<EventSource | null>(null);
   useEffect(() => {
-    if (liveEventsRef.current || !master) return;
-    const token = tokenFromLocation();
-    if (!token) return;
-    liveEventsRef.current = openDeckEvents(token, (event) => {
+    if (liveEventsRef.current || !master || mode !== 'host') return;
+    liveEventsRef.current = openDeckEvents((event) => {
       actionsRef.current.receiveRevision(event);
     });
-  }, [master]);
+  }, [master, mode]);
 
   useEffect(
     () => () => {

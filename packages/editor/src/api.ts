@@ -39,14 +39,8 @@ export class DeckAuthError extends Error {
   }
 }
 
-export function tokenFromLocation(): string {
-  return new URLSearchParams(location.search).get('token') ?? '';
-}
-
-export async function fetchDeck(token: string): Promise<DeckResponse> {
-  const response = await fetch('/api/deck', {
-    headers: { authorization: `Bearer ${token}` }
-  });
+export async function fetchDeck(): Promise<DeckResponse> {
+  const response = await fetch('/api/deck');
   if (!response.ok) {
     throw new DeckAuthError(response.status);
   }
@@ -94,7 +88,6 @@ async function readErrorPayload(
 }
 
 export async function saveDeck(
-  token: string,
   html: string,
   baseRevision: string,
   options: SaveDeckOptions = {}
@@ -102,7 +95,6 @@ export async function saveDeck(
   const response = await fetch('/api/deck', {
     method: 'PUT',
     headers: {
-      authorization: `Bearer ${token}`,
       'content-type': 'application/json'
     },
     body: JSON.stringify({
@@ -126,15 +118,10 @@ export async function saveDeck(
  * It is best effort: the browser may terminate it, and a conflict is not
  * observable from an unloading page.
  */
-export function flushDeck(
-  token: string,
-  html: string,
-  baseRevision: string
-): void {
+export function flushDeck(html: string, baseRevision: string): void {
   void fetch('/api/deck', {
     method: 'PUT',
     headers: {
-      authorization: `Bearer ${token}`,
       'content-type': 'application/json'
     },
     body: JSON.stringify({ html, baseRevision }),
@@ -142,24 +129,22 @@ export function flushDeck(
   }).catch(() => undefined);
 }
 
-export function hostPersistence(token: string): DeckPersistence {
+export function hostPersistence(): DeckPersistence {
   return {
-    load: () => fetchDeck(token),
+    load: () => fetchDeck(),
     save: (html, baseRevision, options) =>
-      saveDeck(token, html, baseRevision, options),
-    flush: (html, baseRevision) => flushDeck(token, html, baseRevision)
+      saveDeck(html, baseRevision, options),
+    flush: (html, baseRevision) => flushDeck(html, baseRevision)
   };
 }
 
 export async function exportDeck(
-  token: string,
   format: ExportFormat,
   outDir?: string
 ): Promise<string[]> {
   const response = await fetch('/api/export', {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${token}`,
       'content-type': 'application/json'
     },
     body: JSON.stringify({
@@ -184,8 +169,8 @@ export async function exportDeck(
   return body.files.filter((file): file is string => typeof file === 'string');
 }
 
-export function deckEventsUrl(token: string): string {
-  return `/api/events?token=${encodeURIComponent(token)}`;
+export function deckEventsUrl(): string {
+  return '/api/events';
 }
 
 function revisionSource(value: unknown): RevisionSource | undefined {
@@ -217,15 +202,13 @@ function parseRevisionEvent(
 }
 
 /**
- * Opens the authenticated SSE stream. EventSource cannot set headers, so the
- * session token travels in the query string; the host accepts it and the
- * token must never be logged.
+ * Opens the authenticated SSE stream. The session cookie authorizes the
+ * same-origin EventSource request, so the token never appears in a URL.
  */
 export function openDeckEvents(
-  token: string,
   onEvent: (event: DeckRevisionEvent) => void
 ): EventSource {
-  const source = new EventSource(deckEventsUrl(token));
+  const source = new EventSource(deckEventsUrl());
   const listen = (type: 'hello' | 'revision') => (event: Event) => {
     const message = event as MessageEvent<string>;
     const parsed = parseRevisionEvent(type, String(message.data));
