@@ -12,7 +12,7 @@ export type { ChromiumLocation } from './chromium.js';
 
 const DEADLINE_MS = 12000;
 // Cold starts on hosted Windows runners can exceed the page-operation budget.
-const LAUNCH_TIMEOUT_MS = 30000;
+const LAUNCH_TIMEOUT_MS = 60000;
 
 export class RendererUnavailableError extends Error {
   constructor() {
