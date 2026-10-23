@@ -48,7 +48,8 @@ export interface DeckConflict {
 }
 
 /**
- * A conflict that belongs to a different file than the one this tab loaded.
+ * A conflict that belongs to a different file than the one this tab loaded,
+ * or to a file this tab cannot identify because its own path is unknown.
  * Force-writing would replace the deck another tab just opened, so the only
  * safe resolution is reload.
  */
@@ -57,7 +58,7 @@ export function isSwitchedFileConflict(
   filePath: string
 ): boolean {
   return Boolean(
-    conflict?.filePath && filePath && conflict.filePath !== filePath
+    conflict?.filePath && (!filePath || conflict.filePath !== filePath)
   );
 }
 

@@ -2,7 +2,6 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  DeckConflictError,
   type DeckPersistence,
   type DeckResponse
 } from './api.js';
@@ -650,10 +649,10 @@ describe('useDeckController', () => {
     );
   });
 
-  it('keeps a switched deck path when a later save 409 has no filePath', async () => {
-    // The tab does not know its loaded path here, so the overwrite guard
-    // cannot recognise the switch and the save-conflict branch is the only
-    // place left to preserve the deck the host named.
+  it('refuses to overwrite a switched conflict when the loaded path is unknown', async () => {
+    // The tab does not know which file it loaded, so it cannot prove the
+    // conflict belongs to the same deck. Treating it as switched is the only
+    // safe choice; a force write could replace the deck the host just opened.
     await act(async () => {
       await controller.actions.load({ ...DECK, filePath: '' });
     });
@@ -670,27 +669,27 @@ describe('useDeckController', () => {
         filePath: 'other.html'
       });
     });
+    expect(controller.state.filePath).toBe('');
     expect(controller.state.conflict).toEqual({
       revision: 'revision-other',
       source: 'external',
       filePath: 'other.html'
     });
 
-    // A non-JSON 409 has no revision or path, so the switched marker must
-    // survive from the conflict already on screen.
-    persistence.save = async (_html, _baseRevision, options) => {
-      saveCalls.push(options ?? {});
-      throw new DeckConflictError('');
-    };
     await act(async () => {
       await controller.actions.overwrite();
     });
 
-    expect(saveCalls).toEqual([{ force: true }]);
+    expect(saveCalls).toEqual([]);
     expect(controller.state.conflict).toEqual({
-      revision: '',
+      revision: 'revision-other',
+      source: 'external',
       filePath: 'other.html'
     });
     expect(controller.state.status).toBe('conflict');
+    expect(controller.state.dirty).toBe(true);
+    expect(controller.state.error).toBe(
+      '主機已切換到另一個檔案；只能重新載入。'
+    );
   });
 });
