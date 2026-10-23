@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import {
   createServer as createHttpServer,
@@ -38,6 +39,23 @@ import {
   HEALTH_TIMEOUT_MS,
   findLiveSession
 } from '../src/host-session.js';
+
+function canonicalPath(file: string): string {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return file;
+  }
+}
+
+function canonicalList(files: string[]): string[] {
+  return files.map((file) => {
+    const canonical = canonicalPath(file);
+    return process.platform === 'win32' || process.platform === 'darwin'
+      ? canonical.toLowerCase()
+      : canonical;
+  });
+}
 import { openEventStream, type SseStream } from './sse.js';
 
 interface HostContext {
@@ -834,16 +852,20 @@ describe('DeckService export', () => {
       const service = new DirectDeckService();
 
       const pdfFiles = await service.exportFiles(deckPath, 'pdf', outDir);
-      expect(pdfFiles).toEqual([join(outDir, 'basic.deck.pdf')]);
+      expect(canonicalList(pdfFiles)).toEqual(
+        canonicalList([join(outDir, 'basic.deck.pdf')])
+      );
       expect(
         (await readFile(pdfFiles[0]!)).subarray(0, 5).toString('latin1')
       ).toBe('%PDF-');
 
       const pngFiles = await service.exportFiles(deckPath, 'png', outDir);
-      expect(pngFiles).toEqual([
-        join(outDir, 'basic.deck-s1.png'),
-        join(outDir, 'basic.deck-s2.png')
-      ]);
+      expect(canonicalList(pngFiles)).toEqual(
+        canonicalList([
+          join(outDir, 'basic.deck-s1.png'),
+          join(outDir, 'basic.deck-s2.png')
+        ])
+      );
       for (const file of pngFiles) {
         expect((await readFile(file)).subarray(0, 8)).toEqual(
           Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -889,7 +911,9 @@ describe('DeckService export', () => {
         'pdf',
         join(dir, 'host-renders')
       );
-      expect(files).toEqual([join(dir, 'host-renders', 'basic.deck.pdf')]);
+      expect(canonicalList(files)).toEqual(
+        canonicalList([join(dir, 'host-renders', 'basic.deck.pdf')])
+      );
       expect((await readFile(files[0]!)).subarray(0, 5).toString('latin1')).toBe(
         '%PDF-'
       );

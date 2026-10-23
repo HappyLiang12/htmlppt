@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -26,6 +27,28 @@ const DECK_HTML = `<!doctype html>
 `;
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function canonicalPath(file: string): string {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return file;
+  }
+}
+
+function folded(file: string): string {
+  return process.platform === 'win32' || process.platform === 'darwin'
+    ? file.toLowerCase()
+    : file;
+}
+
+function canonicalList(files: string[]): string[] {
+  return files.map((file) => folded(canonicalPath(file)));
+}
+
+function samePath(actual: string, expected: string): boolean {
+  return folded(canonicalPath(actual)) === folded(canonicalPath(expected));
+}
 
 interface ToolResult {
   isError?: boolean;
@@ -93,6 +116,13 @@ function payload(result: ToolResult): Record<string, unknown> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+function expectSuccess(result: ToolResult): void {
+  expect(
+    result.isError,
+    result.content?.[0]?.text ?? 'The tool returned no error text.'
+  ).toBeUndefined();
+}
+
 beforeEach(() => {
   previousHome = process.env.HTMLPPT_HOME;
   previousMode = process.env.HTMLPPT_MCP_MODE;
@@ -133,11 +163,13 @@ describe('export_deck tool', () => {
         }
       })) as ToolResult;
 
-      expect(result.isError).toBeUndefined();
+      expectSuccess(result);
       const body = payload(result);
       expect(body).toMatchObject({ format: 'pdf' });
       const files = body.files as string[];
-      expect(files).toEqual([path.join(ctx.dir, 'out', 'deck.pdf')]);
+      expect(canonicalList(files)).toEqual(
+        canonicalList([path.join(ctx.dir, 'out', 'deck.pdf')])
+      );
       expect(
         (await readFile(files[0]!)).subarray(0, 5).toString('latin1')
       ).toBe('%PDF-');
@@ -156,12 +188,14 @@ describe('export_deck tool', () => {
         arguments: { path: 'deck.html', format: 'png' }
       })) as ToolResult;
 
-      expect(result.isError).toBeUndefined();
+      expectSuccess(result);
       const files = payload(result).files as string[];
-      expect(files).toEqual([
-        path.join(ctx.dir, 'deck-s1.png'),
-        path.join(ctx.dir, 'deck-s2.png')
-      ]);
+      expect(canonicalList(files)).toEqual(
+        canonicalList([
+          path.join(ctx.dir, 'deck-s1.png'),
+          path.join(ctx.dir, 'deck-s2.png')
+        ])
+      );
       for (const file of files) {
         expect((await readFile(file)).subarray(0, 8)).toEqual(PNG_SIGNATURE);
       }
@@ -245,13 +279,13 @@ describe('export_deck tool', () => {
       }
     })) as ToolResult;
 
-    expect(result.isError).toBeUndefined();
+    expectSuccess(result);
     const outputPath = path.join(ctx.deckDir, 'exports', 'deck.export.html');
     expect(payload(result)).toMatchObject({
       path: ctx.deckPath,
-      format: 'html',
-      outputPath
+      format: 'html'
     });
+    expect(samePath(String(payload(result).outputPath), outputPath)).toBe(true);
     expect(await readFile(outputPath, 'utf8')).toContain(
       '<!-- Edited with htmlppt.'
     );
@@ -272,7 +306,7 @@ describe('export_deck tool', () => {
       }
     })) as ToolResult;
 
-    expect(result.isError).toBeUndefined();
+    expectSuccess(result);
     const outputPath = path.join(
       ctx.deckDir,
       'exports',
@@ -280,7 +314,7 @@ describe('export_deck tool', () => {
       'deep',
       'deck.export.html'
     );
-    expect(payload(result).outputPath).toBe(outputPath);
+    expect(samePath(String(payload(result).outputPath), outputPath)).toBe(true);
     expect(await readFile(outputPath, 'utf8')).toContain(
       '<!-- Edited with htmlppt.'
     );
@@ -363,11 +397,11 @@ describe('export_deck tool', () => {
             outDir: 'host-renders'
           }
         })) as ToolResult;
-        expect(result.isError).toBeUndefined();
+        expectSuccess(result);
         const files = payload(result).files as string[];
-        expect(files).toEqual([
-          path.join(ctx.deckDir, 'host-renders', 'deck.pdf')
-        ]);
+        expect(canonicalList(files)).toEqual(
+          canonicalList([path.join(ctx.deckDir, 'host-renders', 'deck.pdf')])
+        );
         expect(
           (await readFile(files[0]!)).subarray(0, 5).toString('latin1')
         ).toBe('%PDF-');
@@ -383,10 +417,10 @@ describe('export_deck tool', () => {
             outDir: absoluteOutDir
           }
         })) as ToolResult;
-        expect(absolute.isError).toBeUndefined();
-        expect(payload(absolute).files).toEqual([
-          path.join(absoluteOutDir, 'deck.pdf')
-        ]);
+        expectSuccess(absolute);
+        expect(canonicalList(payload(absolute).files as string[])).toEqual(
+          canonicalList([path.join(absoluteOutDir, 'deck.pdf')])
+        );
 
         // HTML stays confined even though it is written without the host.
         const html = (await ctx.client.callTool({
@@ -397,10 +431,13 @@ describe('export_deck tool', () => {
             outDir: 'host-html'
           }
         })) as ToolResult;
-        expect(html.isError).toBeUndefined();
-        expect(payload(html).outputPath).toBe(
-          path.join(ctx.deckDir, 'host-html', 'deck.export.html')
-        );
+        expectSuccess(html);
+        expect(
+          samePath(
+            String(payload(html).outputPath),
+            path.join(ctx.deckDir, 'host-html', 'deck.export.html')
+          )
+        ).toBe(true);
 
         // Host failures surface without the bearer token or host URL.
         process.env.HTMLPPT_CHROMIUM = path.join(
