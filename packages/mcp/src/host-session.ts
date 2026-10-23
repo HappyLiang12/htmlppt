@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   readSession,
@@ -26,7 +26,12 @@ type HealthStatus = 'healthy' | 'unhealthy' | 'unknown';
 export async function findLiveSession(
   filePath: string
 ): Promise<SessionEntry | null> {
-  const resolved = path.resolve(filePath);
+  let resolved = path.resolve(filePath);
+  try {
+    resolved = await realpath(resolved);
+  } catch {
+    // A missing deck cannot have a live session; keep the resolved spelling.
+  }
   const sessionFile = path.join(
     sessionsDirectory(),
     `${sessionKey(resolved)}.json`

@@ -525,7 +525,8 @@ export async function runCli(
           'Invalid --port. Use an integer between 0 and 65535.'
         );
       }
-      const filePath = resolve(io.cwd, file);
+      const requestedPath = resolve(io.cwd, file);
+      const filePath = await realpath(requestedPath).catch(() => requestedPath);
 
       const { findLiveSession } = await import('@htmlppt/mcp');
       const existing = await findLiveSession(filePath);
@@ -548,13 +549,42 @@ export async function runCli(
 
       const directory = await editorDir();
       const token = randomUUID();
+      const moveSession = async (event: {
+        previousPath: string;
+        path: string;
+        revision: string;
+      }): Promise<void> => {
+        const nextEntry: SessionEntry = {
+          ...entry,
+          path: event.path,
+          revision: event.revision
+        };
+        await writeSession(nextEntry);
+        const nextFile = join(
+          sessionsDirectory(),
+          `${sessionKey(event.path)}.json`
+        );
+        // Mirror what writeSession stores so shutdown and later moves compare
+        // against the exact bytes on disk.
+        const nextSnapshot = `${JSON.stringify(
+          { ...nextEntry, path: resolve(event.path) },
+          null,
+          2
+        )}\n`;
+        await removeSessionIfUnchanged(sessionFile, sessionSnapshot);
+        entry = nextEntry;
+        sessionFile = nextFile;
+        sessionSnapshot = nextSnapshot;
+        io.stdout(`HTMLPPT_URL=${sessionUrl(entry)}`);
+      };
       let host: Awaited<ReturnType<typeof startHost>>;
       try {
         host = await startHost({
           filePath,
           token,
           editorDir: directory,
-          port: Number(options.port)
+          port: Number(options.port),
+          onDeckOpened: moveSession
         });
       } catch (error) {
         const message = formatHostStartError(
@@ -571,7 +601,7 @@ export async function runCli(
         return;
       }
 
-      const entry: SessionEntry = {
+      let entry: SessionEntry = {
         path: filePath,
         port: host.port,
         token,
@@ -579,7 +609,7 @@ export async function runCli(
         startedAt: new Date().toISOString(),
         revision: ''
       };
-      const sessionFile = join(
+      let sessionFile = join(
         sessionsDirectory(),
         `${sessionKey(filePath)}.json`
       );
@@ -590,7 +620,7 @@ export async function runCli(
         await host.close();
         throw error;
       }
-      const sessionSnapshot = `${JSON.stringify(entry, null, 2)}\n`;
+      let sessionSnapshot = `${JSON.stringify(entry, null, 2)}\n`;
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 

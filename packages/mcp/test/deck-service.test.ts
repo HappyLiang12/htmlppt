@@ -1,7 +1,14 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile
+} from 'node:fs/promises';
 import {
   createServer as createHttpServer,
   type ServerResponse
@@ -616,6 +623,34 @@ describe('findLiveSession', () => {
     await expect(
       readFile(sessionFilePath(deckPath), 'utf8')
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('finds a live session through a directory alias', async () => {
+    const realDirectory = join(dir, 'real-deck');
+    await mkdir(realDirectory);
+    const realDeck = join(realDirectory, 'deck.html');
+    await rename(await copyFixture('basic.deck.html', realDirectory), realDeck);
+    const aliasDirectory = join(dir, 'alias-deck');
+    await symlink(
+      realDirectory,
+      aliasDirectory,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      const entry = staleEntry({ path: realDeck, port: healthy.port });
+      await writeSession(entry);
+
+      const found = await findLiveSession(join(aliasDirectory, 'deck.html'));
+
+      expect(found).toEqual(entry);
+      expect(await readSession(sessionFilePath(realDeck))).toEqual(entry);
+    } finally {
+      await healthy.close();
+    }
   });
 });
 
