@@ -388,10 +388,30 @@ async function main() {
       `unauthenticated editor page returned ${unauthenticated.status}, expected 401`
     );
     await unauthenticated.body?.cancel().catch(() => undefined);
-    const response = await fetch(editorUrl, {
+    const bootstrap = await fetch(editorUrl, {
+      redirect: 'manual',
       signal: AbortSignal.timeout(EDITOR_FETCH_TIMEOUT_MS)
     });
-    assert(response.ok, `editor URL returned ${response.status}`);
+    assert(
+      bootstrap.status === 302,
+      `editor bootstrap returned ${bootstrap.status}, expected 302`
+    );
+    const location = bootstrap.headers.get('location');
+    assert(
+      location === '/d/deck.html',
+      `editor bootstrap redirected to ${location}, expected /d/deck.html`
+    );
+    const setCookie = bootstrap.headers.get('set-cookie') ?? '';
+    assert(
+      setCookie.startsWith('htmlppt_token='),
+      'editor bootstrap did not set the session cookie'
+    );
+    const cookie = setCookie.split(';')[0];
+    const response = await fetch(new URL(location, editorOrigin), {
+      headers: { cookie },
+      signal: AbortSignal.timeout(EDITOR_FETCH_TIMEOUT_MS)
+    });
+    assert(response.ok, `editor page returned ${response.status}`);
     const servedHtml = await response.text();
     assert(servedHtml.includes('<div id="root">'), 'host did not serve the packaged editor');
     const stop = await cli('htmlppt stop', ['stop', 'deck.html']);
