@@ -29,7 +29,9 @@
 - Create `packages/host/src/open-path.test.ts`: normalization unit tests.
 - Modify `packages/host/src/server.ts`: mutable deck path, `/api/open`, rebind under the save lock, registry conflict check, `onDeckOpened`.
 - Modify `packages/host/test/server.test.ts`: endpoint, rebind, watcher, SSE, registry-conflict tests.
-- Modify `packages/cli/src/index.ts`: registry-move callback and mutable session snapshot.
+- Modify `packages/cli/src/index.ts`: canonicalize the open path, registry-move callback, and mutable session snapshot.
+- Modify `packages/mcp/src/host-session.ts`: canonicalize `findLiveSession` input before the registry key and entry comparison.
+- Modify `packages/mcp/test/deck-service.test.ts`: alias-path lookup coverage.
 - Modify `packages/editor/src/api.ts`: `openDeck()` and `DeckOpenError`.
 - Create `packages/editor/src/file-picker.ts`: shared HTML picker used by the launcher and the toolbar.
 - Create `packages/editor/src/components/PathInput.tsx`: editable path field, folder button, inline error.
@@ -620,17 +622,51 @@ git commit -m "feat(host): open another deck without restarting"
 
 ---
 
-### Task 3: Move the CLI session registry entry
+### Task 3: Canonicalize deck paths and move the CLI session registry entry
 
 **Files:**
 - Modify: `packages/cli/src/index.ts:517-616`
+- Modify: `packages/mcp/src/host-session.ts:26-51`
+- Test: `packages/mcp/test/deck-service.test.ts` (`findLiveSession` suite)
 - Test: `e2e/open.spec.ts` (created in Task 4)
 
 **Interfaces:**
 - Consumes: `HostOptions.onDeckOpened`.
-- Produces: the registry entry for the old path is replaced by the new path; shutdown removes the current entry.
+- Produces: `findLiveSession` canonicalizes the requested path with `realpath` before deriving the session key and comparing `entry.path`; CLI `open` canonicalizes before `findLiveSession`, `startHost`, and `writeSession`. The registry entry moves from the old path to the new path; shutdown removes the current entry.
 
-- [ ] **Step 1: Make the registry state mutable**
+- [ ] **Step 1: Canonicalize paths in the CLI and MCP lookup**
+
+The host's 409 check keys the registry by `realpath(target)`, so every writer and reader must use the same canonical form.
+
+In `packages/cli/src/index.ts` `open`:
+
+```ts
+      const requestedPath = resolve(io.cwd, file);
+      const filePath = await realpath(requestedPath).catch(() => requestedPath);
+```
+
+Use `filePath` for `findLiveSession`, `hasUnresponsiveRegisteredHost`, `startHost`, session-key derivation, and the initial `readDeckFile`.
+
+In `packages/mcp/src/host-session.ts`, import `realpath` from `node:fs/promises` and canonicalize the input before deriving the session file and comparing the entry:
+
+```ts
+  let resolved = path.resolve(filePath);
+  try {
+    resolved = await realpath(resolved);
+  } catch {
+    // A missing deck cannot have a live session; keep the resolved spelling.
+  }
+```
+
+Keep the existing `entry.path !== resolved` cleanup behavior. A stale entry written with a different spelling is removed, matching the existing stale-session policy.
+
+Add a `findLiveSession` test using a directory alias that does not require elevated privileges:
+- POSIX: `symlink(realDirectory, aliasDirectory, 'dir')`.
+- Windows: `symlink(realDirectory, aliasDirectory, 'junction')`.
+- Write the deck and session entry using the real path, then assert `findLiveSession(join(aliasDirectory, 'deck.html'))` returns the entry.
+- Do not skip on either platform; the junction form works without Developer Mode on the Windows runner.
+
+- [ ] **Step 2: Make the registry state mutable**
 
 In the `open` command, change `const entry`, `const sessionFile`, and `const sessionSnapshot` to `let`. Pass the callback to `startHost`:
 
@@ -665,17 +701,20 @@ In the `open` command, change `const entry`, `const sessionFile`, and `const ses
 
 Pass `onDeckOpened: moveSession` in the `startHost` options.
 
-- [ ] **Step 2: Run CLI unit/integration tests**
+- [ ] **Step 3: Run CLI and MCP tests**
+
+Run: `npm run test -w @htmlppt/mcp -- deck-service.test.ts`
 
 Run: `npm run test -w @htmlppt/cli`
 
-Expected: pass. The new callback is exercised end-to-end in Task 4; if a pure unit seam is needed, export `moveSession` behind a small helper module instead of testing the command closure.
+Run: `npm run typecheck -w @htmlppt/cli -w @htmlppt/mcp`
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add packages/cli/src/index.ts
-git commit -m "feat(cli): move the session entry when a deck is opened"
+git add packages/cli/src/index.ts packages/mcp/src/host-session.ts \
+  packages/mcp/test/deck-service.test.ts
+git commit -m "feat(cli): canonicalize deck paths and move the session entry"
 ```
 
 ---
