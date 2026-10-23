@@ -6,7 +6,7 @@ Status: Approved in chat, pending spec review
 ## Context
 
 The local editor is opened with a tokenized URL such as
-`http://127.0.0.1:64006/?token=<uuid>`. Three problems follow:
+`http://127.0.0.1:64006/?token=<uuid>`. Four problems follow:
 
 1. The token dominates the address bar and looks like noise. Users expect a
    readable URL that names the deck.
@@ -325,7 +325,8 @@ Four independently verifiable phases, each with RED tests first, full
 1. Friendly URL and cookie auth.
 2. `POST /api/open` plus editor path input and picker.
 3. i18n framework, editor copy migration, runtime/presenter localization.
-4. Theme tokens, provider, toolbar control, and light/dark/system E2E.
+4. Theme tokens, provider, toolbar control, and light/dark/system E2E (uses the
+   phase 3 dictionaries for its labels).
 
 Documentation updates: `README.md` (URL, open-file usage, theme menu),
 `SECURITY.md` (cookie auth), `docs/architecture.md` (routes and provider state),
