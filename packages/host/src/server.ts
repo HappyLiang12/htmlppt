@@ -108,6 +108,13 @@ function friendlyDeckPath(filePath: string): string {
   return `/d/${encodeURIComponent(path.basename(filePath))}`;
 }
 
+function queryWithoutToken(url: URL): string {
+  const params = new URLSearchParams(url.search);
+  params.delete('token');
+  const query = params.toString();
+  return query ? `?${query}` : '';
+}
+
 function matchesDeckName(name: string, filePath: string): boolean {
   if (!name || name === '.' || name === '..') {
     return false;
@@ -711,12 +718,18 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     await next();
   });
 
-  app.get('/', (c) => c.redirect(friendlyDeckPath(options.filePath), 302));
+  app.get('/', (c) => {
+    const url = new URL(c.req.url);
+    return c.redirect(
+      `${friendlyDeckPath(options.filePath)}${queryWithoutToken(url)}`,
+      302
+    );
+  });
 
   app.get('/d/:name', async (c) => {
     const url = new URL(c.req.url);
     if (url.searchParams.has('token')) {
-      return c.redirect(url.pathname, 302);
+      return c.redirect(`${url.pathname}${queryWithoutToken(url)}`, 302);
     }
     if (!matchesDeckName(c.req.param('name'), options.filePath)) {
       return c.notFound();

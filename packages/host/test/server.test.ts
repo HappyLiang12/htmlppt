@@ -466,6 +466,30 @@ describe('host', () => {
     );
   });
 
+  it('preserves non-token query parameters when redirecting', async () => {
+    const ctx = await setup();
+    const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+    const token = encodeURIComponent(ctx.token);
+
+    const root = await fetch(
+      `${ctx.base}/?presenter=1&session=abc&token=${token}`,
+      { redirect: 'manual' }
+    );
+    expect(root.status).toBe(302);
+    expect(root.headers.get('location')).toBe(
+      `${friendlyPath}?presenter=1&session=abc`
+    );
+
+    const deckPage = await fetch(
+      `${ctx.base}${friendlyPath}?presenter=1&session=abc&token=${token}`,
+      { redirect: 'manual' }
+    );
+    expect(deckPage.status).toBe(302);
+    expect(deckPage.headers.get('location')).toBe(
+      `${friendlyPath}?presenter=1&session=abc`
+    );
+  });
+
   it('matches the deck name case-insensitively on Windows only', async () => {
     const ctx = await setup();
     const cookie = await bootstrapCookie(ctx);
