@@ -1,6 +1,6 @@
 import { useState, type DragEvent } from 'react';
 import { pickHtmlFile } from '../file-picker';
-import { useI18n } from '../i18n';
+import { useI18n, type Locale } from '../i18n';
 import type { DraftRecord } from '../recovery';
 
 export interface StandaloneLauncherProps {
@@ -16,9 +16,15 @@ export interface StandaloneLauncherProps {
 const BUTTON =
   'rounded border border-white/40 px-3 py-2 text-sm text-zinc-200 transition-colors hover:border-amber-300/70 disabled:opacity-40';
 
-function formatTime(value: number): string {
+const DATE_LOCALES: Record<Locale, string> = {
+  en: 'en-US',
+  'zh-Hant': 'zh-TW',
+  'zh-Hans': 'zh-CN'
+};
+
+function formatTime(value: number, locale: Locale): string {
   try {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString(DATE_LOCALES[locale]);
   } catch {
     return '';
   }
@@ -33,7 +39,7 @@ export function StandaloneLauncher({
   onRestore,
   onDiscard
 }: StandaloneLauncherProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [dragging, setDragging] = useState(false);
 
   const chooseFile = async () => {
@@ -137,7 +143,7 @@ export function StandaloneLauncher({
                     {draft.filePath}
                   </span>
                   <span className="text-amber-200/70">
-                    {formatTime(draft.savedAt)}
+                    {formatTime(draft.savedAt, locale)}
                   </span>
                   <button
                     type="button"
@@ -164,7 +170,10 @@ export function StandaloneLauncher({
         )}
 
         <p className="mt-6 text-xs text-zinc-500">
-          {t('export.standaloneUnsupported')}
+          {t('standalone.commandHint')}{' '}
+          <code className="rounded bg-white/10 px-1 py-0.5">
+            htmlppt open deck.html
+          </code>
         </p>
       </section>
     </div>

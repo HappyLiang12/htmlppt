@@ -596,6 +596,10 @@ describe('useDeckController', () => {
   });
 
   it('refuses to overwrite a conflict raised by a deck switch', async () => {
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-switched' }));
+    });
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -626,12 +630,14 @@ describe('useDeckController', () => {
     expect(saveCalls).toEqual([]);
     expect(controller.state.conflict).not.toBeNull();
     expect(controller.state.dirty).toBe(true);
-    expect(controller.state.error).toBe(
-      '主機已切換到另一個檔案；只能重新載入。'
-    );
+    expect(controller.state.error).toBe('translated:conflict.switchedFile');
   });
 
   it('keeps a switched-file conflict after a later conflict without a path', async () => {
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-switched-sticky' }));
+    });
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -682,15 +688,17 @@ describe('useDeckController', () => {
       source: 'external',
       filePath: 'other.html'
     });
-    expect(controller.state.error).toBe(
-      '主機已切換到另一個檔案；只能重新載入。'
-    );
+    expect(controller.state.error).toBe('translated:conflict.switchedFile');
   });
 
   it('refuses to overwrite a switched conflict when the loaded path is unknown', async () => {
     // The tab does not know which file it loaded, so it cannot prove the
     // conflict belongs to the same deck. Treating it as switched is the only
     // safe choice; a force write could replace the deck the host just opened.
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-switched-unknown' }));
+    });
     await act(async () => {
       await controller.actions.load({ ...DECK, filePath: '' });
     });
@@ -726,8 +734,31 @@ describe('useDeckController', () => {
     });
     expect(controller.state.status).toBe('conflict');
     expect(controller.state.dirty).toBe(true);
+    expect(controller.state.error).toBe('translated:conflict.switchedFile');
+  });
+
+  it('translates the pending-edit overwrite instruction', async () => {
+    translate = (key) => `translated:${key}`;
+    await act(async () => {
+      root.render(createElement(Probe, { key: 'translated-pending-overwrite' }));
+    });
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+    act(() => {
+      controller.actions.changePendingEdit('notes', {
+        apply: () => true,
+        discard: () => undefined
+      });
+    });
+
+    await act(async () => {
+      await controller.actions.overwrite();
+    });
+
+    expect(saveCalls).toEqual([]);
     expect(controller.state.error).toBe(
-      '主機已切換到另一個檔案；只能重新載入。'
+      'translated:editor.pendingEditInstruction'
     );
   });
 });

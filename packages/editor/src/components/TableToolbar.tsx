@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TableAction } from '../commands/tables';
+import { useI18n } from '../i18n';
 
 export interface TableToolbarState {
   row: number;
@@ -32,6 +33,7 @@ export function TableToolbar({
   onAction,
   onCellStyle
 }: TableToolbarProps) {
+  const { t } = useI18n();
   const [fill, setFill] = useState(colorValue(state.fill, '#ffffff'));
   const [border, setBorder] = useState(colorValue(state.border, '#b9b2a3'));
 
@@ -44,11 +46,16 @@ export function TableToolbar({
     <div
       data-testid="table-toolbar"
       role="toolbar"
-      aria-label="表格工具"
+      aria-label={t('table.tools')}
       className="flex flex-wrap items-center gap-1 border-b border-white/10 bg-[#12151b] px-3 py-2"
     >
       <span className="mr-1 font-mono text-[11px] text-zinc-400">
-        列 {state.row + 1}/{state.rows} · 欄 {state.column + 1}/{state.columns}
+        {t('table.position', {
+          row: state.row + 1,
+          rows: state.rows,
+          column: state.column + 1,
+          columns: state.columns
+        })}
       </span>
       <button
         type="button"
@@ -57,7 +64,7 @@ export function TableToolbar({
         disabled={disabled}
         onClick={() => onAction({ type: 'row', position: 'above' })}
       >
-        上方列
+        {t('table.rowAbove')}
       </button>
       <button
         type="button"
@@ -66,7 +73,7 @@ export function TableToolbar({
         disabled={disabled}
         onClick={() => onAction({ type: 'row', position: 'below' })}
       >
-        下方列
+        {t('table.rowBelow')}
       </button>
       <button
         type="button"
@@ -75,7 +82,7 @@ export function TableToolbar({
         disabled={disabled || state.rows <= 1}
         onClick={() => onAction({ type: 'delete-row' })}
       >
-        刪列
+        {t('table.deleteRow')}
       </button>
       <button
         type="button"
@@ -84,7 +91,7 @@ export function TableToolbar({
         disabled={disabled}
         onClick={() => onAction({ type: 'column', position: 'left' })}
       >
-        左方欄
+        {t('table.columnLeft')}
       </button>
       <button
         type="button"
@@ -93,7 +100,7 @@ export function TableToolbar({
         disabled={disabled}
         onClick={() => onAction({ type: 'column', position: 'right' })}
       >
-        右方欄
+        {t('table.columnRight')}
       </button>
       <button
         type="button"
@@ -102,7 +109,7 @@ export function TableToolbar({
         disabled={disabled || state.columns <= 1}
         onClick={() => onAction({ type: 'delete-column' })}
       >
-        刪欄
+        {t('table.deleteColumn')}
       </button>
       <button
         type="button"
@@ -112,14 +119,14 @@ export function TableToolbar({
         aria-pressed={state.header}
         onClick={() => onAction({ type: 'toggle-header' })}
       >
-        {state.header ? '取消標題列' : '標題列'}
+        {state.header ? t('table.removeHeader') : t('table.header')}
       </button>
       <label className={COLOR_LABEL}>
-        儲存格底色
+        {t('table.cellFill')}
         <input
           type="color"
           data-testid="table-cell-fill"
-          aria-label="儲存格底色"
+          aria-label={t('table.cellFill')}
           value={fill}
           disabled={disabled}
           onChange={(event) => setFill(event.target.value)}
@@ -132,11 +139,11 @@ export function TableToolbar({
         />
       </label>
       <label className={COLOR_LABEL}>
-        框線
+        {t('table.cellBorder')}
         <input
           type="color"
           data-testid="table-cell-border"
-          aria-label="儲存格框線顏色"
+          aria-label={t('table.cellBorderLabel')}
           value={border}
           disabled={disabled}
           onChange={(event) => setBorder(event.target.value)}

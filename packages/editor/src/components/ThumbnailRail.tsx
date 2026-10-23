@@ -4,10 +4,7 @@ import { useI18n } from '../i18n';
 import { buildSlideSrcDoc } from '../slide-doc';
 
 /** Slides without a heading still need a readable label in editor chrome. */
-export function slideTitle(
-  slide: SlideInfo,
-  untitled = '未命名投影片'
-): string {
+export function slideTitle(slide: SlideInfo, untitled: string): string {
   const heading = slide.element.querySelector('h1, h2, h3, [data-ppt-title]');
   const text = heading?.textContent?.replace(/\s+/g, ' ').trim();
   return text || untitled;

@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from 'react';
+import { useI18n } from '../i18n';
 import { ModalDialog } from './ModalDialog';
 
 export interface ChartDialogProps {
@@ -16,6 +17,7 @@ export function ChartDialog({
   onApply,
   onCancel
 }: ChartDialogProps) {
+  const { t } = useI18n();
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
@@ -25,7 +27,7 @@ export function ChartDialog({
 
   return (
     <ModalDialog
-      label="編輯圖表"
+      label={t('inspector.chartDialog')}
       testId="chart-dialog"
       onClose={onCancel}
       initialFocus='[data-testid="chart-json"]'
@@ -33,15 +35,19 @@ export function ChartDialog({
     >
       <div className="flex flex-col gap-3" onKeyDown={handleKeyDown}>
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100">編輯圖表</h2>
+          <h2 className="text-sm font-semibold text-zinc-100">
+            {t('inspector.chartDialog')}
+          </h2>
           <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
-            JSON 需包含 type（bar/line/pie）、labels 與 series；series 的 values
-            長度必須等於 labels。Ctrl+Enter 套用，Escape 取消。
+            <code className="rounded bg-white/10 px-1 py-0.5">
+              type (bar/line/pie) · labels · series
+            </code>{' '}
+            {t('inspector.chartHint')}
           </p>
         </div>
         <textarea
           data-testid="chart-json"
-          aria-label="圖表 JSON"
+          aria-label={t('inspector.chartJson')}
           value={json}
           rows={18}
           spellCheck={false}
@@ -64,7 +70,7 @@ export function ChartDialog({
             onClick={onCancel}
             className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/60"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -72,7 +78,7 @@ export function ChartDialog({
             onClick={onApply}
             className="rounded border border-amber-400/70 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:bg-amber-400/20"
           >
-            套用
+            {t('common.apply')}
           </button>
         </div>
       </div>

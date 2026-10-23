@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { Guide, Handle, Rect } from '../geometry';
+import { useI18n } from '../i18n';
 
 export interface SelectionBox {
   /** Selection rect in design pixels, relative to the slide origin. */
@@ -59,6 +60,7 @@ export function CanvasOverlay({
   onResizeStart,
   onRotateStart
 }: CanvasOverlayProps) {
+  const { t } = useI18n();
   return (
     <div
       className="pointer-events-none absolute inset-0 z-10"
@@ -111,7 +113,7 @@ export function CanvasOverlay({
                 aria-hidden="true"
                 className="absolute left-0 top-0 rounded-br bg-amber-400 px-1 text-[10px] font-semibold text-zinc-950"
               >
-                選取
+                {t('canvas.selected')}
               </span>
             )}
             {interactive && (

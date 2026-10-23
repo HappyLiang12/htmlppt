@@ -27,8 +27,22 @@ test.describe('language switching', () => {
     try {
       await page.goto(host.url);
       await expect(page.getByTestId('locale-select')).toBeVisible();
+      await expect(page.getByTestId('locale-select')).toHaveAttribute(
+        'aria-label',
+        '語言'
+      );
+      await expect(
+        page.getByTestId('locale-select').locator('option')
+      ).toHaveText(['English', '繁體中文', '简体中文']);
       await expect(page.getByTestId('shortcuts-open')).toHaveText('快速鍵');
       await page.getByTestId('locale-select').selectOption('en');
+      await expect(page.getByTestId('locale-select')).toHaveAttribute(
+        'aria-label',
+        'Language'
+      );
+      await expect(
+        page.getByTestId('locale-select').locator('option')
+      ).toHaveText(['English', '繁體中文', '简体中文']);
       await expect(page.getByTestId('shortcuts-open')).toHaveText('Shortcuts');
       await expect(page.locator('html')).toHaveAttribute('lang', 'en');
       await page.reload();
@@ -54,6 +68,13 @@ test.describe('browser language detection', () => {
       await expect(page.getByTestId('shortcuts-open')).toHaveText('快捷键');
       await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans');
       await expect(page.getByTestId('locale-select')).toHaveValue('zh-Hans');
+      await expect(page.getByTestId('locale-select')).toHaveAttribute(
+        'aria-label',
+        '语言'
+      );
+      await expect(
+        page.getByTestId('locale-select').locator('option')
+      ).toHaveText(['English', '繁體中文', '简体中文']);
     } finally {
       await host.stop();
       await rm(directory, { recursive: true, force: true });

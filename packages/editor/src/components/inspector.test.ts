@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseDeck } from '../slide-doc.js';
+import { withLocale } from '../i18n/test-utils.js';
 import { useDeckController } from '../use-deck-controller.js';
 import { Inspector, type InspectorProps } from './Inspector.js';
 
@@ -92,7 +93,11 @@ function InspectorHarness(inputs: InspectorInputs) {
 async function render(overrides: Partial<InspectorInputs> = {}): Promise<void> {
   await act(async () => {
     const inputs = props(overrides);
-    root.render(createElement(InspectorHarness, { ...inputs, key: inputs.slide?.id }));
+    root.render(
+      withLocale(
+        createElement(InspectorHarness, { ...inputs, key: inputs.slide?.id })
+      )
+    );
   });
 }
 

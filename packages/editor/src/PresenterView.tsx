@@ -1,5 +1,6 @@
 import { detectSlides } from '@htmlppt/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useI18n } from './i18n';
 import { SlideMiniature, slideTitle } from './components/ThumbnailRail';
 import { parseDeck } from './slide-doc';
 import {
@@ -10,11 +11,11 @@ import {
 
 type Connection = 'connecting' | 'connected' | 'disconnected';
 
-const STATUS_LABEL: Record<Connection, string> = {
-  connecting: '等待主視窗…',
-  connected: '已連線',
-  disconnected: '已中斷'
-};
+const STATUS_LABEL = {
+  connecting: 'presenter.waiting',
+  connected: 'presenter.connected',
+  disconnected: 'presenter.disconnected'
+} as const;
 
 function formatElapsed(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
@@ -37,6 +38,7 @@ function notesOf(element: Element | undefined): string {
  * forwards navigation requests through the presentation-scoped channel.
  */
 export function PresenterView({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n();
   const [html, setHtml] = useState('');
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Connection>('connecting');
@@ -162,9 +164,14 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
     >
       <header className="flex items-center justify-between border-b border-white/10 pb-3">
         <div>
-          <h1 className="text-sm font-semibold tracking-wide">簡報者檢視</h1>
+          <h1 className="text-sm font-semibold tracking-wide">
+            {t('presenter.title')}
+          </h1>
           <p className="text-xs text-zinc-400">
-            第 {slides.length === 0 ? 0 : index + 1} / {slides.length} 頁
+            {t('presenter.page', {
+              index: slides.length === 0 ? 0 : index + 1,
+              total: slides.length
+            })}
           </p>
           <p
             className="sr-only"
@@ -173,7 +180,10 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
             aria-atomic="true"
             data-testid="presenter-announcement"
           >
-            第 {slides.length === 0 ? 0 : index + 1} 頁，共 {slides.length} 頁
+            {t('a11y.slide', {
+              index: slides.length === 0 ? 0 : index + 1,
+              total: slides.length
+            })}
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs">
@@ -184,7 +194,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
               status === 'connected' ? 'text-emerald-300' : 'text-amber-300'
             }
           >
-            {STATUS_LABEL[status]}
+            {t(STATUS_LABEL[status])}
           </span>
           <span data-testid="presenter-timer" className="tabular-nums">
             {formatElapsed(elapsed)}
@@ -192,21 +202,21 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
         </div>
       </header>
 
-      <section aria-label="目前備註" className="flex flex-col gap-2">
+      <section aria-label={t('presenter.currentNotes')} className="flex flex-col gap-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-          備註
+          {t('presenter.notes')}
         </h2>
         <p
           data-testid="presenter-notes"
           className="min-h-24 whitespace-pre-wrap rounded border border-white/10 bg-white/5 p-3 text-sm leading-relaxed"
         >
-          {notesOf(current?.element) || '此頁沒有備註。'}
+          {notesOf(current?.element) || t('presenter.noNotes')}
         </p>
       </section>
 
-      <section aria-label="下一頁" className="flex flex-col gap-2">
+      <section aria-label={t('presenter.next')} className="flex flex-col gap-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-          下一頁
+          {t('presenter.next')}
         </h2>
         <div
           data-testid="presenter-next-preview"
@@ -221,11 +231,11 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
                 className="rounded shadow-md shadow-black/40"
               />
               <span className="text-sm text-zinc-300">
-                {index + 2}. {slideTitle(next)}
+                {index + 2}. {slideTitle(next, t('rail.untitled'))}
               </span>
             </>
           ) : (
-            <span className="text-sm text-zinc-400">（最後一頁）</span>
+            <span className="text-sm text-zinc-400">{t('presenter.lastSlide')}</span>
           )}
         </div>
       </section>
@@ -238,7 +248,7 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
           onClick={() => send(index - 1)}
           className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60 disabled:opacity-40"
         >
-          上一頁
+          {t('presenter.previous')}
         </button>
         <button
           type="button"
@@ -247,13 +257,13 @@ export function PresenterView({ sessionId }: { sessionId: string }) {
           onClick={() => send(index + 1)}
           className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60 disabled:opacity-40"
         >
-          下一頁
+          {t('presenter.next')}
         </button>
       </div>
 
       {status === 'disconnected' && (
         <p role="alert" className="text-xs text-amber-300">
-          未連線到主視窗。請從編輯器重新開啟簡報者檢視。
+          {t('presenter.disconnectedHelp')}
         </p>
       )}
     </main>

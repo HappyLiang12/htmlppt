@@ -6,6 +6,7 @@ import {
   type SyntheticEvent
 } from 'react';
 import type { SlideInfo, Transition } from '@htmlppt/core';
+import { useI18n } from '../i18n';
 
 export type FullscreenState = 'off' | 'active' | 'unavailable';
 
@@ -77,6 +78,7 @@ export function PlayView({
   onAdvance,
   onOpenPresenter
 }: PlayViewProps) {
+  const { t } = useI18n();
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const regionRef = useRef<HTMLDivElement | null>(null);
   const onKeyDownRef = useRef(onKeyDown);
@@ -123,16 +125,14 @@ export function PlayView({
       data-testid="play-view"
       data-fullscreen={fullscreen}
       role="region"
-      aria-label="播放模式"
+      aria-label={t('play.label')}
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black outline-none"
       onClick={(event) => {
         if (event.target === event.currentTarget) onAdvance();
       }}
     >
-      <p className="sr-only">
-        使用方向鍵、Space 或 PageDown 換頁；Escape 離開播放；P 開啟簡報者視窗。
-      </p>
+      <p className="sr-only">{t('play.instructions')}</p>
       {fullscreenNotice && (
         <div
           data-testid="fullscreen-warning"
@@ -154,12 +154,12 @@ export function PlayView({
       <button
         type="button"
         data-testid="presenter-open"
-        title="開啟簡報者檢視（P）"
+        title={t('play.openPresenter')}
         aria-haspopup="dialog"
         onClick={onOpenPresenter}
         className="absolute right-4 top-4 z-20 rounded border border-white/40 bg-black/50 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:border-white/60"
       >
-        簡報者
+        {t('play.presenter')}
       </button>
 
       <div
@@ -180,7 +180,7 @@ export function PlayView({
         <iframe
           ref={frameRef}
           data-testid="play-frame"
-          title="播放投影片"
+          title={t('play.start')}
           sandbox="allow-same-origin"
           srcDoc={srcDoc}
           onLoad={handleLoad}

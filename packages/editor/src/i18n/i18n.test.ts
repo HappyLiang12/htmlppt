@@ -12,6 +12,7 @@ import {
 import { en } from './messages/en';
 import { zhHant } from './messages/zh-Hant';
 import { zhHans } from './messages/zh-Hans';
+import { PresenterView } from '../PresenterView';
 
 type I18n = ReturnType<typeof useI18n>;
 
@@ -251,4 +252,46 @@ describe('LocaleProvider', () => {
       expect(current.t(key as MessageKey, { count: 1 })).toBe(key);
     }
   );
+});
+
+describe('PresenterView locale', () => {
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('renders its chrome in English when the locale is English', async () => {
+    await act(async () => {
+      root.render(
+        createElement(LocaleProvider, {
+          initialLocale: 'en',
+          children: createElement(PresenterView, { sessionId: 'invalid' })
+        })
+      );
+    });
+
+    expect(container.querySelector('h1')?.textContent).toBe('Presenter view');
+    expect(
+      container.querySelector('[data-testid="presenter-status"]')?.textContent
+    ).toBe('Disconnected');
+    expect(
+      Array.from(container.querySelectorAll('h2')).map((heading) =>
+        heading.textContent
+      )
+    ).toContain('Notes');
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Not connected to the main window. Reopen the presenter view from the editor.'
+    );
+  });
 });

@@ -7,6 +7,7 @@ import type {
   TextCommand,
   TextToolbarState
 } from '../commands/rich-text';
+import { useI18n } from '../i18n';
 
 export interface TextToolbarProps {
   state: TextToolbarState;
@@ -73,6 +74,7 @@ export function TextToolbar({
   onCommand,
   onLink
 }: TextToolbarProps) {
+  const { t } = useI18n();
   const [menu, setMenu] = useState<Menu>(null);
   const triggers = useRef<Record<OpenMenu, HTMLButtonElement | null>>({
     color: null,
@@ -123,17 +125,17 @@ export function TextToolbar({
     <div
       data-testid="text-toolbar"
       role="toolbar"
-      aria-label="文字格式"
+      aria-label={t('text.toolbar')}
       className="relative flex flex-wrap items-center gap-1 border-b border-amber-400/20 bg-amber-950/20 px-4 py-1.5"
       onPointerDown={(event) => event.preventDefault()}
     >
-      <span className="mr-1 text-xs text-amber-200/80">文字</span>
+      <span className="mr-1 text-xs text-amber-200/80">{t('text.group')}</span>
 
       <button
         type="button"
         data-testid="text-bold"
-        title="粗體"
-        aria-label="粗體"
+        title={t('text.bold')}
+        aria-label={t('text.bold')}
         aria-pressed={state.bold}
         className={toggleClass(state.bold)}
         onClick={() => run({ type: 'bold' })}
@@ -143,8 +145,8 @@ export function TextToolbar({
       <button
         type="button"
         data-testid="text-italic"
-        title="斜體"
-        aria-label="斜體"
+        title={t('text.italic')}
+        aria-label={t('text.italic')}
         aria-pressed={state.italic}
         className={`${toggleClass(state.italic)} italic`}
         onClick={() => run({ type: 'italic' })}
@@ -154,8 +156,8 @@ export function TextToolbar({
       <button
         type="button"
         data-testid="text-underline"
-        title="底線"
-        aria-label="底線"
+        title={t('text.underline')}
+        aria-label={t('text.underline')}
         aria-pressed={state.underline}
         className={`${toggleClass(state.underline)} underline`}
         onClick={() => run({ type: 'underline' })}
@@ -165,8 +167,8 @@ export function TextToolbar({
       <button
         type="button"
         data-testid="text-strike"
-        title="刪除線"
-        aria-label="刪除線"
+        title={t('text.strike')}
+        aria-label={t('text.strike')}
         aria-pressed={state.strike}
         className={`${toggleClass(state.strike)} line-through`}
         onClick={() => run({ type: 'strike' })}
@@ -180,8 +182,8 @@ export function TextToolbar({
         <button
           type="button"
           data-testid="text-color"
-          title="文字顏色"
-          aria-label="文字顏色"
+          title={t('text.color')}
+          aria-label={t('text.color')}
           className={BUTTON}
           aria-expanded={menu === 'color'}
           {...triggerProps('color')}
@@ -204,7 +206,7 @@ export function TextToolbar({
                 key={color}
                 type="button"
                 data-testid={`text-color-${color.slice(1)}`}
-                aria-label={`文字顏色 ${color}`}
+                aria-label={t('text.colorSwatch', { color })}
                 title={color}
                 className="h-6 w-6 rounded border border-white/30"
                 style={{ backgroundColor: color }}
@@ -219,8 +221,8 @@ export function TextToolbar({
         <button
           type="button"
           data-testid="text-highlight"
-          title="螢光標示"
-          aria-label="螢光標示"
+          title={t('text.highlight')}
+          aria-label={t('text.highlight')}
           className={BUTTON}
           aria-expanded={menu === 'highlight'}
           {...triggerProps('highlight')}
@@ -242,7 +244,7 @@ export function TextToolbar({
                 key={color}
                 type="button"
                 data-testid={`text-highlight-${color.slice(1)}`}
-                aria-label={`螢光色 ${color}`}
+                aria-label={t('text.highlightSwatch', { color })}
                 title={color}
                 className="h-6 w-6 rounded border border-white/30"
                 style={{ backgroundColor: color }}
@@ -257,8 +259,8 @@ export function TextToolbar({
         <button
           type="button"
           data-testid="text-font"
-          title="字型"
-          aria-label="字型"
+          title={t('text.font')}
+          aria-label={t('text.font')}
           className={BUTTON}
           aria-expanded={menu === 'font'}
           {...triggerProps('font')}
@@ -266,7 +268,7 @@ export function TextToolbar({
         >
           {FONTS.find((font) => font.value === state.fontFamily)?.label ??
             state.fontFamily ??
-            '字型'}
+            t('text.font')}
           <span className="ml-1 text-[10px]">▾</span>
         </button>
         {menu === 'font' && (
@@ -297,8 +299,8 @@ export function TextToolbar({
         <button
           type="button"
           data-testid="text-size"
-          title="字級"
-          aria-label="字級"
+          title={t('text.size')}
+          aria-label={t('text.size')}
           className={BUTTON}
           aria-expanded={menu === 'size'}
           {...triggerProps('size')}
@@ -337,8 +339,8 @@ export function TextToolbar({
           key={align}
           type="button"
           data-testid={`text-align-${align}`}
-          title={`對齊 ${align}`}
-          aria-label={`對齊 ${align}`}
+          title={`${t('text.align')} ${align}`}
+          aria-label={`${t('text.align')} ${align}`}
           aria-pressed={state.align === align}
           className={toggleClass(state.align === align)}
           onClick={() => run({ type: 'align', value: align })}
@@ -357,14 +359,14 @@ export function TextToolbar({
         <button
           type="button"
           data-testid="text-line-height"
-          title="行高"
-          aria-label="行高"
+          title={t('text.lineHeight')}
+          aria-label={t('text.lineHeight')}
           className={BUTTON}
           aria-expanded={menu === 'line'}
           {...triggerProps('line')}
           onClick={() => toggleMenu('line')}
         >
-          行高
+          {t('text.lineHeight')}
         </button>
         {menu === 'line' && (
           <div
@@ -392,45 +394,45 @@ export function TextToolbar({
       <button
         type="button"
         data-testid="text-ul"
-        title="項目符號"
-        aria-label="項目符號"
+        title={t('text.bulletLabel')}
+        aria-label={t('text.bulletLabel')}
         aria-pressed={state.list === 'ul'}
         className={toggleClass(state.list === 'ul')}
         onClick={() => run({ type: 'list', value: 'ul' })}
       >
-        • 清單
+        {t('text.bullet')}
       </button>
       <button
         type="button"
         data-testid="text-ol"
-        title="編號清單"
-        aria-label="編號清單"
+        title={t('text.orderedLabel')}
+        aria-label={t('text.orderedLabel')}
         aria-pressed={state.list === 'ol'}
         className={toggleClass(state.list === 'ol')}
         onClick={() => run({ type: 'list', value: 'ol' })}
       >
-        1. 清單
+        {t('text.ordered')}
       </button>
 
       <button
         type="button"
         data-testid="text-link"
-        title="連結"
-        aria-label="連結"
+        title={t('text.link')}
+        aria-label={t('text.link')}
         className={toggleClass(state.link !== null)}
         onClick={onLink}
       >
-        連結
+        {t('text.link')}
       </button>
       <button
         type="button"
         data-testid="text-clear"
-        title="清除格式"
-        aria-label="清除格式"
+        title={t('text.clear')}
+        aria-label={t('text.clear')}
         className={BUTTON}
         onClick={() => run({ type: 'clear' })}
       >
-        清除格式
+        {t('text.clear')}
       </button>
 
       {error && (

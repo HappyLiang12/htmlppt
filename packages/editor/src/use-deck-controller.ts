@@ -1034,14 +1034,14 @@ export function useDeckController(
       // Force-writing here would replace the deck another tab just opened.
       update({
         status: 'conflict',
-        error: '主機已切換到另一個檔案；只能重新載入。'
+        error: translate('conflict.switchedFile')
       });
       return;
     }
     const master = masterRef.current;
     if (!master || externalBusyRef.current) return;
     if (pendingEditsRef.current.size) {
-      update({ error: '請先套用或取消尚未完成的編輯，再覆寫。' });
+      update({ error: translate('editor.pendingEditInstruction') });
       return;
     }
     operationGenerationRef.current += 1;
@@ -1063,7 +1063,7 @@ export function useDeckController(
       drainLiveEventsRef.current();
       if (stateRef.current.dirty) scheduleAutosaveRef.current();
     }
-  }, [enqueueSave, update]);
+  }, [enqueueSave, translate, update]);
 
   const flushBeforeUnload = useCallback(() => {
     const master = masterRef.current;

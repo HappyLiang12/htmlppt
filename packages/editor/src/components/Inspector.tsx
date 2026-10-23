@@ -12,6 +12,7 @@ import type {
   Transition
 } from '@htmlppt/core';
 import type { ObjectCommand } from '../commands/objects';
+import { useI18n, type MessageKey } from '../i18n';
 import type { SelectionTarget } from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
 import {
@@ -115,10 +116,10 @@ function ActionButton({
   );
 }
 
-const TABS: readonly { id: InspectorTab; label: string }[] = [
-  { id: 'design', label: '設計' },
-  { id: 'text', label: '文字' },
-  { id: 'notes', label: '備註' }
+const TABS: readonly { id: InspectorTab; labelKey: MessageKey }[] = [
+  { id: 'design', labelKey: 'inspector.design' },
+  { id: 'text', labelKey: 'inspector.text' },
+  { id: 'notes', labelKey: 'inspector.notes' }
 ];
 
 const FIELD_CLASS =
@@ -145,6 +146,7 @@ function NumberField({
   disabled,
   onCommit
 }: NumberFieldProps) {
+  const { t } = useI18n();
   const formatted = value === null ? '' : formatGeometryValue(value);
   const [draft, setDraft] = useState(formatted);
   const [invalid, setInvalid] = useState(false);
@@ -209,7 +211,7 @@ function NumberField({
         }}
         className={FIELD_CLASS}
       />
-      {invalid && <span role="alert" className="text-[11px] text-red-300">數值無效，請修正或按 Escape 取消。</span>}
+      {invalid && <span role="alert" className="text-[11px] text-red-300">{t('inspector.invalidNumber')}</span>}
     </label>
   );
 }
@@ -235,6 +237,7 @@ function StyleField({
   placeholder,
   onCommit
 }: StyleFieldProps) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState(value);
   const [invalid, setInvalid] = useState(false);
   const pendingRef = useRef(false);
@@ -299,7 +302,7 @@ function StyleField({
       />
       {invalid && (
         <span role="alert" className="text-[11px] text-red-300">
-          值無效，請修正或按 Escape 取消。
+          {t('inspector.invalidValue')}
         </span>
       )}
     </label>
@@ -340,6 +343,7 @@ export function Inspector({
   onClearBackground,
   onSetNotes
 }: InspectorProps) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<InspectorTab>('design');
   const replaceInput = useRef<HTMLInputElement | null>(null);
   const tabRefs = useRef<Record<InspectorTab, HTMLButtonElement | null>>({
@@ -427,7 +431,7 @@ export function Inspector({
     pendingActions.changePendingEdit('background', backgroundPendingRef.current ? {
       apply: () => {
         if (!value.trim() || !onSetBackground({ kind, value: value.trim() })) {
-          setBackgroundError('背景值無效，請修正或按 Escape 取消。');
+          setBackgroundError(t('inspector.invalidBackground'));
           return false;
         }
         backgroundPendingRef.current = false;
@@ -448,19 +452,21 @@ export function Inspector({
 
   const clearBackground = () => {
     pendingActions.cancelPendingEdit('background');
-    setBackgroundError(onClearBackground() ? '' : '無法清除背景。');
+    setBackgroundError(
+      onClearBackground() ? '' : t('inspector.clearBackgroundFailed')
+    );
     setBackgroundValue('');
   };
 
   return (
     <aside
       data-testid="inspector"
-      aria-label="屬性面板"
+      aria-label={t('inspector.panel')}
       className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-white/10 bg-[#0d0f14]"
     >
       <div
         role="tablist"
-        aria-label="屬性分頁"
+        aria-label={t('inspector.tabs')}
         className="flex border-b border-white/10"
       >
         {TABS.map((candidate) => {
@@ -486,7 +492,7 @@ export function Inspector({
                   : 'border-transparent text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              {candidate.label}
+              {t(candidate.labelKey)}
             </button>
           );
         })}
@@ -499,10 +505,10 @@ export function Inspector({
         data-testid="inspector-panel-design"
         hidden={tab !== 'design'}
       >
-        <section aria-label="物件" className={SECTION_CLASS}>
-          <h3 className={HEADING_CLASS}>物件</h3>
+        <section aria-label={t('inspector.objects')} className={SECTION_CLASS}>
+          <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
           {objects.length === 0 ? (
-            <p className="text-xs text-zinc-400">此頁沒有物件。</p>
+            <p className="text-xs text-zinc-400">{t('inspector.noObjects')}</p>
           ) : (
             <ul data-testid="object-list" className="flex flex-col gap-1">
               {objects.map((object) => {
@@ -536,11 +542,11 @@ export function Inspector({
                         </span>
                       )}
                       <span className="min-w-0 flex-1 truncate">
-                        {object.text || '（無文字）'}
+                        {object.text || t('inspector.emptyText')}
                       </span>
                       {object.group && (
                         <span className="rounded bg-sky-400/15 px-1 py-0.5 text-[10px] text-sky-200">
-                          群組
+                          {t('inspector.group')}
                         </span>
                       )}
                       {object.locked && (
@@ -548,7 +554,7 @@ export function Inspector({
                           data-testid="object-locked-badge"
                           className="rounded bg-rose-400/15 px-1 py-0.5 text-[10px] text-rose-200"
                         >
-                          鎖定
+                          {t('inspector.locked')}
                         </span>
                       )}
                       {object.hidden && (
@@ -556,7 +562,7 @@ export function Inspector({
                           data-testid="object-hidden-badge"
                           className="rounded bg-violet-400/15 px-1 py-0.5 text-[10px] text-violet-200"
                         >
-                          隱藏
+                          {t('inspector.hidden')}
                         </span>
                       )}
                     </button>
@@ -564,22 +570,26 @@ export function Inspector({
                       <button
                         type="button"
                         data-testid="object-unlock"
-                        aria-label={`解鎖 ${object.text || object.elementId || object.tag}`}
+                        aria-label={t('inspector.unlockItemLabel', {
+                          name: object.text || object.elementId || object.tag
+                        })}
                         onClick={() => onObjectRecovery(object.path, 'unlock')}
                         className="shrink-0 px-2 text-[11px] text-rose-200 hover:text-rose-100"
                       >
-                        解鎖
+                        {t('inspector.unlockItem')}
                       </button>
                     )}
                     {object.hidden && object.canUnhide && (
                       <button
                         type="button"
                         data-testid="object-unhide"
-                        aria-label={`顯示 ${object.text || object.elementId || object.tag}`}
+                        aria-label={t('inspector.showItemLabel', {
+                          name: object.text || object.elementId || object.tag
+                        })}
                         onClick={() => onObjectRecovery(object.path, 'unhide')}
                         className="shrink-0 px-2 text-[11px] text-violet-200 hover:text-violet-100"
                       >
-                        顯示
+                        {t('inspector.showItem')}
                       </button>
                     )}
                   </li>
@@ -592,44 +602,44 @@ export function Inspector({
         {selection && (
           <section
             data-testid="object-actions"
-            aria-label="物件操作"
+            aria-label={t('inspector.objectActions')}
             className={SECTION_CLASS}
           >
-            <h3 className={HEADING_CLASS}>物件操作</h3>
+            <h3 className={HEADING_CLASS}>{t('inspector.objectActions')}</h3>
             <div className="grid grid-cols-3 gap-1">
               <ActionButton
                 testId="object-group"
-                label="群組"
+                label={t('inspector.group')}
                 disabled={!objectActions.canGroup}
                 onClick={() => onObjectCommand({ type: 'group' })}
               />
               <ActionButton
                 testId="object-ungroup"
-                label="取消群組"
+                label={t('inspector.ungroup')}
                 disabled={!objectActions.canUngroup}
                 onClick={() => onObjectCommand({ type: 'ungroup' })}
               />
               <ActionButton
                 testId="object-order-front"
-                label="最前"
+                label={t('inspector.toFront')}
                 disabled={!objectActions.canOrder}
                 onClick={() => onObjectCommand({ type: 'order', direction: 'front' })}
               />
               <ActionButton
                 testId="object-order-forward"
-                label="上移"
+                label={t('inspector.forward')}
                 disabled={!objectActions.canOrder}
                 onClick={() => onObjectCommand({ type: 'order', direction: 'forward' })}
               />
               <ActionButton
                 testId="object-order-backward"
-                label="下移"
+                label={t('inspector.backward')}
                 disabled={!objectActions.canOrder}
                 onClick={() => onObjectCommand({ type: 'order', direction: 'backward' })}
               />
               <ActionButton
                 testId="object-order-back"
-                label="最後"
+                label={t('inspector.toBack')}
                 disabled={!objectActions.canOrder}
                 onClick={() => onObjectCommand({ type: 'order', direction: 'back' })}
               />
@@ -637,12 +647,12 @@ export function Inspector({
             <div className="grid grid-cols-3 gap-1">
               {(
                 [
-                  ['left', '左對齊'],
-                  ['center', '置中'],
-                  ['right', '右對齊'],
-                  ['top', '頂端'],
-                  ['middle', '垂直置中'],
-                  ['bottom', '底部']
+                  ['left', t('inspector.alignLeft')],
+                  ['center', t('inspector.alignCenter')],
+                  ['right', t('inspector.alignRight')],
+                  ['top', t('inspector.alignTop')],
+                  ['middle', t('inspector.alignMiddle')],
+                  ['bottom', t('inspector.alignBottom')]
                 ] as const
               ).map(([mode, label]) => (
                 <ActionButton
@@ -657,13 +667,13 @@ export function Inspector({
             <div className="grid grid-cols-2 gap-1">
               <ActionButton
                 testId="distribute-horizontal"
-                label="水平等距"
+                label={t('inspector.distributeH')}
                 disabled={!objectActions.canDistribute}
                 onClick={() => onObjectCommand({ type: 'distribute', axis: 'horizontal' })}
               />
               <ActionButton
                 testId="distribute-vertical"
-                label="垂直等距"
+                label={t('inspector.distributeV')}
                 disabled={!objectActions.canDistribute}
                 onClick={() => onObjectCommand({ type: 'distribute', axis: 'vertical' })}
               />
@@ -671,7 +681,7 @@ export function Inspector({
             <div className="grid grid-cols-2 gap-1">
               <ActionButton
                 testId="object-lock"
-                label={objectActions.locked ? '解除鎖定' : '鎖定'}
+                label={objectActions.locked ? t('inspector.unlock') : t('inspector.locked')}
                 disabled={!objectActions.canToggle}
                 onClick={() =>
                   onObjectCommand({ type: 'lock', locked: !objectActions.locked })
@@ -679,7 +689,7 @@ export function Inspector({
               />
               <ActionButton
                 testId="object-hide"
-                label={objectActions.hidden ? '顯示物件' : '隱藏物件'}
+                label={objectActions.hidden ? t('inspector.show') : t('inspector.hide')}
                 disabled={!objectActions.canToggle}
                 onClick={() =>
                   onObjectCommand({ type: 'hide', hidden: !objectActions.hidden })
@@ -692,12 +702,12 @@ export function Inspector({
         {selection && chart && (
           <section
             data-testid="chart-object"
-            aria-label="圖表"
+            aria-label={t('inspector.chart')}
             className={SECTION_CLASS}
           >
-            <h3 className={HEADING_CLASS}>圖表</h3>
+            <h3 className={HEADING_CLASS}>{t('inspector.chart')}</h3>
             <p data-testid="chart-summary" className="text-xs text-zinc-400">
-              {chart.type} · {chart.title || '未命名'}
+              {chart.type} · {chart.title || t('inspector.untitled')}
             </p>
             <button
               type="button"
@@ -706,7 +716,7 @@ export function Inspector({
               onClick={onEditChart}
               className={ACTION_CLASS}
             >
-              編輯圖表資料…
+              {t('inspector.editChart')}
             </button>
           </section>
         )}
@@ -714,11 +724,11 @@ export function Inspector({
         {selection && style && (
           <section
             data-testid="object-style"
-            aria-label="物件外觀"
+            aria-label={t('inspector.objectAppearance')}
             className={SECTION_CLASS}
           >
             <h3 className={HEADING_CLASS}>
-              {style.kind === 'image' ? '圖片' : '外觀'}
+              {style.kind === 'image' ? t('inspector.image') : t('inspector.appearance')}
             </h3>
             {style.kind === 'image' ? (
               <>
@@ -730,7 +740,7 @@ export function Inspector({
                     onClick={() => replaceInput.current?.click()}
                     className={ACTION_CLASS}
                   >
-                    更換圖片…
+                    {t('inspector.replaceImage')}
                   </button>
                   <button
                     type="button"
@@ -739,7 +749,7 @@ export function Inspector({
                     onClick={onReplaceImageUrl}
                     className={ACTION_CLASS}
                   >
-                    圖片網址…
+                    {t('inspector.imageUrlAction')}
                   </button>
                 </div>
                 <input
@@ -758,19 +768,19 @@ export function Inspector({
                   pendingActions={pendingActions}
                   owner="image-alt"
                   testId="image-alt"
-                  label="替代文字"
+                  label={t('inspector.alt')}
                   value={style.alt}
                   disabled={styleDisabled}
                   onCommit={onSetImageAlt}
                 />
-                <span className="text-[11px] text-zinc-400">裁切（%）</span>
+                <span className="text-[11px] text-zinc-400">{t('inspector.crop')}</span>
                 <div className="grid grid-cols-4 gap-1">
                   {(
                     [
-                      ['top', '上'],
-                      ['right', '右'],
-                      ['bottom', '下'],
-                      ['left', '左']
+                      ['top', t('inspector.top')],
+                      ['right', t('inspector.right')],
+                      ['bottom', t('inspector.bottom')],
+                      ['left', t('inspector.left')]
                     ] as const
                   ).map(([side, label]) => (
                     <StyleField
@@ -798,7 +808,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="image-radius"
                     testId="image-radius"
-                    label="圓角"
+                    label={t('inspector.radius')}
                     value={style.appearance.radius}
                     disabled={styleDisabled}
                     onCommit={(value) => {
@@ -811,7 +821,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="image-opacity"
                     testId="image-opacity"
-                    label="不透明度"
+                    label={t('inspector.opacity')}
                     value={style.appearance.opacity}
                     disabled={styleDisabled}
                     onCommit={(value) => {
@@ -829,7 +839,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="fill"
                     testId="style-fill"
-                    label="填色"
+                    label={t('inspector.fill')}
                     value={style.appearance.fill}
                     disabled={styleDisabled}
                     placeholder="#4f7cff"
@@ -841,7 +851,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="stroke"
                     testId="style-stroke"
-                    label="邊框顏色"
+                    label={t('inspector.borderColor')}
                     value={style.appearance.stroke}
                     disabled={styleDisabled}
                     placeholder="#000000"
@@ -853,7 +863,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="stroke-width"
                     testId="style-stroke-width"
-                    label="邊框寬度"
+                    label={t('inspector.borderWidth')}
                     value={style.appearance.strokeWidth}
                     disabled={styleDisabled}
                     placeholder="0"
@@ -868,7 +878,7 @@ export function Inspector({
                       pendingActions={pendingActions}
                       owner="radius"
                       testId="style-radius"
-                      label="圓角"
+                      label={t('inspector.radius')}
                       value={style.appearance.radius}
                       disabled={styleDisabled}
                       onCommit={(value) => {
@@ -882,7 +892,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="opacity"
                     testId="style-opacity"
-                    label="不透明度"
+                    label={t('inspector.opacity')}
                     value={style.appearance.opacity}
                     disabled={styleDisabled}
                     onCommit={(value) => {
@@ -897,7 +907,7 @@ export function Inspector({
                     pendingActions={pendingActions}
                     owner="shape-text"
                     testId="style-shape-text"
-                    label="圖形文字"
+                    label={t('inspector.shapeText')}
                     value={style.text}
                     disabled={styleDisabled}
                     onCommit={onSetShapeText}
@@ -911,30 +921,30 @@ export function Inspector({
         {selection ? (
           <section
             data-testid="inspector-geometry"
-            aria-label="位置與大小"
+            aria-label={t('inspector.geometry')}
             className={SECTION_CLASS}
           >
-            <h3 className={HEADING_CLASS}>位置與大小</h3>
+            <h3 className={HEADING_CLASS}>{t('inspector.geometry')}</h3>
             {objectActions.hidden ? (
               <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
-                物件已隱藏，請先顯示後再調整位置。
+                {t('inspector.hiddenHint')}
               </p>
             ) : objectActions.locked ? (
               <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
-                物件已鎖定，請先解除鎖定再調整位置。
+                {t('inspector.lockedHint')}
               </p>
             ) : multi ? (
               <p className="text-[11px] text-zinc-400">
-                已選取 {selectionCount} 個物件；可對齊、分佈、群組，或拖曳移動。
+                {t('inspector.multiHint', { count: selectionCount })}
               </p>
             ) : objectActions.group ? (
               <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
-                群組僅支援移動與旋轉；取消群組後可調整大小。
+                {t('inspector.groupHint')}
               </p>
             ) : (
               readOnly && (
                 <p className="text-[11px] text-zinc-400">
-                  巢狀選取為唯讀，請先選取最上層物件。
+                  {t('inspector.nestedHint')}
                 </p>
               )
             )}
@@ -957,7 +967,7 @@ export function Inspector({
               />
               <NumberField
                 field="width"
-                label="寬"
+                label={t('inspector.width')}
                 value={geometry?.width ?? null}
                 disabled={sizeLocked || geometry === null}
                 pendingActions={pendingActions}
@@ -965,7 +975,7 @@ export function Inspector({
               />
               <NumberField
                 field="height"
-                label="高"
+                label={t('inspector.height')}
                 value={geometry?.height ?? null}
                 disabled={sizeLocked || geometry === null}
                 pendingActions={pendingActions}
@@ -974,7 +984,7 @@ export function Inspector({
               <div className="col-span-2">
                 <NumberField
                   field="rotation"
-                  label="旋轉"
+                  label={t('inspector.rotation')}
                   value={geometry?.rotation ?? null}
                   disabled={geometryLocked || geometry === null}
                   pendingActions={pendingActions}
@@ -986,24 +996,24 @@ export function Inspector({
         ) : (
           <section
             data-testid="slide-settings"
-            aria-label="投影片設定"
+            aria-label={t('inspector.slide')}
             className={SECTION_CLASS}
           >
-            <h3 className={HEADING_CLASS}>投影片設定</h3>
+            <h3 className={HEADING_CLASS}>{t('inspector.slide')}</h3>
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] text-zinc-400">轉場</span>
+              <span className="text-[11px] text-zinc-400">{t('inspector.transition')}</span>
               <select
                 data-testid="transition-select"
-                aria-label="轉場"
+                aria-label={t('inspector.transition')}
                 value={transitionDraft}
                 onChange={(event) =>
                   setTransitionDraft(event.target.value as Transition)
                 }
                 className={FIELD_CLASS}
               >
-                <option value="none">無</option>
-                <option value="fade">淡入</option>
-                <option value="slide">滑動</option>
+                <option value="none">{t('inspector.transitionNone')}</option>
+                <option value="fade">{t('inspector.transitionFade')}</option>
+                <option value="slide">{t('inspector.transitionSlide')}</option>
               </select>
               <div className="flex gap-1">
                 <button
@@ -1013,7 +1023,7 @@ export function Inspector({
                   onClick={() => onPreviewTransition(transitionDraft)}
                   className={ACTION_CLASS}
                 >
-                  預覽
+                  {t('inspector.preview')}
                 </button>
                 <button
                   type="button"
@@ -1022,7 +1032,7 @@ export function Inspector({
                   onClick={() => onSetTransition(transitionDraft)}
                   className={ACTION_CLASS}
                 >
-                  套用
+                  {t('common.apply')}
                 </button>
                 <button
                   type="button"
@@ -1031,22 +1041,22 @@ export function Inspector({
                   onClick={() => setTransitionDraft(committedTransition)}
                   className={ACTION_CLASS}
                 >
-                  取消
+                  {t('common.cancel')}
                 </button>
               </div>
               {transitionDirty && (
                 <span className="text-[11px] text-amber-300">
-                  轉場尚未套用。
+                  {t('inspector.notApplied')}
                 </span>
               )}
             </div>
 
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] text-zinc-400">背景</span>
+              <span className="text-[11px] text-zinc-400">{t('inspector.background')}</span>
               <div className="flex gap-1">
                 <select
                   data-testid="background-kind"
-                  aria-label="背景類型"
+                  aria-label={t('inspector.backgroundKind')}
                   value={backgroundKind}
                   onChange={(event) => changeBackground(event.target.value as BackgroundKind, '')}
                   onKeyDown={(event) => {
@@ -1054,14 +1064,14 @@ export function Inspector({
                   }}
                   className={`${FIELD_CLASS} w-24 shrink-0`}
                 >
-                  <option value="color">顏色</option>
-                  <option value="gradient">漸層</option>
-                  <option value="image">圖片 URL</option>
+                  <option value="color">{t('inspector.backgroundKindColor')}</option>
+                  <option value="gradient">{t('inspector.backgroundKindGradient')}</option>
+                  <option value="image">{t('inspector.backgroundImage')}</option>
                 </select>
                 <input
                   type="text"
                   data-testid="background-value"
-                  aria-label="背景值"
+                  aria-label={t('inspector.backgroundValue')}
                   value={backgroundValue}
                   placeholder={
                     backgroundKind === 'color'
@@ -1090,7 +1100,7 @@ export function Inspector({
                   disabled={background === null}
                   className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
                 >
-                  清除背景
+                  {t('inspector.clearBackground')}
                 </button>
                 <button
                   type="button"
@@ -1099,7 +1109,7 @@ export function Inspector({
                   disabled={!backgroundValue.trim()}
                   className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
                 >
-                  套用
+                  {t('common.apply')}
                 </button>
               </div>
               {backgroundError && (
@@ -1124,9 +1134,9 @@ export function Inspector({
         hidden={tab !== 'text'}
       >
         <div className={SECTION_CLASS}>
-          <h3 className={HEADING_CLASS}>文字</h3>
+          <h3 className={HEADING_CLASS}>{t('inspector.text')}</h3>
           <p data-testid="text-placeholder" className="text-xs text-zinc-400">
-            選取文字後，使用上方的浮動工具列調整格式。
+            {t('inspector.textHint')}
           </p>
         </div>
       </div>
@@ -1139,14 +1149,14 @@ export function Inspector({
         hidden={tab !== 'notes'}
       >
         <div className={SECTION_CLASS}>
-          <h3 className={HEADING_CLASS}>講者備註</h3>
+          <h3 className={HEADING_CLASS}>{t('inspector.speakerNotes')}</h3>
           <textarea
             key={slide?.id ?? 'no-slide'}
             data-testid="notes-input"
-            aria-label="講者備註"
+            aria-label={t('inspector.speakerNotes')}
             value={notesDraft}
             rows={8}
-            placeholder="輸入備註…"
+            placeholder={t('inspector.notesPlaceholder')}
             onChange={(event) => {
               const next = event.target.value;
               setNotesDraft(next);
@@ -1170,7 +1180,7 @@ export function Inspector({
             className={`${FIELD_CLASS} resize-y font-sans`}
           />
           <p className="text-[11px] text-zinc-400">
-            備註以隱藏的區塊儲存在投影片內。
+            {t('inspector.notesHint')}
           </p>
         </div>
       </div>
