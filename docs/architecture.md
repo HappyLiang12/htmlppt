@@ -78,6 +78,10 @@ agent (MCP / CLI)                    human (browser)
 A revision is the SHA-256 hash of the exact file bytes. It is an opaque token,
 not a parent pointer; there is no merge history in the file.
 
+- **Pages:** `GET /` redirects to `/d/<deck-name>`, setting the session cookie
+  when the request carries a valid token. `GET /d/<deck-name>` serves the editor
+  when the decoded basename matches the current deck (case-insensitive on
+  Windows) and returns 404 otherwise.
 - **Host:** `GET /api/deck` returns `{ html, revision, filePath }`. `PUT`
   accepts `{ html, baseRevision, force? }`. A stale `baseRevision` returns
   `409 { error: "conflict", revision }` before validation. The atomic write
@@ -85,9 +89,10 @@ not a parent pointer; there is no merge history in the file.
   change in that window also returns `409`. `force: true` skips the base check
   and is used only when the person chooses **overwrite** in the conflict
   banner. Deck updates are capped at 16 MiB and export requests at 64 KiB
-  (`413 payload-too-large`). API calls use bearer auth; only `GET /api/events`
-  may carry the token in the query string because `EventSource` cannot set
-  headers.
+  (`413 payload-too-large`). Page and API requests accept the HttpOnly session
+  cookie set by the tokenized bootstrap redirect; bearer auth remains for CLI,
+  MCP, and tests, and only `GET /api/events` may carry the token in the query
+  string because `EventSource` cannot set headers.
 - **Editor:** saves are serialized through one promise chain; a pending save is
   restarted by new edits, and a save that started before a reload/load is
   invalidated. The controller tracks the last acknowledged revision, ignores

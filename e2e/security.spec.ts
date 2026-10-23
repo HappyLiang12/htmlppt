@@ -201,7 +201,11 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 /** Sends a path verbatim so WHATWG URL parsing cannot pre-normalize traversal. */
-function rawGet(origin: string, rawPath: string): Promise<RawResponse> {
+function rawGet(
+  origin: string,
+  rawPath: string,
+  cookie?: string
+): Promise<RawResponse> {
   const originUrl = new URL(origin);
   return new Promise((resolvePromise, reject) => {
     const request = httpRequest(
@@ -210,6 +214,7 @@ function rawGet(origin: string, rawPath: string): Promise<RawResponse> {
         port: originUrl.port,
         path: rawPath,
         method: 'GET',
+        headers: cookie ? { cookie } : undefined,
         timeout: 10_000
       },
       (response) => {
@@ -622,8 +627,12 @@ test(
       const query = `?token=${encodeURIComponent(token)}`;
 
       const shell = await rawGet(origin, `/${query}`);
-      expect(shell.status).toBe(200);
-      expect(shell.body).toContain(editorMarker);
+      expect(shell.status).toBe(302);
+      expect(shell.headers.location).toBe('/d/security.html');
+      const cookie = shell.headers['set-cookie']?.[0]?.split(';')[0] ?? '';
+      const pageShell = await rawGet(origin, '/d/security.html', cookie);
+      expect(pageShell.status).toBe(200);
+      expect(pageShell.body).toContain(editorMarker);
 
       const sibling = await rawGet(origin, `/secret.txt${query}`);
       expect([403, 404]).toContain(sibling.status);

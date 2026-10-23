@@ -37,14 +37,13 @@ address) on a random port unless `--port` is supplied.
 
 - Each run generates a random per-session token. The printed URL carries it as
   `?token=...`; treat that URL as a secret for the session.
-- Editor pages and static assets require the token once in the query string.
-  The host then sets an `HttpOnly`, `SameSite=Strict` cookie so module and
-  stylesheet subrequests stay authorized; page scripts can read the token from
-  the URL but not from the cookie.
-- `/api/*` requests require `Authorization: Bearer <token>`. The single
-  exception is `GET /api/events`, where `EventSource` cannot set headers and the
-  token may travel in the query string. All other routes, including health, deck
-  reads/writes, and export, require the bearer header.
+- A tokenized request for `/` or `/d/<name>` sets an `HttpOnly`,
+  `SameSite=Strict`, `Path=/` cookie and redirects to `/d/<name>`, so the
+  address bar no longer contains the token. Static assets accept either the
+  cookie or a query token.
+- `/api/*` requests accept the cookie, or `Authorization: Bearer <token>` for
+  CLI, MCP, and tests. The single query-string exception remains
+  `GET /api/events`, where `EventSource` cannot set headers.
 - If an `Origin` header is present on an API request, it must be `http:`,
   hostname `127.0.0.1` or `localhost`, and the exact port the host is listening
   on. Other origins receive `403`.

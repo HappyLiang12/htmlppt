@@ -39,6 +39,12 @@ it. `--size 1600x900` sets the canvas. `open` prints
 `HTMLPPT_URL=http://127.0.0.1:<port>/?token=...` and opens your browser;
 `--no-browser` prints the URL only.
 
+The printed URL carries the session token once. The browser exchanges it for an
+HttpOnly session cookie and lands on
+`http://127.0.0.1:<port>/d/<deck-file-name>`, which is safe to keep in history
+for that session. CLI and MCP output still print the tokenized bootstrap URL for
+automation.
+
 ### MCP setup
 
 Add the stdio server to an MCP client:
@@ -183,8 +189,10 @@ the deck directory.
 ## Security model
 
 - The editor host binds to `127.0.0.1` only and uses a random per-session token.
-  API requests require the token and, when an `Origin` header is present, an
-  exact `127.0.0.1`/`localhost` origin on the host's port.
+  The tokenized first visit sets an HttpOnly `SameSite=Strict` cookie; page and
+  API requests accept that cookie, while CLI, MCP, and tests may continue to use
+  `Authorization: Bearer`. When an `Origin` header is present it must be this
+  host's loopback origin.
 - Deck scripts never execute in the editor. The preview, thumbnails, sorter,
   and play view use `sandbox="allow-same-origin"` without `allow-scripts`.
 - The renderer disables JavaScript, blocks service workers and downloads, and
