@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   writeFile
@@ -35,6 +36,42 @@ export function sessionsDirectory(): string {
 
 export function sessionKey(filePath: string): string {
   return createHash('sha256').update(path.resolve(filePath)).digest('hex');
+}
+
+/**
+ * Resolves a path to its canonical spelling. A missing deck still resolves
+ * through its parent so a deleted file under an alias keeps a stable identity.
+ */
+export async function canonicalDeckPath(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  try {
+    return await realpath(resolved);
+  } catch {
+    try {
+      return path.join(
+        await realpath(path.dirname(resolved)),
+        path.basename(resolved)
+      );
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+/**
+ * Compares two deck spellings by identity. Windows 8.3 short names and
+ * symlinked/junction parents name the same deck under different registry
+ * keys, so raw string equality is not enough.
+ */
+export async function sameDeckPath(
+  left: string,
+  right: string
+): Promise<boolean> {
+  const [leftPath, rightPath] = await Promise.all([
+    canonicalDeckPath(left),
+    canonicalDeckPath(right)
+  ]);
+  return leftPath === rightPath;
 }
 
 export async function writeSession(entry: SessionEntry): Promise<void> {

@@ -255,6 +255,22 @@ describe('session registry', () => {
     await expect(readSession(filePath)).resolves.toEqual(fresh);
   });
 
+  it('keeps a fresh entry when removal is fenced by a stale snapshot', async () => {
+    const deckPath = join(home, 'fenced.html');
+    const stale = makeEntry(deckPath);
+    const fresh = makeEntry(deckPath, {
+      port: 43124,
+      token: 'fresh-token'
+    });
+    await writeSession(fresh);
+    const filePath = sessionFilePath(deckPath);
+
+    await expect(
+      removeSessionIfUnchanged(filePath, entryJson(stale))
+    ).resolves.toBe(false);
+    await expect(readSession(filePath)).resolves.toEqual(fresh);
+  });
+
   it('returns an empty list when the sessions location cannot be listed', async () => {
     const notADirectory = join(home, 'not-a-directory');
     await writeFile(notADirectory, 'x', 'utf8');

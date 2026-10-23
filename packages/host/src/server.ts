@@ -20,7 +20,7 @@ import {
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { OpenPathError, resolveDeckPath } from './open-path.js';
-import { listSessions, type SessionEntry } from './sessions.js';
+import { listSessions, sameDeckPath, type SessionEntry } from './sessions.js';
 
 export interface HostOptions {
   filePath: string;
@@ -600,20 +600,16 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
       // Registry keys keep the spelling their writer used, so a direct key
       // lookup can miss an entry for the same deck. Scan instead and compare
-      // through realpath; target is already canonical. Skip entries on this
+      // canonical paths; target is already canonical. Skip entries on this
       // host's own port so a duplicate cannot mask another host.
       let existing: SessionEntry | undefined;
       for (const entry of await listSessions()) {
         if (entry.port === port) {
           continue;
         }
-        try {
-          if ((await realpath(entry.path)) === target) {
-            existing = entry;
-            break;
-          }
-        } catch {
-          // A vanished or unreadable entry cannot name this target.
+        if (await sameDeckPath(entry.path, target)) {
+          existing = entry;
+          break;
         }
       }
       if (existing) {

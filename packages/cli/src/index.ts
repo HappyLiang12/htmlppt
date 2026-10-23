@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
 import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
-import { dirname, join, parse, resolve } from 'node:path';
+import { join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -20,8 +20,10 @@ import {
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
 import {
+  canonicalDeckPath,
   listSessions,
   removeSessionIfUnchanged,
+  sameDeckPath,
   sessionKey,
   sessionsDirectory,
   startHost,
@@ -132,24 +134,6 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
 }
 
 /**
- * Resolves a deck path to its canonical spelling. A missing deck still resolves
- * through its parent so an alias under a symlink or junction parent keeps a
- * stable identity.
- */
-async function canonicalDeckPath(filePath: string): Promise<string> {
-  const resolved = resolve(filePath);
-  try {
-    return await realpath(resolved);
-  } catch {
-    try {
-      return join(await realpath(dirname(resolved)), parse(resolved).base);
-    } catch {
-      return resolved;
-    }
-  }
-}
-
-/**
  * A health timeout or 5xx keeps the registry entry even though no live session
  * can be confirmed. Starting another host would overwrite that entry and orphan
  * the process that may still own the socket, so a recorded live pid blocks the
@@ -165,13 +149,7 @@ async function hasUnresponsiveRegisteredHost(
 ): Promise<boolean> {
   const target = await canonicalDeckPath(filePath);
   for (const entry of await listSessions()) {
-    let entryPath: string;
-    try {
-      entryPath = await realpath(entry.path);
-    } catch {
-      entryPath = resolve(entry.path);
-    }
-    if (entryPath === target) {
+    if (await sameDeckPath(entry.path, target)) {
       return true;
     }
   }

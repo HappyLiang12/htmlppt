@@ -15,7 +15,7 @@ import {
   type ServerResponse
 } from 'node:http';
 import { createServer, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   DeckMutationError,
   addSlide,
@@ -245,6 +245,17 @@ async function stubHost(
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   };
+}
+
+/** Creates another spelling of a real deck path through a directory alias. */
+async function aliasDeck(realDeck: string, name: string): Promise<string> {
+  const aliasDirectory = join(dir, name);
+  await symlink(
+    dirname(realDeck),
+    aliasDirectory,
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+  return join(aliasDirectory, basename(realDeck));
 }
 
 async function setupHost(): Promise<HostContext> {
@@ -783,6 +794,150 @@ describe('findLiveSession', () => {
       ).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await mismatched.close();
+    }
+  });
+
+  it('returns the healthy duplicate after scanning past an unhealthy one', async () => {
+    const realDirectory = join(dir, 'scan-unhealthy-real');
+    await mkdir(realDirectory);
+    const realDeck = await realpath(
+      await copyFixture('basic.deck.html', realDirectory)
+    );
+    const firstDeck = await aliasDeck(realDeck, 'scan-unhealthy-a');
+    const secondDeck = await aliasDeck(realDeck, 'scan-unhealthy-b');
+    const unhealthy = await stubHost((response) => {
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'unauthorized' }));
+    });
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      // Entries sort by path, so scan-unhealthy-a is checked first.
+      const first = staleEntry({ path: firstDeck, port: unhealthy.port });
+      const second = staleEntry({ path: secondDeck, port: healthy.port });
+      await writeSession(first);
+      await writeSession(second);
+
+      const found = await findLiveSession(realDeck);
+
+      expect(found).toEqual(second);
+      await expect(
+        readFile(sessionFilePath(firstDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readSession(sessionFilePath(secondDeck))).toEqual(second);
+    } finally {
+      await unhealthy.close();
+      await healthy.close();
+    }
+  });
+
+  it('keeps a busy duplicate and returns a healthy one later in the scan', async () => {
+    const realDirectory = join(dir, 'scan-busy-real');
+    await mkdir(realDirectory);
+    const realDeck = await realpath(
+      await copyFixture('basic.deck.html', realDirectory)
+    );
+    const firstDeck = await aliasDeck(realDeck, 'scan-busy-a');
+    const secondDeck = await aliasDeck(realDeck, 'scan-busy-b');
+    const busy = await stubHost((response) => {
+      response.writeHead(503, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'deck-unreadable' }));
+    });
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      const first = staleEntry({ path: firstDeck, port: busy.port });
+      const second = staleEntry({ path: secondDeck, port: healthy.port });
+      await writeSession(first);
+      await writeSession(second);
+
+      const found = await findLiveSession(realDeck);
+
+      expect(found).toEqual(second);
+      expect(await readSession(sessionFilePath(firstDeck))).toEqual(first);
+      expect(await readSession(sessionFilePath(secondDeck))).toEqual(second);
+    } finally {
+      await busy.close();
+      await healthy.close();
+    }
+  });
+
+  it('continues to the registry scan when the direct entry is unhealthy', async () => {
+    const realDirectory = join(dir, 'scan-direct-real');
+    await mkdir(realDirectory);
+    const directDeck = await realpath(
+      await copyFixture('basic.deck.html', realDirectory)
+    );
+    const alias = await aliasDeck(directDeck, 'scan-direct-alias');
+    const unhealthy = await stubHost((response) => {
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'unauthorized' }));
+    });
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      const direct = staleEntry({ path: directDeck, port: unhealthy.port });
+      const aliasEntry = staleEntry({ path: alias, port: healthy.port });
+      await writeSession(direct);
+      await writeSession(aliasEntry);
+
+      const found = await findLiveSession(directDeck);
+
+      expect(found).toEqual(aliasEntry);
+      await expect(
+        readFile(sessionFilePath(directDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readSession(sessionFilePath(alias))).toEqual(aliasEntry);
+    } finally {
+      await unhealthy.close();
+      await healthy.close();
+    }
+  });
+
+  it('does not remove a fresh entry when a listed candidate goes stale', async () => {
+    const realDirectory = join(dir, 'scan-stale-real');
+    await mkdir(realDirectory);
+    const realDeck = await realpath(
+      await copyFixture('basic.deck.html', realDirectory)
+    );
+    const alias = await aliasDeck(realDeck, 'scan-stale-alias');
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    const fresh = staleEntry({
+      path: alias,
+      port: healthy.port,
+      token: 'fresh-token'
+    });
+    const staleHost = await stubHost(async (response) => {
+      // Replace the listed entry while its health check is in flight.
+      await writeSession(fresh);
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'unauthorized' }));
+    });
+    try {
+      const stale = staleEntry({
+        path: alias,
+        port: staleHost.port,
+        token: 'stale-token'
+      });
+      await writeSession(stale);
+
+      expect(await findLiveSession(realDeck)).toBeNull();
+
+      // The stale snapshot must not delete the fresh valid entry.
+      expect(await readSession(sessionFilePath(alias))).toEqual(fresh);
+      expect(await findLiveSession(realDeck)).toEqual(fresh);
+    } finally {
+      await staleHost.close();
+      await healthy.close();
     }
   });
 });
