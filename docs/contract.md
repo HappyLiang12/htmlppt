@@ -184,6 +184,10 @@ A standalone multi-slide deck needs exactly one runtime script:
 - Multi-slide decks get prev/next buttons and a page indicator pinned to the
   bottom of the window. Single-slide decks get no controls, and controls are
   hidden when printing. Control clicks never advance the deck.
+- The runtime resolves its control and presenter strings from
+  `document.documentElement.dataset.pptLocale` when present, then
+  `navigator.language`, then English. Authors may set `data-ppt-locale="en"`,
+  `"zh-Hant"`, or `"zh-Hans"` on `<html>`.
 - Do not build layout with JavaScript. Scripts other than the runtime produce
   the `script-present` warning (JSON `application/json` and
   `application/ld+json` blocks are exempt) and never execute in the editor or
@@ -265,6 +269,7 @@ Tables are real `<table>` elements with `<thead>`/`<tbody>` and cells. Put
 | `data-ppt-notes` | Direct child of a slide | No | Boolean marker on an `<aside hidden>`. |
 | `data-ppt-transition` | Slide | No | `none`, `fade`, or `slide`. |
 | `data-ppt-runtime` | `<script>` | For standalone multi-slide decks | Exactly `"1"`, exactly one script. |
+| `data-ppt-locale` | `<html>` | No | `en`, `zh-Hant`, or `zh-Hans`; overrides the browser language for runtime strings. |
 | `data-ppt-chart` | Chart figure | No | Valid JSON chart object. |
 | `data-ppt-group` | Group wrapper | No | Boolean marker; no nested groups. |
 | `data-ppt-locked` | Object | No | `"true"` to lock in the editor. |

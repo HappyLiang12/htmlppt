@@ -364,19 +364,19 @@ test.describe('presentation runtime', () => {
       const next = page.locator('[data-testid="runtime-next"]');
       const indicator = page.locator('[data-testid="runtime-page"]');
       await expect(controls).toBeVisible();
-      await expect(indicator).toHaveText('1 / 3');
+      await expect(indicator).toHaveText('第 1 / 3 頁');
       await expect(previous).toBeDisabled();
       await expect(next).toBeEnabled();
 
       await next.click();
       await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
-      await expect(indicator).toHaveText('2 / 3');
+      await expect(indicator).toHaveText('第 2 / 3 頁');
       expect(page.url()).toContain('#/2');
       await expect(previous).toBeEnabled();
 
       await previous.click();
       await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
-      await expect(indicator).toHaveText('1 / 3');
+      await expect(indicator).toHaveText('第 1 / 3 頁');
       expect(page.url()).toContain('#/1');
     } finally {
       await server.close();
