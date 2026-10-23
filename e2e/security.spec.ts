@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import {
   access,
   mkdir,
@@ -182,8 +183,17 @@ async function startHostWithEnvironment(
   }
 }
 
+function canonicalPath(file: string): string {
+  const resolved = resolve(file);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function isInside(root: string, candidate: string): boolean {
-  const relativePath = relative(resolve(root), resolve(candidate));
+  const relativePath = relative(canonicalPath(root), canonicalPath(candidate));
   return (
     relativePath === '' ||
     (!relativePath.startsWith('..') && !isAbsolute(relativePath))

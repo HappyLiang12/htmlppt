@@ -24,6 +24,22 @@ const LINK_UNSUPPORTED_CODES = new Set([
   'EXDEV'
 ]);
 
+const RENAME_RETRY_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+
+// Windows antivirus and indexers can briefly hold a freshly written file.
+async function renameReplacing(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 4 || !code || !RENAME_RETRY_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+}
+
 export function parseDeckHtml(html: string): Document {
   const { document } = parseHTML(html);
   return document as unknown as Document;
@@ -114,7 +130,7 @@ async function writeDeckFileAtomicLocked(
       await assertCurrentHash(filePath, expectedHash);
     }
 
-    await rename(temporaryPath, filePath);
+    await renameReplacing(temporaryPath, filePath);
   } finally {
     await rm(temporaryPath, { force: true });
   }
@@ -172,7 +188,7 @@ async function createDeckFileAtomicLocked(
       if (await destinationExists(filePath)) {
         throw new DeckFileExistsError(filePath);
       }
-      await rename(temporaryPath, filePath);
+      await renameReplacing(temporaryPath, filePath);
     }
   } finally {
     await rm(temporaryPath, { force: true });

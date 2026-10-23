@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import {
   mkdir,
   readFile,
@@ -52,9 +53,18 @@ function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function canonicalPath(file: string): string {
+  const resolved = path.resolve(file);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function samePath(actual: string, expected: string): boolean {
-  const left = path.resolve(actual);
-  const right = path.resolve(expected);
+  const left = canonicalPath(actual);
+  const right = canonicalPath(expected);
   return process.platform === 'win32'
     ? left.toLowerCase() === right.toLowerCase()
     : left === right;
@@ -252,7 +262,7 @@ describe('host export endpoint', () => {
         const files = (await readJson(response)).files as string[];
         expect(files).toHaveLength(2);
         for (const file of files) {
-          expect(path.dirname(file)).toBe(path.join(ctx.dir, 'exports'));
+          expect(samePath(path.dirname(file), path.join(ctx.dir, 'exports'))).toBe(true);
           const data = await readFile(file);
           expect(data.length).toBeGreaterThan(0);
           expect(data.subarray(0, 8)).toEqual(PNG_SIGNATURE);
