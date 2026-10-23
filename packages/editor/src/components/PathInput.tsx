@@ -1,0 +1,85 @@
+import { useEffect, useRef, useState } from 'react';
+
+export interface PathInputProps {
+  value: string;
+  editable: boolean;
+  opening: boolean;
+  error: string | null;
+  onOpen: (value: string) => void;
+  onPick: () => void;
+}
+
+export function PathInput({
+  value,
+  editable,
+  opening,
+  error,
+  onOpen,
+  onPick
+}: PathInputProps) {
+  const [draft, setDraft] = useState(value);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const submit = (): void => {
+    if (!editable || opening || submittingRef.current) return;
+    const next = draft.trim();
+    if (!next || next === value) return;
+    submittingRef.current = true;
+    onOpen(next);
+    queueMicrotask(() => {
+      submittingRef.current = false;
+    });
+  };
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <input
+        data-testid="deck-path"
+        aria-label="簡報路徑"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? 'deck-path-error' : undefined}
+        className="w-64 truncate rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70"
+        value={draft}
+        readOnly={!editable}
+        disabled={opening}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            submit();
+          } else if (event.key === 'Escape') {
+            setDraft(value);
+            event.currentTarget.blur();
+          }
+        }}
+        onBlur={submit}
+      />
+      <button
+        type="button"
+        data-testid="deck-picker"
+        className="rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 hover:border-white/60"
+        title="開啟另一個 HTML 檔"
+        aria-label="開啟另一個 HTML 檔"
+        disabled={opening}
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={onPick}
+      >
+        開啟…
+      </button>
+      {error && (
+        <span
+          id="deck-path-error"
+          role="alert"
+          className="max-w-64 truncate text-xs text-red-300"
+          title={error}
+        >
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}

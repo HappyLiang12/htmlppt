@@ -2,11 +2,17 @@ import type { ShapeKind } from '@htmlppt/core';
 import type { SaveStatus } from '../use-deck-controller';
 import { ExportMenu, type ExportFormat } from './ExportMenu';
 import { InsertMenu } from './InsertMenu';
+import { PathInput } from './PathInput';
 
 export type EditorView = 'normal' | 'sorter';
 
 export interface ToolbarProps {
   filePath: string;
+  pathEditable: boolean;
+  openingDeck: boolean;
+  openDeckError: string | null;
+  onOpenDeck: (path: string) => void;
+  onPickDeck: () => void;
   status: SaveStatus;
   activeIndex: number;
   slideCount: number;
@@ -55,6 +61,11 @@ const ACTIVE_VIEW_CLASS =
 
 export function Toolbar({
   filePath,
+  pathEditable,
+  openingDeck,
+  openDeckError,
+  onOpenDeck,
+  onPickDeck,
   status,
   activeIndex,
   slideCount,
@@ -89,9 +100,14 @@ export function Toolbar({
     >
       <div className="flex min-w-0 items-center gap-3">
         <span className="text-sm font-semibold tracking-wide">htmlppt</span>
-        <span className="max-w-48 truncate text-xs text-zinc-400">
-          {filePath}
-        </span>
+        <PathInput
+          value={filePath}
+          editable={pathEditable}
+          opening={openingDeck}
+          error={openDeckError}
+          onOpen={onOpenDeck}
+          onPick={onPickDeck}
+        />
       </div>
 
       <span

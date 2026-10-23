@@ -4,6 +4,7 @@ import {
   exportDeck,
   fetchDeck,
   flushDeck,
+  openDeck,
   saveDeck
 } from './api';
 
@@ -51,6 +52,38 @@ describe('host API authentication', () => {
 
   it('opens the event stream at the same-origin endpoint', () => {
     expect(deckEventsUrl()).toBe('/api/events');
+  });
+
+  it('opens a deck path and surfaces its error code', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          html: '<main data-ppt-deck></main>',
+          revision: 'r1',
+          filePath: 'D:/decks/next.html',
+          url: '/d/next.html'
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: 'not-found', message: 'Could not read it.' }),
+          { status: 404, headers: { 'content-type': 'application/json' } }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(openDeck('next.html')).resolves.toMatchObject({
+      url: '/d/next.html'
+    });
+    await expect(openDeck('missing.html')).rejects.toMatchObject({
+      name: 'DeckOpenError',
+      status: 404,
+      code: 'not-found'
+    });
+    const call = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(call[0]).toBe('/api/open');
+    expect(call[1].body).toBe(JSON.stringify({ path: 'next.html' }));
   });
 
   it('exports and flushes with the cookie only', async () => {

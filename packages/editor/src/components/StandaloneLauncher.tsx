@@ -1,4 +1,5 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useState, type DragEvent } from 'react';
+import { pickHtmlFile } from '../file-picker';
 import type { DraftRecord } from '../recovery';
 
 export interface StandaloneLauncherProps {
@@ -31,37 +32,16 @@ export function StandaloneLauncher({
   onRestore,
   onDiscard
 }: StandaloneLauncherProps) {
-  const fileInput = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
 
   const chooseFile = async () => {
-    const picker = (
-      window as unknown as {
-        showOpenFilePicker?: (options: {
-          multiple?: boolean;
-          types?: { description: string; accept: Record<string, string[]> }[];
-        }) => Promise<FileSystemFileHandle[]>;
-      }
-    ).showOpenFilePicker;
-    if (!picker) {
-      fileInput.current?.click();
-      return;
-    }
     try {
-      const [handle] = await picker({
-        multiple: false,
-        types: [
-          {
-            description: 'HTML deck',
-            accept: { 'text/html': ['.html', '.htm'] }
-          }
-        ]
-      });
-      if (!handle) return;
-      onOpenFile(await handle.getFile(), handle);
+      const picked = await pickHtmlFile();
+      if (!picked) return;
+      onOpenFile(picked.file, picked.handle);
     } catch (cause) {
-      // Cancelling the native picker is not an error.
-      if ((cause as DOMException | undefined)?.name === 'AbortError') return;
+      // pickHtmlFile treats a cancelled native picker as null, so anything
+      // reaching here is a real error.
       onError(cause instanceof Error ? cause.message : String(cause));
     }
   };
@@ -116,7 +96,6 @@ export function StandaloneLauncher({
           <label className="cursor-pointer text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline">
             或上傳 HTML 檔
             <input
-              ref={fileInput}
               data-testid="standalone-file"
               type="file"
               accept=".html,.htm,text/html"

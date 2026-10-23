@@ -9,6 +9,10 @@ export interface DeckResponse {
   filePath: string;
 }
 
+export interface OpenDeckResponse extends DeckResponse {
+  url: string;
+}
+
 export interface SaveDeckOptions {
   force?: boolean;
 }
@@ -110,6 +114,46 @@ export async function saveDeck(
     throw new Error(`Save failed (${response.status}): ${detail}`);
   }
   return (await response.json()) as { revision: string };
+}
+
+/**
+ * A failed /api/open carries the host error code so the toolbar can show a
+ * localized message; a 409 also carries the URL of the host that owns it.
+ */
+export class DeckOpenError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly url?: string;
+
+  constructor(status: number, code: string, message: string, url?: string) {
+    super(message);
+    this.name = 'DeckOpenError';
+    this.status = status;
+    this.code = code;
+    this.url = url;
+  }
+}
+
+export async function openDeck(path: string): Promise<OpenDeckResponse> {
+  const response = await fetch('/api/open', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path })
+  });
+  if (!response.ok) {
+    const { detail, payload } = await readErrorPayload(response);
+    const body =
+      payload !== null && typeof payload === 'object'
+        ? (payload as { error?: unknown; message?: unknown; url?: unknown })
+        : {};
+    throw new DeckOpenError(
+      response.status,
+      typeof body.error === 'string' ? body.error : 'open-failed',
+      typeof body.message === 'string' ? body.message : detail,
+      typeof body.url === 'string' ? body.url : undefined
+    );
+  }
+  return (await response.json()) as OpenDeckResponse;
 }
 
 /**

@@ -63,14 +63,17 @@ import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { describeSelection, describeSlide } from './announcements';
 import {
   DeckAuthError,
+  DeckOpenError,
   exportDeck,
   fetchDeck,
   flushDeck,
+  openDeck,
   openDeckEvents,
   saveDeck,
   type DeckPersistence,
   type ExportFormat
 } from './api';
+import { pickHtmlFile } from './file-picker';
 import {
   deleteDraft,
   draftKey,
@@ -375,6 +378,25 @@ function objectActionStateFor(
   };
 }
 
+function openErrorMessage(error: DeckOpenError): string {
+  switch (error.code) {
+    case 'invalid-path':
+      return '路徑無效；請輸入 HTML 檔案路徑。';
+    case 'not-found':
+      return '找不到檔案。';
+    case 'unsupported-extension':
+      return '只支援 .html 或 .htm 檔案。';
+    case 'invalid-deck':
+      return '這個檔案不是有效的簡報。';
+    case 'deck-already-open':
+      return error.url
+        ? `已在另一個 host 開啟：${error.url}`
+        : '此簡報已在另一個 host 開啟。';
+    default:
+      return error.message || '開啟失敗。';
+  }
+}
+
 export function App() {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const canvas = useRef<HTMLElement | null>(null);
@@ -486,6 +508,8 @@ export function App() {
   const [standaloneDrafts, setStandaloneDrafts] = useState<DraftRecord[]>([]);
   const [standaloneError, setStandaloneError] = useState('');
   const [openingStandalone, setOpeningStandalone] = useState(false);
+  const [openingDeck, setOpeningDeck] = useState(false);
+  const [openDeckError, setOpenDeckError] = useState<string | null>(null);
   const [recoveryDraft, setRecoveryDraft] = useState<DraftRecord | null>(null);
   const recoveryCheckedRef = useRef<string | null>(null);
   const downloadedDraftRef = useRef<string | null>(null);
@@ -1276,6 +1300,49 @@ export function App() {
     [actions]
   );
 
+  const openDeckAtPath = useCallback(
+    async (input: string): Promise<void> => {
+      if (mode !== 'host' || openingDeck) return;
+      setOpenDeckError(null);
+      if (!actions.settlePendingEdits()) return;
+      setOpeningDeck(true);
+      try {
+        await actions.saveNow();
+        if (stateRef.current.conflict || stateRef.current.error) return;
+        const opened = await openDeck(input);
+        await actions.load(opened);
+        window.history.replaceState(null, '', opened.url);
+      } catch (cause) {
+        setOpenDeckError(
+          cause instanceof DeckOpenError
+            ? openErrorMessage(cause)
+            : cause instanceof Error
+              ? cause.message
+              : String(cause)
+        );
+      } finally {
+        setOpeningDeck(false);
+      }
+    },
+    [mode, openingDeck, actions]
+  );
+
+  const pickDeck = useCallback(async (): Promise<void> => {
+    if (openingDeck) return;
+    try {
+      const picked = await pickHtmlFile();
+      if (!picked) return;
+      if (!actions.settlePendingEdits()) return;
+      await actions.saveNow();
+      if (stateRef.current.conflict || stateRef.current.error) return;
+      await openStandaloneFile(picked.file, picked.handle);
+    } catch (cause) {
+      setOpenDeckError(
+        cause instanceof Error ? cause.message : String(cause)
+      );
+    }
+  }, [openingDeck, actions, openStandaloneFile]);
+
   const restoreStandaloneDraft = useCallback(
     async (draft: DraftRecord) => {
       setOpeningStandalone(true);
@@ -1376,6 +1443,20 @@ export function App() {
       cancelled = true;
     };
   }, [actions]);
+
+  // A broadcast rebind in another tab swaps the deck under this tab without a
+  // navigation; keep the readable deck URL in step with the new file.
+  useEffect(() => {
+    if (mode !== 'host' || !filePath || !window.location.pathname.startsWith('/d/')) {
+      return;
+    }
+    const name = filePath.split(/[\\/]/).pop() ?? '';
+    if (!name) return;
+    const next = `/d/${encodeURIComponent(name)}`;
+    if (window.location.pathname !== next) {
+      window.history.replaceState(null, '', next);
+    }
+  }, [mode, filePath]);
 
   // Hold a debounced local draft while there are unsaved changes. A host save
   // deletes it; an upload-only standalone tab keeps it as its only recovery.
@@ -3156,6 +3237,11 @@ export function App() {
       </p>
       <Toolbar
         filePath={filePath}
+        pathEditable={mode === 'host'}
+        openingDeck={openingDeck}
+        openDeckError={openDeckError}
+        onOpenDeck={(path) => void openDeckAtPath(path)}
+        onPickDeck={() => void pickDeck()}
         status={status}
         activeIndex={activeIndex}
         slideCount={slides.length}
