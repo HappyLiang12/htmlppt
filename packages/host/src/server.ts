@@ -20,7 +20,7 @@ import {
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { OpenPathError, resolveDeckPath } from './open-path.js';
-import { readSession, sessionKey, sessionsDirectory } from './sessions.js';
+import { listSessions, type SessionEntry } from './sessions.js';
 
 export interface HostOptions {
   filePath: string;
@@ -598,9 +598,20 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         });
       }
 
-      const existing = await readSession(
-        path.join(sessionsDirectory(), `${sessionKey(target)}.json`)
-      );
+      // Registry keys keep the spelling their writer used, so a direct key
+      // lookup can miss an entry for the same deck. Scan instead and compare
+      // through realpath; target is already canonical.
+      let existing: SessionEntry | undefined;
+      for (const entry of await listSessions()) {
+        try {
+          if ((await realpath(entry.path)) === target) {
+            existing = entry;
+            break;
+          }
+        } catch {
+          // A vanished or unreadable entry cannot name this target.
+        }
+      }
       if (existing && existing.port !== port) {
         return c.json(
           {

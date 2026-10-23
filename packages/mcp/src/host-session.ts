@@ -1,6 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  listSessions,
   readSession,
   removeSessionIfUnchanged,
   sessionKey,
@@ -14,63 +15,109 @@ export const HEALTH_TIMEOUT_MS = 1_000;
 type HealthStatus = 'healthy' | 'unhealthy' | 'unknown';
 
 /**
- * Finds the host serving a deck, if any. A registry entry is only trusted while
- * the recorded process is alive and its authenticated health endpoint answers
- * within a bounded time. Definitive failures (dead process, refused connection,
- * a non-5xx health response such as 401 or 404, malformed payload, or a
- * different deck path) remove the entry so later calls do not retry a dead
- * host. A health timeout or 5xx response means the host may be busy rather than
- * stale: the entry is kept, and the caller falls back to direct mode for this
- * call only.
+ * Finds the host serving a deck, if any. Registry entries keep the spelling
+ * the writer used: on Windows, short (8.3) and long paths name the same file
+ * but produce different session keys. The caller's spelling is tried first;
+ * otherwise the registry is scanned and entries are compared by realpath.
+ *
+ * A registry entry is only trusted while the recorded process is alive and its
+ * authenticated health endpoint answers within a bounded time. Definitive
+ * failures (dead process, refused connection, a non-5xx health response such
+ * as 401 or 404, malformed payload, or a different deck path) remove the entry
+ * so later calls do not retry a dead host. A health timeout or 5xx response
+ * means the host may be busy rather than stale: the entry is kept, and the
+ * caller falls back to direct mode for this call only.
  */
 export async function findLiveSession(
   filePath: string
 ): Promise<SessionEntry | null> {
-  let resolved = path.resolve(filePath);
-  try {
-    resolved = await realpath(resolved);
-  } catch {
-    // The deck may be deleted while its host is still alive. Resolving the
-    // parent keeps the registry key canonical when the parent is a symlink or
-    // junction; rejoining the basename always yields the entry's spelling.
-    try {
-      resolved = path.join(
-        await realpath(path.dirname(resolved)),
-        path.basename(resolved)
-      );
-    } catch {
-      // Keep the resolved spelling when the parent is gone too.
-    }
-  }
+  const resolved = path.resolve(filePath);
+  const canonical = await canonicalPath(resolved);
   const sessionFile = path.join(
     sessionsDirectory(),
     `${sessionKey(resolved)}.json`
   );
 
-  let raw: string;
+  let raw: string | undefined;
   try {
     raw = await readFile(sessionFile, 'utf8');
   } catch {
-    return null;
+    raw = undefined;
   }
 
-  // readSession validates the entry shape and pid liveness, and removes
-  // entries that fail either check.
-  const entry = await readSession(sessionFile);
-  if (!entry) {
-    return null;
-  }
-  if (entry.path !== resolved) {
-    await removeSessionIfUnchanged(sessionFile, raw);
-    return null;
+  if (raw !== undefined) {
+    // readSession validates the entry shape and pid liveness, and removes
+    // entries that fail either check.
+    const entry = await readSession(sessionFile);
+    if (!entry) {
+      return null;
+    }
+    if (!(await sameDeckPath(entry.path, canonical))) {
+      await removeSessionIfUnchanged(sessionFile, raw);
+      return null;
+    }
+    const health = await checkHost(entry);
+    if (health === 'unhealthy') {
+      await removeSessionIfUnchanged(sessionFile, raw);
+      return null;
+    }
+    return health === 'healthy' ? entry : null;
   }
 
-  const health = await checkHost(entry);
-  if (health === 'unhealthy') {
-    await removeSessionIfUnchanged(sessionFile, raw);
-    return null;
+  // The direct key is absent when the entry was written with another spelling
+  // of the same deck, such as the long form of a Windows short path or a
+  // symlinked/junction parent.
+  for (const entry of await listSessions()) {
+    if (!(await sameDeckPath(entry.path, canonical))) {
+      continue;
+    }
+    const entryFile = path.join(
+      sessionsDirectory(),
+      `${sessionKey(entry.path)}.json`
+    );
+    let entryRaw: string;
+    try {
+      entryRaw = await readFile(entryFile, 'utf8');
+    } catch {
+      // Another process removed the entry between listing and reading.
+      continue;
+    }
+    const health = await checkHost(entry);
+    if (health === 'unhealthy') {
+      await removeSessionIfUnchanged(entryFile, entryRaw);
+      continue;
+    }
+    return health === 'healthy' ? entry : null;
   }
-  return health === 'healthy' ? entry : null;
+  return null;
+}
+
+/**
+ * Resolves a path to its canonical spelling. A missing deck still resolves
+ * through its parent so a deleted file under an alias keeps a stable identity.
+ */
+async function canonicalPath(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  try {
+    return await realpath(resolved);
+  } catch {
+    try {
+      return path.join(
+        await realpath(path.dirname(resolved)),
+        path.basename(resolved)
+      );
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+async function sameDeckPath(left: string, right: string): Promise<boolean> {
+  const [leftPath, rightPath] = await Promise.all([
+    canonicalPath(left),
+    canonicalPath(right)
+  ]);
+  return leftPath === rightPath;
 }
 
 async function checkHost(entry: SessionEntry): Promise<HealthStatus> {

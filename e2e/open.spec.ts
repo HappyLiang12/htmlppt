@@ -614,11 +614,12 @@ test(
       const secondPath = await createSecondDeck(root, secondName);
       host = await startIsolatedHost(root, firstName, home);
 
-      const firstReal = await realpath(firstPath);
       const secondReal = await realpath(secondPath);
+      // The CLI keys the registry by the spelling the caller used. On Windows
+      // CI that spelling is an 8.3 short path, so it can differ from realpath.
       expect(
-        await exists(registryFile(home, firstReal)),
-        'the first deck is registered before the open'
+        await exists(registryFile(home, firstPath)),
+        'the first deck is registered under the caller spelling'
       ).toBe(true);
 
       const token = new URL(host.url).searchParams.get('token');
@@ -635,9 +636,12 @@ test(
       const opened = (await response.json()) as { filePath: string };
       expect(opened.filePath).toBe(secondReal);
 
-      expect(await exists(registryFile(home, firstReal))).toBe(false);
+      expect(await exists(registryFile(home, firstPath))).toBe(false);
+      // The move event carries the host's canonical new deck path.
       expect(await exists(registryFile(home, secondReal))).toBe(true);
 
+      // The second deck is only registered under its canonical spelling, so
+      // this open exercises the registry scan fallback.
       const reopened = await execa(
         'node',
         [cliPath, 'open', secondName, '--no-browser'],

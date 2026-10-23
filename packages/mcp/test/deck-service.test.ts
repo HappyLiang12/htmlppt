@@ -629,9 +629,8 @@ describe('findLiveSession', () => {
   it('finds a live session through a directory alias', async () => {
     const realDirectory = join(dir, 'real-deck');
     await mkdir(realDirectory);
-    // Session keys are derived from realpaths, so both the deck content and the
-    // registry entry must use the canonical directory: on macOS, for example,
-    // the temp root below /var resolves to /private/var.
+    // The registry keeps the writer's spelling (here, the real directory);
+    // looking up an alias falls back to comparing entries by realpath.
     const canonicalDirectory = await realpath(realDirectory);
     const realDeck = join(canonicalDirectory, 'deck.html');
     await rename(await copyFixture('basic.deck.html', realDirectory), realDeck);
@@ -641,6 +640,7 @@ describe('findLiveSession', () => {
       aliasDirectory,
       process.platform === 'win32' ? 'junction' : 'dir'
     );
+    const aliasDeck = join(aliasDirectory, 'deck.html');
     const healthy = await stubHost((response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ok: true }));
@@ -649,12 +649,91 @@ describe('findLiveSession', () => {
       const entry = staleEntry({ path: realDeck, port: healthy.port });
       await writeSession(entry);
 
-      const found = await findLiveSession(join(aliasDirectory, 'deck.html'));
+      const found = await findLiveSession(aliasDeck);
 
       expect(found).toEqual(entry);
       expect(await readSession(sessionFilePath(realDeck))).toEqual(entry);
+      await expect(
+        readFile(sessionFilePath(aliasDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await healthy.close();
+    }
+  });
+
+  it('finds a live session written under the alias spelling by its real path', async () => {
+    const realDirectory = join(dir, 'real-alias-write');
+    await mkdir(realDirectory);
+    const canonicalDirectory = await realpath(realDirectory);
+    const realDeck = join(canonicalDirectory, 'deck.html');
+    await rename(await copyFixture('basic.deck.html', realDirectory), realDeck);
+    const aliasDirectory = join(dir, 'alias-alias-write');
+    await symlink(
+      realDirectory,
+      aliasDirectory,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDirectory, 'deck.html');
+    const healthy = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    try {
+      const entry = staleEntry({ path: aliasDeck, port: healthy.port });
+      await writeSession(entry);
+
+      const found = await findLiveSession(realDeck);
+
+      expect(found).toEqual(entry);
+      // The scan must not move or duplicate the entry: its key keeps the
+      // spelling the writer used.
+      expect(await readSession(sessionFilePath(aliasDeck))).toEqual(entry);
+      await expect(
+        readFile(sessionFilePath(realDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  it('removes an unhealthy session found through an alias spelling', async () => {
+    const realDirectory = join(dir, 'real-unhealthy-alias');
+    await mkdir(realDirectory);
+    const canonicalDirectory = await realpath(realDirectory);
+    const realDeck = join(canonicalDirectory, 'deck.html');
+    await rename(await copyFixture('basic.deck.html', realDirectory), realDeck);
+    const aliasDirectory = join(dir, 'alias-unhealthy');
+    await symlink(
+      realDirectory,
+      aliasDirectory,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDirectory, 'deck.html');
+    const unrelatedDeck = join(dir, 'unrelated.html');
+    const unrelated = staleEntry({ path: unrelatedDeck });
+    const mismatched = await stubHost((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ok: true,
+          filePath: join(dir, 'other-health.html')
+        })
+      );
+    });
+    try {
+      await writeSession(unrelated);
+      await writeSession(staleEntry({ path: aliasDeck, port: mismatched.port }));
+
+      expect(await findLiveSession(realDeck)).toBeNull();
+      await expect(
+        readFile(sessionFilePath(aliasDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      // Unrelated registry entries are never pruned by the scan.
+      expect(await readSession(sessionFilePath(unrelatedDeck))).toEqual(
+        unrelated
+      );
+    } finally {
+      await mismatched.close();
     }
   });
 

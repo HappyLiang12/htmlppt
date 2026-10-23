@@ -525,8 +525,10 @@ export async function runCli(
           'Invalid --port. Use an integer between 0 and 65535.'
         );
       }
-      const requestedPath = resolve(io.cwd, file);
-      const filePath = await realpath(requestedPath).catch(() => requestedPath);
+      // Keep the registry in the spelling the caller used. Windows short
+      // (8.3) paths and long paths name the same file but hash differently,
+      // so canonicalizing here would hide entries written by another process.
+      const filePath = resolve(io.cwd, file);
 
       const { findLiveSession } = await import('@htmlppt/mcp');
       const existing = await findLiveSession(filePath);

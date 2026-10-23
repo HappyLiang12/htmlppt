@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile
+} from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { basename, join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
@@ -1291,8 +1298,16 @@ describe('host', () => {
     try {
       process.env.HTMLPPT_HOME = home;
       await writeFile(other, ctx.deckHtml, 'utf8');
+      // Register the deck under an alias spelling. The 409 scan must compare
+      // entries by realpath instead of assuming a canonical registry key.
+      const aliasDir = join(ctx.dir, 'shared-alias');
+      await symlink(
+        ctx.dir,
+        aliasDir,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
       await writeSession({
-        path: await realpath(other),
+        path: join(aliasDir, 'shared.html'),
         port: ctx.host.port + 1,
         token: 'other-token',
         pid: process.pid,
