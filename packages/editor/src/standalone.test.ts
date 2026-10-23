@@ -3,12 +3,27 @@ import {
   createStandalonePersistence,
   downloadHtml,
   exportFileName,
+  formatDraftTime,
   hashHtml,
   type StandaloneSession
 } from './standalone.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('standalone draft times', () => {
+  const SAVED_AT = Date.UTC(2026, 9, 24, 7, 5, 9);
+
+  it('formats draft times with the selected locale conventions', () => {
+    expect(formatDraftTime(SAVED_AT, 'en', 'UTC')).toBe('10/24/2026, 07:05');
+    expect(formatDraftTime(SAVED_AT, 'zh-Hant', 'UTC')).toBe(
+      '2026/10/24\u200907:05'
+    );
+    expect(formatDraftTime(SAVED_AT, 'zh-Hans', 'UTC')).toBe(
+      '2026/10/24 07:05'
+    );
+  });
 });
 
 describe('standalone persistence', () => {

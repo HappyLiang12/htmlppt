@@ -260,7 +260,6 @@ export const zhHant: Record<MessageKey, string> = {
   'play.presenter': '簡報者',
   'play.openPresenter': '開啟簡報者檢視（P）',
   'play.start': '播放投影片',
-  'play.keys': '方向鍵切換投影片，P 開啟簡報者檢視，Esc 離開',
   'play.instructions':
     '使用方向鍵、Space 或 PageDown 換頁；Escape 離開播放；P 開啟簡報者視窗。',
   'presenter.waiting': '等待主視窗…',
@@ -270,7 +269,6 @@ export const zhHant: Record<MessageKey, string> = {
   'presenter.page': '第 {index} / {total} 頁',
   'presenter.previous': '上一頁',
   'presenter.next': '下一頁',
-  'presenter.last': '最後一頁',
   'presenter.lastSlide': '（最後一頁）',
   'presenter.notes': '備註',
   'presenter.currentNotes': '目前備註',
@@ -278,7 +276,6 @@ export const zhHant: Record<MessageKey, string> = {
   'presenter.timer': '計時器',
   'presenter.preview': '預覽',
   'presenter.disconnect': '中斷連線',
-  'presenter.disconnectedAlert': '與主視窗的連線已中斷。',
   'presenter.disconnectedHelp':
     '未連線到主視窗。請從編輯器重新開啟簡報者檢視。',
   'app.fullscreenEntered': '全螢幕模式',
@@ -303,7 +300,6 @@ export const zhHant: Record<MessageKey, string> = {
   'recovery.discard': '捨棄',
   'conflict.title': '衝突',
   'conflict.switched': '主機已切換到另一個檔案；只能重新載入。',
-  'conflict.switchedFile': '主機已切換到另一個檔案；只能重新載入。',
   'conflict.external': '外部已修改檔案，本機有尚未儲存的變更。',
   'conflict.reload': '重新載入',
   'conflict.overwrite': '覆寫',

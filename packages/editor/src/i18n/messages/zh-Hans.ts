@@ -260,7 +260,6 @@ export const zhHans: Record<MessageKey, string> = {
   'play.presenter': '演讲者',
   'play.openPresenter': '打开演讲者视图（P）',
   'play.start': '播放幻灯片',
-  'play.keys': '方向键切换幻灯片，P 打开演讲者视图，Esc 退出',
   'play.instructions':
     '使用方向键、Space 或 PageDown 换页；Escape 退出播放；P 打开演讲者窗口。',
   'presenter.waiting': '等待主窗口…',
@@ -270,7 +269,6 @@ export const zhHans: Record<MessageKey, string> = {
   'presenter.page': '第 {index} / {total} 页',
   'presenter.previous': '上一页',
   'presenter.next': '下一页',
-  'presenter.last': '最后一页',
   'presenter.lastSlide': '（最后一页）',
   'presenter.notes': '备注',
   'presenter.currentNotes': '当前备注',
@@ -278,7 +276,6 @@ export const zhHans: Record<MessageKey, string> = {
   'presenter.timer': '计时器',
   'presenter.preview': '预览',
   'presenter.disconnect': '断开连接',
-  'presenter.disconnectedAlert': '与主窗口的连接已中断。',
   'presenter.disconnectedHelp':
     '未连接到主窗口。请从编辑器重新打开演讲者视图。',
   'app.fullscreenEntered': '全屏模式',
@@ -303,7 +300,6 @@ export const zhHans: Record<MessageKey, string> = {
   'recovery.discard': '放弃',
   'conflict.title': '冲突',
   'conflict.switched': '主机已切换到另一个文件；只能重新加载。',
-  'conflict.switchedFile': '主机已切换到另一个文件；只能重新加载。',
   'conflict.external': '文件已被外部修改，本机有尚未保存的更改。',
   'conflict.reload': '重新加载',
   'conflict.overwrite': '覆盖',

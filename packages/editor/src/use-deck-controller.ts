@@ -1034,7 +1034,7 @@ export function useDeckController(
       // Force-writing here would replace the deck another tab just opened.
       update({
         status: 'conflict',
-        error: translate('conflict.switchedFile')
+        error: translate('conflict.switched')
       });
       return;
     }

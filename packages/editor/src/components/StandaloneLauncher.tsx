@@ -1,7 +1,8 @@
 import { useState, type DragEvent } from 'react';
 import { pickHtmlFile } from '../file-picker';
-import { useI18n, type Locale } from '../i18n';
+import { useI18n } from '../i18n';
 import type { DraftRecord } from '../recovery';
+import { formatDraftTime } from '../standalone';
 
 export interface StandaloneLauncherProps {
   drafts: DraftRecord[];
@@ -15,20 +16,6 @@ export interface StandaloneLauncherProps {
 
 const BUTTON =
   'rounded border border-white/40 px-3 py-2 text-sm text-zinc-200 transition-colors hover:border-amber-300/70 disabled:opacity-40';
-
-const DATE_LOCALES: Record<Locale, string> = {
-  en: 'en-US',
-  'zh-Hant': 'zh-TW',
-  'zh-Hans': 'zh-CN'
-};
-
-function formatTime(value: number, locale: Locale): string {
-  try {
-    return new Date(value).toLocaleString(DATE_LOCALES[locale]);
-  } catch {
-    return '';
-  }
-}
 
 export function StandaloneLauncher({
   drafts,
@@ -143,7 +130,7 @@ export function StandaloneLauncher({
                     {draft.filePath}
                   </span>
                   <span className="text-amber-200/70">
-                    {formatTime(draft.savedAt, locale)}
+                    {formatDraftTime(draft.savedAt, locale)}
                   </span>
                   <button
                     type="button"

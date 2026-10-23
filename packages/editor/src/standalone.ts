@@ -1,5 +1,36 @@
 import type { DeckPersistence } from './api';
+import type { Locale } from './i18n';
 import { draftKey, writeDraft } from './recovery';
+
+const DRAFT_TIME_LOCALES: Record<Locale, string> = {
+  en: 'en-US',
+  'zh-Hant': 'zh-TW',
+  'zh-Hans': 'zh-CN'
+};
+
+/**
+ * Formats a draft timestamp with the locale's date and time conventions.
+ * The optional zone is a test seam; production renders the local zone.
+ */
+export function formatDraftTime(
+  value: number,
+  locale: Locale,
+  timeZone?: string
+): string {
+  try {
+    return new Intl.DateTimeFormat(DRAFT_TIME_LOCALES[locale], {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      ...(timeZone ? { timeZone } : {})
+    }).format(value);
+  } catch {
+    return '';
+  }
+}
 
 export interface StandaloneSession {
   /** Display name and download name; never a full path. */

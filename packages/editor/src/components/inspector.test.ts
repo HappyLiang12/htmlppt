@@ -373,8 +373,8 @@ describe('inspector object appearance', () => {
     });
 
     expect(onSetAppearance).toHaveBeenCalledWith({ opacity: 2 });
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      '\u503c\u7121\u6548'
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      '值無效，請修正或按 Escape 取消。'
     );
   });
 

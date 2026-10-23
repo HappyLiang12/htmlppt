@@ -630,7 +630,7 @@ describe('useDeckController', () => {
     expect(saveCalls).toEqual([]);
     expect(controller.state.conflict).not.toBeNull();
     expect(controller.state.dirty).toBe(true);
-    expect(controller.state.error).toBe('translated:conflict.switchedFile');
+    expect(controller.state.error).toBe('translated:conflict.switched');
   });
 
   it('keeps a switched-file conflict after a later conflict without a path', async () => {
@@ -688,7 +688,7 @@ describe('useDeckController', () => {
       source: 'external',
       filePath: 'other.html'
     });
-    expect(controller.state.error).toBe('translated:conflict.switchedFile');
+    expect(controller.state.error).toBe('translated:conflict.switched');
   });
 
   it('refuses to overwrite a switched conflict when the loaded path is unknown', async () => {
@@ -734,7 +734,7 @@ describe('useDeckController', () => {
     });
     expect(controller.state.status).toBe('conflict');
     expect(controller.state.dirty).toBe(true);
-    expect(controller.state.error).toBe('translated:conflict.switchedFile');
+    expect(controller.state.error).toBe('translated:conflict.switched');
   });
 
   it('translates the pending-edit overwrite instruction', async () => {

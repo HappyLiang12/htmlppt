@@ -290,7 +290,7 @@ describe('PresenterView locale', () => {
         heading.textContent
       )
     ).toContain('Notes');
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
       'Not connected to the main window. Reopen the presenter view from the editor.'
     );
   });

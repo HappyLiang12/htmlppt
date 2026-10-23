@@ -97,6 +97,9 @@ test.describe('standalone editor fallback', () => {
         await writeFile(join(directory, 'standalone.html'), DECK, 'utf8');
         await page.goto(editor.url);
         await expect(page.getByTestId('standalone-drop')).toBeVisible();
+        await expect(page.locator('code')).toHaveText(
+          'htmlppt open deck.html'
+        );
         await openDeck(page, directory);
         await expect(page.getByTestId('toolbar')).toBeVisible();
 
