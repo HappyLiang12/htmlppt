@@ -106,19 +106,17 @@ describe('resolveDeckPath', () => {
     });
   });
 
-  // Windows maps ERROR_PATH_NOT_FOUND to ENOENT, so traversing a regular file
-  // never reaches the non-ENOENT realpath arm there; Ubuntu CI covers it.
-  it.skipIf(process.platform === 'win32')(
-    'rejects a path that traverses a regular file with invalid-path',
-    async () => {
-      const directory = await makeDirectory();
-      const deck = await writeDeck(directory, 'deck.html');
+  it('maps a path that traverses a regular file to the platform realpath error', async () => {
+    const directory = await makeDirectory();
+    const deck = await writeDeck(directory, 'deck.html');
+    // libuv reports ENOENT on Windows (ERROR_PATH_NOT_FOUND) for a path
+    // component that is a regular file, and ENOTDIR everywhere else.
+    const expectedCode = process.platform === 'win32' ? 'not-found' : 'invalid-path';
 
-      await expect(
-        resolveDeckPath(join(deck, 'nested.html'), directory, directory)
-      ).rejects.toMatchObject({ code: 'invalid-path' });
-    }
-  );
+    await expect(
+      resolveDeckPath(join(deck, 'nested.html'), directory, directory)
+    ).rejects.toHaveProperty('code', expectedCode);
+  });
 
   it('decodes a file URL that contains spaces', async () => {
     const directory = await makeDirectory();
