@@ -113,9 +113,9 @@ export async function saveDeck(
 }
 
 /**
- * Last-chance flush when the page unloads with unsaved edits. EventSource and
- * sendBeacon cannot attach the bearer header, so this is a keepalive fetch.
- * It is best effort: the browser may terminate it, and a conflict is not
+ * Last-chance flush when the page unloads with unsaved edits. The same-origin
+ * session cookie authorizes it, and keepalive lets the request outlive the
+ * page. It is best effort: the browser may terminate it, and a conflict is not
  * observable from an unloading page.
  */
 export function flushDeck(html: string, baseRevision: string): void {

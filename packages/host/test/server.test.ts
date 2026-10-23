@@ -363,6 +363,8 @@ describe('host', () => {
     expect(setCookie.toLowerCase()).toContain('httponly');
     expect(setCookie).toContain('SameSite=Strict');
     expect(setCookie).toContain('Path=/');
+    expect(setCookie.toLowerCase()).not.toContain('max-age');
+    expect(setCookie.toLowerCase()).not.toContain('expires');
 
     const friendly = await fetch(`${ctx.base}${friendlyPath}`, {
       headers: { cookie: setCookie.split(';')[0] ?? '' }
@@ -446,8 +448,49 @@ describe('host', () => {
     const response = await fetch(`${ctx.base}/d/other.html`, {
       headers: { cookie }
     });
-
     expect(response.status).toBe(404);
+
+    const tokenized = await fetch(
+      `${ctx.base}/d/other.html?token=${encodeURIComponent(ctx.token)}`,
+      { redirect: 'manual' }
+    );
+    expect(tokenized.status).toBe(404);
+  });
+
+  it('serves percent-encoded deck names with spaces and non-ASCII', async () => {
+    const dir = await makeTempDir('htmlppt-host-name-');
+    let host: Awaited<ReturnType<typeof startHost>> | undefined;
+    try {
+      const editorDir = join(dir, 'editor');
+      await mkdir(editorDir);
+      await writeFile(
+        join(editorDir, 'index.html'),
+        '<!doctype html><div id="root">editor-shell</div>',
+        'utf8'
+      );
+      const fixture = await copyFixture('basic.deck.html', dir);
+      const name = 'Q3 投影片.html';
+      const deckPath = join(dir, name);
+      await writeFile(deckPath, await readFile(fixture, 'utf8'), 'utf8');
+      const token = randomUUID();
+      host = await startHost({ filePath: deckPath, token, editorDir, port: 0 });
+      const base = new URL(host.url).origin;
+
+      const root = await fetch(host.url, { redirect: 'manual' });
+      expect(root.status).toBe(302);
+      expect(root.headers.get('location')).toBe(
+        `/d/${encodeURIComponent(name)}`
+      );
+      const cookie = (root.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+      const page = await fetch(`${base}${root.headers.get('location')}`, {
+        headers: { cookie }
+      });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain('editor-shell');
+    } finally {
+      await host?.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('cleans the token query on a deck page', async () => {

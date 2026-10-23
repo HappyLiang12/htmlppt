@@ -177,7 +177,9 @@ async function openDeck(
     host = await startCliHost(cliPath, directory, file);
     await page.goto(host.url);
     const friendlyPath = `/d/${encodeURIComponent(file)}`;
-    await expect.poll(() => new URL(page.url()).pathname).toBe(friendlyPath);
+    await expect
+      .poll(() => page.url())
+      .toBe(new URL(friendlyPath, host.url).href);
     const frame = page.frameLocator(FRAME_SELECTOR);
     await ready(frame);
     await expect(page.getByTestId('save-status')).toHaveText('已同步');

@@ -1429,7 +1429,8 @@ export function App() {
   /**
    * Connects once the initial deck exists, so the hello revision is compared
    * against a loaded master instead of an empty one. EventSource reconnects on
-   * its own; a host restart changes the port/token and needs a page reload.
+   * its own; a host restart changes the port and cookie context, so the page
+   * must be reloaded.
    */
   const liveEventsRef = useRef<EventSource | null>(null);
   useEffect(() => {

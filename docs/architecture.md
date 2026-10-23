@@ -79,7 +79,8 @@ A revision is the SHA-256 hash of the exact file bytes. It is an opaque token,
 not a parent pointer; there is no merge history in the file.
 
 - **Pages:** `GET /` redirects to `/d/<deck-name>`, setting the session cookie
-  when the request carries a valid token. `GET /d/<deck-name>` serves the editor
+  when the request carries a valid token; a request already authorized by the
+  cookie also redirects. `GET /d/<deck-name>` serves the editor
   when the decoded basename matches the current deck (case-insensitive on
   Windows) and returns 404 otherwise.
 - **Host:** `GET /api/deck` returns `{ html, revision, filePath }`. `PUT`

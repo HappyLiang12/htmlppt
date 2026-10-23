@@ -353,8 +353,9 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     const bearer = authorization.toLowerCase().startsWith(bearerPrefix)
       ? authorization.slice(bearerPrefix.length)
       : '';
-    // EventSource cannot set headers, so its query token is the only exception.
-    // Every other API route accepts the token solely as a bearer header.
+    // EventSource cannot set headers, so its query token stays supported for
+    // automation. Browser API requests use the HttpOnly session cookie; CLI,
+    // MCP, and tests may also use a bearer token.
     const allowsQueryToken =
       c.req.method === 'GET' && c.req.path === '/api/events';
     const queryToken = allowsQueryToken
@@ -728,11 +729,11 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
 
   app.get('/d/:name', async (c) => {
     const url = new URL(c.req.url);
-    if (url.searchParams.has('token')) {
-      return c.redirect(`${url.pathname}${queryWithoutToken(url)}`, 302);
-    }
     if (!matchesDeckName(c.req.param('name'), options.filePath)) {
       return c.notFound();
+    }
+    if (url.searchParams.has('token')) {
+      return c.redirect(`${url.pathname}${queryWithoutToken(url)}`, 302);
     }
     return c.html(await renderEditor());
   });
