@@ -79,7 +79,6 @@
       previous: 'Previous slide',
       next: 'Next slide',
       page: '{index} / {total}',
-      presenter: 'Presenter',
       presenterTitle: 'Presenter view',
       waiting: 'Waiting for the main window…',
       notConnected: 'Not connected yet.',
@@ -87,13 +86,9 @@
       noNotes: 'No notes for this slide.',
       nextSlide: 'Next slide',
       nextPreview: 'Next slide preview',
-      lastSlide: 'Last slide',
       lastSlidePlaceholder: '(Last slide)',
       connected: 'Connected',
       disconnected: 'Disconnected',
-      timer: 'Timer',
-      disconnect: 'Disconnect',
-      disconnectedAlert: 'The connection to the main window was lost.',
       fullscreenUnsupported: 'This browser does not support fullscreen. Press F11.',
       fullscreenDenied: 'Fullscreen was blocked. Press F11.',
       presenterBlocked: 'The browser blocked the presenter window. Allow popups and press P.',
@@ -104,7 +99,6 @@
       previous: '上一頁',
       next: '下一頁',
       page: '第 {index} / {total} 頁',
-      presenter: '簡報者',
       presenterTitle: '簡報者檢視',
       waiting: '等待主視窗…',
       notConnected: '尚未連線。',
@@ -112,13 +106,9 @@
       noNotes: '此頁沒有備註。',
       nextSlide: '下一頁',
       nextPreview: '下一頁預覽',
-      lastSlide: '最後一頁',
       lastSlidePlaceholder: '（最後一頁）',
       connected: '已連線',
       disconnected: '已中斷',
-      timer: '計時器',
-      disconnect: '中斷連線',
-      disconnectedAlert: '與主視窗的連線已中斷。',
       fullscreenUnsupported: '此瀏覽器不支援全螢幕；請按 F11 手動全螢幕。',
       fullscreenDenied: '瀏覽器未允許全螢幕；請按 F11 手動全螢幕。',
       presenterBlocked: '瀏覽器封鎖了簡報視窗。請允許此網站開啟彈出視窗，再按 P 重試。',
@@ -129,7 +119,6 @@
       previous: '上一页',
       next: '下一页',
       page: '第 {index} / {total} 页',
-      presenter: '演讲者',
       presenterTitle: '演讲者视图',
       waiting: '等待主窗口…',
       notConnected: '尚未连接。',
@@ -137,13 +126,9 @@
       noNotes: '此页没有备注。',
       nextSlide: '下一页',
       nextPreview: '下一页预览',
-      lastSlide: '最后一页',
       lastSlidePlaceholder: '（最后一页）',
       connected: '已连接',
       disconnected: '已断开',
-      timer: '计时器',
-      disconnect: '断开连接',
-      disconnectedAlert: '与主窗口的连接已中断。',
       fullscreenUnsupported: '此浏览器不支持全屏；请按 F11 手动全屏。',
       fullscreenDenied: '浏览器未允许全屏；请按 F11 手动全屏。',
       presenterBlocked: '浏览器阻止了演讲者窗口。请允许此网站打开弹出窗口，再按 P 重试。',
@@ -165,7 +150,7 @@
       }
       return 'zh-Hans';
     }
-    return value.indexOf('en') === 0 ? 'en' : 'en';
+    return 'en';
   }
 
   var strings = RUNTIME_STRINGS[runtimeLocale()];
@@ -444,15 +429,18 @@
   function PRESENTER_CLIENT() {
     var strings = {};
     try {
-      strings = JSON.parse(document.body.getAttribute('data-ppt-strings') || '{}');
+      var parsed = JSON.parse(document.body.getAttribute('data-ppt-strings') || '{}');
+      if (parsed && typeof parsed === 'object') strings = parsed;
     } catch (error) {
       strings = {};
     }
     function label(key, fallback) {
-      return strings[key] || fallback;
+      return typeof strings[key] === 'string' && strings[key] ? strings[key] : fallback;
     }
     function pageText(pageIndex, total) {
-      return label('page', '{index} / {total}')
+      var format = label('page', '');
+      if (!format) return String(pageIndex) + ' / ' + String(total);
+      return format
         .replace('{index}', String(pageIndex))
         .replace('{total}', String(total));
     }

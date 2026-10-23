@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 import { RUNTIME_SOURCE } from '../packages/runtime/dist/index.js';
 import { serveHtml } from './helpers';
 
-const localeDeck = (runtime: string) => `<!doctype html>
-<html lang="en">
+const localeDeck = (runtime: string, htmlAttributes = 'lang="en"') => `<!doctype html>
+<html ${htmlAttributes}>
 <head>
   <meta charset="utf-8">
   <title>Locale deck</title>
@@ -61,21 +61,51 @@ test.describe('runtime locale', () => {
     await expect(page.getByTestId('runtime-page')).toHaveText('1 / 2');
   });
 
-  test('data-ppt-locale overrides the browser language', async ({ page }) => {
-    await page.addInitScript(() => {
-      // Init scripts run before the parser creates <html>, so stamp the
-      // override as soon as the document element exists.
-      const apply = () => {
-        if (!document.documentElement) return false;
-        document.documentElement.setAttribute('data-ppt-locale', 'zh-Hant');
-        return true;
-      };
-      if (apply()) return;
-      const observer = new MutationObserver(() => {
-        if (apply()) observer.disconnect();
+  test('localizes the presenter view and its last-slide placeholder', async ({
+    page
+  }) => {
+    await page.goto(server.url);
+    const popupPromise = page.waitForEvent('popup');
+    await page.keyboard.press('p');
+    const presenter = await popupPromise;
+    await expect(presenter).toHaveTitle('Presenter view');
+    await expect(presenter.locator('h1')).toHaveText('Presenter view');
+    await expect(presenter.getByTestId('presenter-status')).toHaveText(
+      'Connected'
+    );
+    await expect(presenter.getByTestId('presenter-page')).toHaveText('1 / 2');
+    await expect(presenter.getByTestId('presenter-notes')).toHaveText(
+      'No notes for this slide.'
+    );
+
+    await page.keyboard.press('End');
+    await expect(presenter.getByTestId('presenter-page')).toHaveText('2 / 2');
+    await expect(presenter.getByTestId('presenter-next-preview')).toHaveText(
+      '(Last slide)'
+    );
+  });
+
+  test('localizes the blocked-fullscreen notice in English', async ({
+    page
+  }) => {
+    await page.goto(server.url);
+    await page.evaluate(() => {
+      Object.defineProperty(document.documentElement, 'requestFullscreen', {
+        configurable: true,
+        value: () => Promise.reject(new Error('denied'))
       });
-      observer.observe(document, { childList: true, subtree: true });
     });
+    await page.keyboard.press('f');
+    await expect(page.getByTestId('runtime-notice')).toHaveText(
+      'Fullscreen was blocked. Press F11.'
+    );
+  });
+
+  test('data-ppt-locale overrides the browser language', async ({ page }) => {
+    await server.close();
+    server = await serveHtml(
+      localeDeck(RUNTIME_SOURCE, 'lang="en" data-ppt-locale="zh-Hant"')
+    );
     await page.goto(server.url);
     await expect(page.getByTestId('runtime-prev')).toHaveAttribute(
       'aria-label',
