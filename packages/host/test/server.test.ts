@@ -526,6 +526,65 @@ describe('host', () => {
     expect(response.status).toBe(200);
   });
 
+  it('accepts the session cookie for API reads and writes', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const deck = await fetch(`${ctx.base}/api/deck`, {
+      headers: { cookie }
+    });
+    expect(deck.status).toBe(200);
+    expect(await deck.json()).toMatchObject({
+      filePath: ctx.deckPath,
+      revision: ctx.revision
+    });
+
+    const health = await fetch(`${ctx.base}/api/health`, {
+      headers: { cookie }
+    });
+    expect(health.status).toBe(200);
+
+    const save = await fetch(`${ctx.base}/api/deck`, {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        html: ctx.deckHtml,
+        baseRevision: ctx.revision
+      })
+    });
+    expect(save.status).toBe(200);
+  });
+
+  it('rejects cookie authentication from a foreign origin', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await fetch(`${ctx.base}/api/deck`, {
+      headers: { cookie, origin: 'http://evil.example' }
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'forbidden origin' });
+  });
+
+  it('accepts the session cookie for the event stream', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await fetch(`${ctx.base}/api/events`, {
+      headers: { cookie }
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Expected an SSE response body.');
+    }
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('event: hello');
+    await reader.cancel();
+  });
+
   it('requires a bearer token for health', async () => {
     const ctx = await setup();
 

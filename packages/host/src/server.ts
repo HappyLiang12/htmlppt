@@ -353,7 +353,12 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     const queryToken = allowsQueryToken
       ? new URL(c.req.url).searchParams.get('token') ?? ''
       : '';
-    if (bearer !== options.token && queryToken !== options.token) {
+    const cookieToken = readCookie(c.req.header('cookie'), TOKEN_COOKIE);
+    if (
+      bearer !== options.token &&
+      queryToken !== options.token &&
+      cookieToken !== options.token
+    ) {
       return c.json({ error: 'unauthorized' }, 401);
     }
 
