@@ -82,9 +82,10 @@ export async function resolveExportDirectory(
         await realpath(existing),
         ...missing.reverse()
       );
-      return isInside(canonicalRoot, canonicalCandidate)
-        ? canonicalCandidate
-        : null;
+      // Keep the authored spelling after the canonical check: Windows can
+      // expose the same directory as both `RUNNER~1` and `runneradmin`, and a
+      // canonicalized outDir would no longer share the deck's prefix.
+      return isInside(canonicalRoot, canonicalCandidate) ? target : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error;
