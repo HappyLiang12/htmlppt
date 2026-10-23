@@ -1,5 +1,6 @@
 import { watchFile, unwatchFile } from 'node:fs';
 import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -18,12 +19,19 @@ import {
 } from '@htmlppt/renderer';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { OpenPathError, resolveDeckPath } from './open-path.js';
+import { readSession, sessionKey, sessionsDirectory } from './sessions.js';
 
 export interface HostOptions {
   filePath: string;
   token: string;
   editorDir: string;
   port?: number;
+  onDeckOpened?: (event: {
+    previousPath: string;
+    path: string;
+    revision: string;
+  }) => Promise<void> | void;
 }
 
 export type RevisionSource = 'editor' | 'external' | 'mcp';
@@ -106,6 +114,10 @@ function tokenCookie(token: string): string {
 
 function friendlyDeckPath(filePath: string): string {
   return `/d/${encodeURIComponent(path.basename(filePath))}`;
+}
+
+function sessionBootstrapUrl(session: { port: number; token: string }): string {
+  return `http://127.0.0.1:${session.port}/?token=${encodeURIComponent(session.token)}`;
 }
 
 function queryWithoutToken(url: URL): string {
@@ -259,6 +271,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   }
 
   const initial = await readDeckFile(options.filePath);
+  let filePath = options.filePath;
   let html = initial.html;
   let revision = initial.hash;
   let port = 0;
@@ -326,7 +339,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
    * our own writes update the cache before releasing the save lock.
    */
   async function syncFromDisk(): Promise<void> {
-    const snapshot = await readDeckFile(options.filePath);
+    const snapshot = await readDeckFile(filePath);
     if (snapshot.hash === revision) {
       return;
     }
@@ -381,7 +394,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   function deckUnreadable(): { error: string; message: string } {
     return {
       error: 'deck-unreadable',
-      message: `Could not read ${options.filePath}. Restore the deck file or stop the host with "htmlppt stop".`
+      message: `Could not read ${filePath}. Restore the deck file or stop the host with "htmlppt stop".`
     };
   }
 
@@ -419,7 +432,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       ok: true,
       revision,
       version: HOST_VERSION,
-      filePath: options.filePath
+      filePath
     });
   });
 
@@ -433,7 +446,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         }
         throw error;
       }
-      return c.json({ html, revision, filePath: options.filePath });
+      return c.json({ html, revision, filePath });
     });
   });
 
@@ -487,7 +500,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       let writtenHash: string;
       try {
         const written = await writeDeckFileAtomic(
-          options.filePath,
+          filePath,
           nextHtml,
           forced ? undefined : revision
         );
@@ -518,6 +531,160 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         broadcast('revision', { revision, source });
       }
       return c.json({ revision });
+    });
+  });
+
+  const openBodyLimit = bodyLimit({
+    maxSize: 64 * 1024,
+    onError: (c) =>
+      c.json(
+        {
+          error: 'payload-too-large',
+          message: 'Open requests are limited to 64 KiB.'
+        },
+        413
+      )
+  });
+
+  app.post('/api/open', openBodyLimit, async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid-path', message: 'Invalid JSON.' }, 400);
+    }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json(
+        { error: 'invalid-path', message: 'A path is required.' },
+        400
+      );
+    }
+    const requested = (body as { path?: unknown }).path;
+    if (typeof requested !== 'string' || requested.trim() === '') {
+      return c.json(
+        { error: 'invalid-path', message: 'A path is required.' },
+        400
+      );
+    }
+
+    return withSaveLock(async () => {
+      let target: string;
+      try {
+        target = await resolveDeckPath(requested, process.cwd(), homedir());
+      } catch (error) {
+        if (error instanceof OpenPathError) {
+          const status =
+            error.code === 'not-found'
+              ? 404
+              : error.code === 'unsupported-extension'
+                ? 422
+                : 400;
+          return c.json({ error: error.code, message: error.message }, status);
+        }
+        throw error;
+      }
+
+      if (target === (await realpath(filePath).catch(() => filePath))) {
+        return c.json({
+          html,
+          revision,
+          filePath,
+          url: friendlyDeckPath(filePath)
+        });
+      }
+
+      const existing = await readSession(
+        path.join(sessionsDirectory(), `${sessionKey(target)}.json`)
+      );
+      if (existing && existing.port !== port) {
+        return c.json(
+          {
+            error: 'deck-already-open',
+            message: 'This deck is already open in another host.',
+            url: sessionBootstrapUrl(existing)
+          },
+          409
+        );
+      }
+
+      let snapshot: Awaited<ReturnType<typeof readDeckFile>>;
+      try {
+        snapshot = await readDeckFile(target);
+      } catch (error) {
+        if (isUnreadable(error)) {
+          const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+          return c.json(
+            {
+              error: missing ? 'not-found' : 'deck-unreadable',
+              message: `Could not read ${target}.`
+            },
+            missing ? 404 : 500
+          );
+        }
+        throw error;
+      }
+
+      let document: Document;
+      try {
+        document = parseDeckHtml(snapshot.html);
+      } catch {
+        return c.json(
+          { error: 'invalid-deck', message: 'The file is not valid HTML.' },
+          422
+        );
+      }
+      const validation = validateDeck(document);
+      if (!validation.valid) {
+        return c.json(
+          {
+            error: 'invalid-deck',
+            message: validation.errors
+              .map((diagnostic) => diagnostic.message)
+              .join(' ')
+          },
+          422
+        );
+      }
+
+      const previousPath = filePath;
+      unwatchFile(filePath, onFileChange);
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = undefined;
+      }
+      filePath = target;
+      html = snapshot.html;
+      revision = snapshot.hash;
+      history.length = 0;
+      history.push({
+        revision,
+        html,
+        at: new Date().toISOString(),
+        source: 'external'
+      });
+      watchFile(filePath, { interval: WATCH_INTERVAL_MS }, onFileChange);
+      broadcast('revision', { revision, source: 'external' });
+
+      try {
+        await options.onDeckOpened?.({
+          previousPath,
+          path: filePath,
+          revision
+        });
+      } catch (error) {
+        console.error(
+          `Failed to move the session registry: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+
+      return c.json({
+        html,
+        revision,
+        filePath,
+        url: friendlyDeckPath(filePath)
+      });
     });
   });
 
@@ -560,7 +727,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         }
         throw error;
       }
-      return { html, filePath: options.filePath };
+      return { html, filePath };
     });
     if (!snapshot) {
       return c.json(deckUnreadable(), 500);
@@ -722,14 +889,14 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
   app.get('/', (c) => {
     const url = new URL(c.req.url);
     return c.redirect(
-      `${friendlyDeckPath(options.filePath)}${queryWithoutToken(url)}`,
+      `${friendlyDeckPath(filePath)}${queryWithoutToken(url)}`,
       302
     );
   });
 
   app.get('/d/:name', async (c) => {
     const url = new URL(c.req.url);
-    if (!matchesDeckName(c.req.param('name'), options.filePath)) {
+    if (!matchesDeckName(c.req.param('name'), filePath)) {
       return c.notFound();
     }
     if (url.searchParams.has('token')) {
@@ -784,7 +951,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     }, WATCH_DEBOUNCE_MS);
     syncTimer.unref();
   };
-  watchFile(options.filePath, { interval: WATCH_INTERVAL_MS }, onFileChange);
+  watchFile(filePath, { interval: WATCH_INTERVAL_MS }, onFileChange);
 
   return {
     url,
@@ -794,7 +961,7 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         return;
       }
       closed = true;
-      unwatchFile(options.filePath, onFileChange);
+      unwatchFile(filePath, onFileChange);
       if (syncTimer) {
         clearTimeout(syncTimer);
         syncTimer = undefined;

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { basename, join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
@@ -9,6 +9,7 @@ import {
   isAllowedOrigin,
   startHost
 } from '../src/server.js';
+import { writeSession } from '../src/sessions.js';
 
 interface Context {
   dir: string;
@@ -315,6 +316,32 @@ async function bootstrapCookie(ctx: Context): Promise<string> {
   expect(response.status).toBe(302);
   const setCookie = response.headers.get('set-cookie') ?? '';
   return setCookie.split(';')[0] ?? '';
+}
+
+async function addDeck(
+  ctx: Context,
+  name: string,
+  title: string
+): Promise<string> {
+  const source = ctx.deckHtml.replace(
+    /<h1[^>]*>.*?<\/h1>/s,
+    `<h1>${title}</h1>`
+  );
+  const target = join(ctx.dir, name);
+  await writeFile(target, source, 'utf8');
+  return target;
+}
+
+function openDeck(
+  ctx: Context,
+  cookie: string,
+  target: string
+): Promise<Response> {
+  return fetch(`${ctx.base}/api/open`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ path: target })
+  });
 }
 
 afterEach(async () => {
@@ -1040,6 +1067,209 @@ describe('host', () => {
       html: ctx.deckHtml,
       revision: ctx.revision
     });
+  });
+
+  it('opens another deck and rebinds the watcher, deck API, and SSE', async () => {
+    const ctx = await setup();
+    const nextPath = await addDeck(ctx, 'second.html', 'Second deck');
+    const cookie = await bootstrapCookie(ctx);
+    const events = await connectEvents(ctx);
+    try {
+      await events.next();
+      const response = await openDeck(ctx, cookie, nextPath);
+      expect(response.status).toBe(200);
+      const opened = (await response.json()) as {
+        html: string;
+        revision: string;
+        filePath: string;
+        url: string;
+      };
+      expect(opened.filePath).toBe(await realpath(nextPath));
+      expect(opened.url).toBe('/d/second.html');
+      expect(opened.html).toContain('Second deck');
+
+      const revisionEvent = await events.next();
+      expect(revisionEvent).toEqual({
+        event: 'revision',
+        data: { revision: opened.revision, source: 'external' }
+      });
+
+      const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+      expect(await deck.json()).toMatchObject({
+        filePath: await realpath(nextPath),
+        revision: opened.revision
+      });
+      const health = await fetch(`${ctx.base}/api/health`, {
+        headers: { cookie }
+      });
+      expect(await health.json()).toMatchObject({
+        filePath: await realpath(nextPath),
+        revision: opened.revision
+      });
+
+      const root = await fetch(`${ctx.base}/`, {
+        headers: { cookie },
+        redirect: 'manual'
+      });
+      expect(root.status).toBe(302);
+      expect(root.headers.get('location')).toBe('/d/second.html');
+    } finally {
+      await events.close();
+    }
+  });
+
+  it('keeps the old file unwatched after opening another deck', async () => {
+    const ctx = await setup();
+    const nextPath = await addDeck(ctx, 'second.html', 'Second deck');
+    const cookie = await bootstrapCookie(ctx);
+    // setup() already installed the host's single watcher, so a rebind must
+    // swap it rather than add a second one.
+    const before = countStatWatchers();
+
+    const open = await openDeck(ctx, cookie, nextPath);
+    expect(open.status).toBe(200);
+    expect(countStatWatchers()).toBe(before);
+
+    await writeFile(ctx.deckPath, `${ctx.deckHtml}\n<!-- old -->`, 'utf8');
+    const health = await fetch(`${ctx.base}/api/health`, {
+      headers: { cookie }
+    });
+    const afterOldWrite = (await health.json()) as { filePath: string };
+    expect(afterOldWrite.filePath).toBe(await realpath(nextPath));
+  });
+
+  it('no-ops when the requested deck is already current', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const response = await openDeck(ctx, cookie, ctx.deckPath);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      filePath: ctx.deckPath,
+      revision: ctx.revision
+    });
+  });
+
+  it('rejects invalid open requests without changing the deck', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    await writeFile(join(ctx.dir, 'notes.txt'), 'notes', 'utf8');
+    const statuses: Array<[string, number]> = [
+      ['missing.html', 404],
+      [ctx.dir, 422],
+      [join(ctx.dir, 'notes.txt'), 422]
+    ];
+    for (const [target, status] of statuses) {
+      const response = await openDeck(ctx, cookie, target);
+      expect(response.status, target).toBe(status);
+    }
+    const badDeck = join(ctx.dir, 'bad.html');
+    await writeFile(badDeck, '<!doctype html><p>not a deck</p>', 'utf8');
+    const invalid = await openDeck(ctx, cookie, badDeck);
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toMatchObject({ error: 'invalid-deck' });
+
+    const deck = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+    expect(await deck.json()).toMatchObject({
+      filePath: ctx.deckPath,
+      revision: ctx.revision
+    });
+  });
+
+  it('rejects a deck already served by another live host', async () => {
+    const ctx = await setup();
+    const home = await makeTempDir('htmlppt-home-');
+    const previousHome = process.env.HTMLPPT_HOME;
+    process.env.HTMLPPT_HOME = home;
+    const other = join(ctx.dir, 'shared.html');
+    await writeFile(other, ctx.deckHtml, 'utf8');
+    try {
+      await writeSession({
+        path: await realpath(other),
+        port: ctx.host.port + 1,
+        token: 'other-token',
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: ctx.revision
+      });
+      const cookie = await bootstrapCookie(ctx);
+
+      const response = await openDeck(ctx, cookie, other);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: 'deck-already-open',
+        url: `http://127.0.0.1:${ctx.host.port + 1}/?token=other-token`
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HTMLPPT_HOME;
+      } else {
+        process.env.HTMLPPT_HOME = previousHome;
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the opened deck through onDeckOpened', async () => {
+    const dir = await makeTempDir('htmlppt-host-callback-');
+    let host: Awaited<ReturnType<typeof startHost>> | undefined;
+    try {
+      const editorDir = join(dir, 'editor');
+      await mkdir(editorDir);
+      await writeFile(
+        join(editorDir, 'index.html'),
+        '<!doctype html><div id="root">editor-shell</div>',
+        'utf8'
+      );
+      const deckPath = await realpath(await copyFixture('basic.deck.html', dir));
+      const deckHtml = await readFile(deckPath, 'utf8');
+      const nextPath = join(dir, 'callback.html');
+      await writeFile(
+        nextPath,
+        deckHtml.replace(/<h1[^>]*>.*?<\/h1>/s, '<h1>Callback deck</h1>'),
+        'utf8'
+      );
+      const token = randomUUID();
+      const opened: Array<{
+        previousPath: string;
+        path: string;
+        revision: string;
+      }> = [];
+      host = await startHost({
+        filePath: deckPath,
+        token,
+        editorDir,
+        port: 0,
+        onDeckOpened: (event) => {
+          opened.push(event);
+        }
+      });
+      const base = new URL(host.url).origin;
+
+      const response = await fetch(`${base}/api/open`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ path: nextPath })
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { revision: string };
+      expect(opened).toEqual([
+        {
+          previousPath: deckPath,
+          path: await realpath(nextPath),
+          revision: body.revision
+        }
+      ]);
+    } finally {
+      await host?.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects a null JSON body', async () => {
