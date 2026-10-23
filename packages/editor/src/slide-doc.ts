@@ -96,11 +96,14 @@ function findFrameSlide(
   slide: SlideInfo,
   frameDocument: Document
 ): Element | null {
+  // A reloading iframe can expose a document before its body exists.
+  const body = frameDocument.body as HTMLElement | null;
+  if (!body) return null;
   if (slide.element.tagName === 'BODY') {
-    return frameDocument.body;
+    return body;
   }
   if (!frameSlideToken) return null;
-  const candidate = frameDocument.body.querySelector(
+  const candidate = body.querySelector(
     `[${FRAME_SLIDE_ATTRIBUTE}="${frameSlideToken}"]`
   );
   return candidate?.tagName === slide.element.tagName ? candidate : null;
