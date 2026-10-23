@@ -768,7 +768,11 @@ describe('createDeckService', () => {
       expect(payload.revision).toBe(result.revision);
       expect(await events.next()).toEqual({
         event: 'revision',
-        data: { revision: result.revision, source: 'mcp' }
+        data: {
+          revision: result.revision,
+          source: 'mcp',
+          filePath: deckPath
+        }
       });
     } finally {
       await events.close();

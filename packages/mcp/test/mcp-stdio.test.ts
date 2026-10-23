@@ -1674,7 +1674,7 @@ describe('htmlppt MCP stdio server', () => {
       expect(await deckResponse.json()).toMatchObject({ revision });
       expect(await events.next()).toEqual({
         event: 'revision',
-        data: { revision, source: 'mcp' }
+        data: { revision, source: 'mcp', filePath: deckPath }
       });
 
       await events.close();
@@ -1808,7 +1808,7 @@ describe('htmlppt MCP stdio server', () => {
         expect(await deckResponse.json()).toMatchObject({ revision });
         expect(await events.next()).toEqual({
           event: 'revision',
-          data: { revision, source: 'mcp' }
+          data: { revision, source: 'mcp', filePath: deckPath }
         });
       }
 
@@ -1953,7 +1953,11 @@ describe('htmlppt MCP stdio server', () => {
       expect(typeof tableRevision).toBe('string');
       expect(await events.next()).toEqual({
         event: 'revision',
-        data: { revision: tableRevision, source: 'mcp' }
+        data: {
+          revision: tableRevision,
+          source: 'mcp',
+          filePath: deckPath
+        }
       });
 
       // Changing the deck outside the MCP server invalidates the revision it

@@ -341,10 +341,14 @@ export function useDeckController(
           if (cause instanceof DeckConflictError) {
             // Never retry a conflict: the banner offers reload or overwrite.
             autosaveRef.current?.cancel();
+            // A pathless 409 (for example a non-JSON proxy response) must not
+            // drop a switched-deck marker recorded by an earlier event.
+            const conflictFilePath =
+              cause.filePath ?? stateRef.current.conflict?.filePath;
             update({
               conflict: {
                 revision: cause.revision,
-                ...(cause.filePath ? { filePath: cause.filePath } : {})
+                ...(conflictFilePath ? { filePath: conflictFilePath } : {})
               },
               status: 'conflict',
               error: ''

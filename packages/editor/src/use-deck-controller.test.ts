@@ -1,7 +1,11 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { DeckPersistence, DeckResponse } from './api.js';
+import {
+  DeckConflictError,
+  type DeckPersistence,
+  type DeckResponse
+} from './api.js';
 import { parseDeck } from './slide-doc.js';
 import {
   hasEditorArtifacts,
@@ -644,5 +648,49 @@ describe('useDeckController', () => {
     expect(controller.state.error).toBe(
       '主機已切換到另一個檔案；只能重新載入。'
     );
+  });
+
+  it('keeps a switched deck path when a later save 409 has no filePath', async () => {
+    // The tab does not know its loaded path here, so the overwrite guard
+    // cannot recognise the switch and the save-conflict branch is the only
+    // place left to preserve the deck the host named.
+    await act(async () => {
+      await controller.actions.load({ ...DECK, filePath: '' });
+    });
+    act(() => {
+      controller.actions.applySlideMutation(0, (slide) => {
+        const heading = slide.querySelector('h1');
+        if (!heading) throw new Error('Missing heading.');
+        heading.textContent = 'Local edit';
+      });
+      controller.actions.receiveRevision({
+        type: 'revision',
+        revision: 'revision-other',
+        source: 'external',
+        filePath: 'other.html'
+      });
+    });
+    expect(controller.state.conflict).toEqual({
+      revision: 'revision-other',
+      source: 'external',
+      filePath: 'other.html'
+    });
+
+    // A non-JSON 409 has no revision or path, so the switched marker must
+    // survive from the conflict already on screen.
+    persistence.save = async (_html, _baseRevision, options) => {
+      saveCalls.push(options ?? {});
+      throw new DeckConflictError('');
+    };
+    await act(async () => {
+      await controller.actions.overwrite();
+    });
+
+    expect(saveCalls).toEqual([{ force: true }]);
+    expect(controller.state.conflict).toEqual({
+      revision: '',
+      filePath: 'other.html'
+    });
+    expect(controller.state.status).toBe('conflict');
   });
 });
