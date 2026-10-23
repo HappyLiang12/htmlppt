@@ -11,6 +11,8 @@ export { findChromium } from './chromium.js';
 export type { ChromiumLocation } from './chromium.js';
 
 const DEADLINE_MS = 12000;
+// Cold starts on hosted Windows runners can exceed the page-operation budget.
+const LAUNCH_TIMEOUT_MS = 30000;
 
 export class RendererUnavailableError extends Error {
   constructor() {
@@ -87,7 +89,7 @@ async function withPage<T>(options: RenderOptions, format: 'pdf' | 'png', action
   let page: Page | undefined;
   let origin: Awaited<ReturnType<typeof createSandboxOrigin>> | undefined;
   try {
-    browser = await chromium.launch({ executablePath: found.executablePath, headless: true, chromiumSandbox: true, timeout: DEADLINE_MS });
+    browser = await chromium.launch({ executablePath: found.executablePath, headless: true, chromiumSandbox: true, timeout: LAUNCH_TIMEOUT_MS });
     context = await browser.newContext({
       javaScriptEnabled: false, serviceWorkers: 'block', acceptDownloads: false,
       viewport: { width: Math.ceil(options.width), height: Math.ceil(options.height) },
