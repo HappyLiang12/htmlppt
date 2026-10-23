@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   detectLocale,
   LocaleProvider,
-  LOCALE_STORAGE_KEY,
   resolveInitialLocale,
   useI18n,
   type Locale,
@@ -47,13 +46,19 @@ async function renderProvider(initialLocale?: Locale): Promise<void> {
 describe('detectLocale', () => {
   it.each([
     ['zh-TW', 'zh-Hant'],
+    ['ZH-TW', 'zh-Hant'],
     ['zh-HK', 'zh-Hant'],
     ['zh-MO', 'zh-Hant'],
     ['zh-Hant-CN', 'zh-Hant'],
+    ['zh-Hant-TW', 'zh-Hant'],
     ['zh-CN', 'zh-Hans'],
     ['zh-SG', 'zh-Hans'],
     ['zh-Hans', 'zh-Hans'],
+    ['zh-Hans-TW', 'zh-Hans'],
     ['zh', 'zh-Hans'],
+    ['zh-twx', 'zh-Hans'],
+    ['zh-hantish', 'zh-Hans'],
+    ['zhx', 'en'],
     ['en-US', 'en'],
     ['en', 'en'],
     ['fr-FR', 'en']
@@ -63,9 +68,18 @@ describe('detectLocale', () => {
 });
 
 describe('resolveInitialLocale', () => {
-  it('uses a valid stored locale', () => {
-    expect(resolveInitialLocale({ getItem: () => 'zh-Hans' })).toBe('zh-Hans');
+  it('reads the literal htmlppt.locale storage key', () => {
+    const getItem = vi.fn(() => null);
+    resolveInitialLocale({ getItem });
+    expect(getItem).toHaveBeenCalledWith('htmlppt.locale');
   });
+
+  it.each(['en', 'zh-Hant', 'zh-Hans'] as const)(
+    'uses a valid stored %s locale',
+    (stored) => {
+      expect(resolveInitialLocale({ getItem: () => stored })).toBe(stored);
+    }
+  );
 
   it('falls back to detection for a missing or invalid value', () => {
     expect(resolveInitialLocale({ getItem: () => null })).toBe(
@@ -137,12 +151,30 @@ describe('LocaleProvider', () => {
     expect(current.t('common.close')).toBe('關閉');
   });
 
-  it('restores a valid stored locale when no initial locale is given', async () => {
-    localStorage.setItem(LOCALE_STORAGE_KEY, 'zh-Hans');
+  it.each([
+    ['en', 'Close'],
+    ['zh-Hant', '關閉'],
+    ['zh-Hans', '关闭']
+  ] as const)(
+    'restores a valid stored %s locale when no initial locale is given',
+    async (stored, close) => {
+      localStorage.setItem('htmlppt.locale', stored);
+      await renderProvider();
+      expect(current.locale).toBe(stored);
+      expect(document.documentElement.lang).toBe(stored);
+      expect(current.t('common.close')).toBe(close);
+    }
+  );
+
+  it('does not write storage during initial detection', async () => {
+    const setItem = vi.fn();
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem,
+      clear: () => undefined
+    });
     await renderProvider();
-    expect(current.locale).toBe('zh-Hans');
-    expect(document.documentElement.lang).toBe('zh-Hans');
-    expect(current.t('common.close')).toBe('关闭');
+    expect(setItem).not.toHaveBeenCalled();
   });
 
   it('persists setLocale and updates the document language', async () => {
@@ -153,7 +185,24 @@ describe('LocaleProvider', () => {
     expect(current.locale).toBe('zh-Hant');
     expect(current.t('common.close')).toBe('關閉');
     expect(document.documentElement.lang).toBe('zh-Hant');
-    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('zh-Hant');
+    expect(localStorage.getItem('htmlppt.locale')).toBe('zh-Hant');
+  });
+
+  it('still switches locales when setItem throws', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('storage blocked');
+      },
+      clear: () => undefined
+    });
+    await renderProvider('en');
+    await act(async () => {
+      current.setLocale('zh-Hans');
+    });
+    expect(current.locale).toBe('zh-Hans');
+    expect(document.documentElement.lang).toBe('zh-Hans');
+    expect(current.t('common.close')).toBe('关闭');
   });
 
   it('still renders and switches when localStorage is unavailable', async () => {
@@ -193,4 +242,13 @@ describe('LocaleProvider', () => {
     await renderProvider('en');
     expect(current.t('common.missing' as MessageKey)).toBe('common.missing');
   });
+
+  it.each(['toString', 'constructor', '__proto__'] as const)(
+    'returns the key for inherited object member %s',
+    async (key) => {
+      await renderProvider('zh-Hant');
+      expect(current.t(key as MessageKey)).toBe(key);
+      expect(current.t(key as MessageKey, { count: 1 })).toBe(key);
+    }
+  );
 });

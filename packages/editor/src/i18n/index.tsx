@@ -36,18 +36,20 @@ function isLocale(value: string): value is Locale {
 
 export function detectLocale(language: string): Locale {
   const value = language.toLowerCase();
-  if (value.startsWith('zh')) {
-    if (
-      value.startsWith('zh-tw') ||
-      value.startsWith('zh-hk') ||
-      value.startsWith('zh-mo') ||
-      value.includes('hant')
-    ) {
-      return 'zh-Hant';
-    }
+  const subtags = value.split('-');
+  if (subtags[0] !== 'zh') {
+    return 'en';
+  }
+  if (subtags.includes('hant')) {
+    return 'zh-Hant';
+  }
+  if (subtags.includes('hans')) {
     return 'zh-Hans';
   }
-  return 'en';
+  if (value === 'zh-tw' || value === 'zh-hk' || value === 'zh-mo') {
+    return 'zh-Hant';
+  }
+  return 'zh-Hans';
 }
 
 function defaultStorage(): Pick<Storage, 'getItem'> | undefined {
@@ -76,6 +78,15 @@ export function resolveInitialLocale(
   return detectLocale(
     typeof navigator === 'undefined' ? 'en' : navigator.language
   );
+}
+
+function ownMessage(
+  dictionary: Record<MessageKey, string>,
+  key: MessageKey
+): string | undefined {
+  return Object.prototype.hasOwnProperty.call(dictionary, key)
+    ? dictionary[key]
+    : undefined;
 }
 
 function interpolate(
@@ -125,7 +136,11 @@ export function LocaleProvider({
   }, [locale]);
 
   const t = useCallback<Translator>(
-    (key, vars) => interpolate(DICTIONARIES[locale][key] ?? en[key] ?? key, vars),
+    (key, vars) =>
+      interpolate(
+        ownMessage(DICTIONARIES[locale], key) ?? ownMessage(en, key) ?? key,
+        vars
+      ),
     [locale]
   );
 
