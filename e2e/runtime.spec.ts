@@ -30,6 +30,35 @@ const authoredDisplayDeck = (runtime: string) => `<!doctype html>
 </body>
 </html>`;
 
+interface SizedSlide {
+  id: string;
+  width: number;
+  height: number;
+}
+
+const sizedDeck = (runtime: string, slides: SizedSlide[]) => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sized deck</title>
+  <style>
+    body { margin: 0; background: #101014; }
+    .slide { background: #fff; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    ${slides
+      .map(
+        (slide) =>
+          `<section class="slide" data-slide-id="${slide.id}" data-width="${slide.width}" data-height="${slide.height}" style="width: ${slide.width}px; height: ${slide.height}px"><h1>${slide.id}</h1></section>`
+      )
+      .join('\n    ')}
+  </main>
+  <script data-ppt-runtime="1">${runtime}</script>
+</body>
+</html>`;
+
 const readDisplay = (element: unknown) => {
   const scope = element as {
     ownerDocument: {
@@ -214,6 +243,180 @@ test.describe('presentation runtime', () => {
       }
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('fits a 16:9 slide into a 4:3 viewport with letterboxing', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [{ id: 's1', width: 1600, height: 900 }])
+    );
+    try {
+      await page.goto(server.url);
+      const box = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.width).toBeCloseTo(1024, 0);
+      expect(box?.height).toBeCloseTo(576, 0);
+      expect(box?.x).toBeCloseTo(0, 0);
+      expect(box?.y).toBeCloseTo(96, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('fits a slide whose size only comes from CSS', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const html = sizedDeck(RUNTIME_SOURCE, [
+      { id: 's1', width: 1600, height: 900 }
+    ]).replace(' data-width="1600" data-height="900"', '');
+    expect(html).toContain('<section class="slide" data-slide-id="s1" style=');
+    const server = await serveHtml(html);
+    try {
+      await page.goto(server.url);
+      const box = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(box?.width).toBeCloseTo(1024, 0);
+      expect(box?.height).toBeCloseTo(576, 0);
+      expect(box?.y).toBeCloseTo(96, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('fits a 4:3 slide into a 16:9 viewport with pillarboxing', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [{ id: 's1', width: 800, height: 600 }])
+    );
+    try {
+      await page.goto(server.url);
+      const box = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.width).toBeCloseTo(960, 0);
+      expect(box?.height).toBeCloseTo(720, 0);
+      expect(box?.x).toBeCloseTo(160, 0);
+      expect(box?.y).toBeCloseTo(0, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('refits the active slide when the viewport resizes', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [{ id: 's1', width: 1600, height: 900 }])
+    );
+    try {
+      await page.goto(server.url);
+      const wide = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(wide?.width).toBeCloseTo(1280, 0);
+      expect(wide?.height).toBeCloseTo(720, 0);
+
+      await page.setViewportSize({ width: 800, height: 600 });
+      const tall = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(tall?.width).toBeCloseTo(800, 0);
+      expect(tall?.height).toBeCloseTo(450, 0);
+      expect(tall?.y).toBeCloseTo(75, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('uses each slide aspect ratio while navigating', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [
+        { id: 's1', width: 1600, height: 900 },
+        { id: 's2', width: 800, height: 600 }
+      ])
+    );
+    try {
+      await page.goto(server.url);
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await page.keyboard.press('ArrowRight');
+      await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+      const box = await page.locator('[data-slide-id="s2"]').boundingBox();
+      expect(box?.width).toBeCloseTo(960, 0);
+      expect(box?.height).toBeCloseTo(720, 0);
+      expect(box?.x).toBeCloseTo(160, 0);
+      expect(box?.y).toBeCloseTo(0, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('offers pagination controls that advance exactly one slide', { tag: '@feature:runtime' }, async ({ page }) => {
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [
+        { id: 's1', width: 1600, height: 900 },
+        { id: 's2', width: 1600, height: 900 },
+        { id: 's3', width: 1600, height: 900 }
+      ])
+    );
+    try {
+      await page.goto(server.url);
+      const controls = page.locator('[data-testid="runtime-controls"]');
+      const previous = page.locator('[data-testid="runtime-prev"]');
+      const next = page.locator('[data-testid="runtime-next"]');
+      const indicator = page.locator('[data-testid="runtime-page"]');
+      await expect(controls).toBeVisible();
+      await expect(indicator).toHaveText('1 / 3');
+      await expect(previous).toBeDisabled();
+      await expect(next).toBeEnabled();
+
+      await next.click();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+      await expect(indicator).toHaveText('2 / 3');
+      expect(page.url()).toContain('#/2');
+      await expect(previous).toBeEnabled();
+
+      await previous.click();
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(indicator).toHaveText('1 / 3');
+      expect(page.url()).toContain('#/1');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('hides pagination controls for a single slide deck', { tag: '@feature:runtime' }, async ({ page }) => {
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [{ id: 's1', width: 1600, height: 900 }])
+    );
+    try {
+      await page.goto(server.url);
+      await expect(page.locator('[data-testid="runtime-controls"]')).toBeHidden();
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('removes fit transforms and controls while printing', { tag: '@feature:runtime' }, async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const server = await serveHtml(
+      sizedDeck(RUNTIME_SOURCE, [
+        { id: 's1', width: 1600, height: 900 },
+        { id: 's2', width: 1600, height: 900 }
+      ])
+    );
+    try {
+      await page.goto(server.url);
+      await page.emulateMedia({ media: 'print' });
+      await page.evaluate("window.dispatchEvent(new Event('beforeprint'))");
+      await expect(page.locator('[data-slide-id="s1"]')).toBeVisible();
+      await expect(page.locator('[data-slide-id="s2"]')).toBeVisible();
+      await expect(page.locator('[data-testid="runtime-controls"]')).toBeHidden();
+      const printBox = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(printBox?.width).toBeCloseTo(1600, 0);
+      expect(printBox?.height).toBeCloseTo(900, 0);
+
+      await page.evaluate("window.dispatchEvent(new Event('afterprint'))");
+      await page.emulateMedia({ media: 'screen' });
+      await expect(page.locator('[data-testid="runtime-controls"]')).toBeVisible();
+      const screenBox = await page.locator('[data-slide-id="s1"]').boundingBox();
+      expect(screenBox?.width).toBeCloseTo(1024, 0);
+      expect(screenBox?.height).toBeCloseTo(576, 0);
+    } finally {
+      await server.close();
     }
   });
 

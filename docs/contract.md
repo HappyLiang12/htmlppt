@@ -177,6 +177,13 @@ A standalone multi-slide deck needs exactly one runtime script:
   hash, and print styles. Noninteractive clicks advance. `F` toggles fullscreen
   and `P` opens a presenter window with notes, next-slide preview, and a timer.
   Links, buttons, form controls, and editable content keep their own behavior.
+- The active slide is scaled to fit the browser viewport with letterboxing,
+  using its `data-width`/`data-height` (falling back to its computed size).
+  Resizing the window refits it, and each slide keeps its own aspect ratio.
+  Screen scaling resets for print so exported pages keep their authored size.
+- Multi-slide decks get prev/next buttons and a page indicator pinned to the
+  bottom of the window. Single-slide decks get no controls, and controls are
+  hidden when printing. Control clicks never advance the deck.
 - Do not build layout with JavaScript. Scripts other than the runtime produce
   the `script-present` warning (JSON `application/json` and
   `application/ld+json` blocks are exempt) and never execute in the editor or

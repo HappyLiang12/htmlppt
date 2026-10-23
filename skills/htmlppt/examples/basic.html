@@ -65,12 +65,81 @@
   var index = 0;
   var runtimeStyle = 'data-ppt-runtime-style';
   var originalDisplay = slides.map(function (slide) { return slide.style.display; });
+  var sizes = slides.map(function (slide) { return measureSlide(slide); });
+  var controls = null;
+  var pageIndicator = null;
+  var previousButton = null;
+  var nextButton = null;
   var sessionId = createSessionId();
   var presentation = null;
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-ppt-deck]'), function (deck) {
     deck.setAttribute('data-ppt-ready', '1');
   });
+
+  document.documentElement.setAttribute('data-ppt-runtime-fit', '1');
+
+  function measureSlide(slide) {
+    return {
+      width: dimensionOf(slide, 'data-width', 'width', 1600),
+      height: dimensionOf(slide, 'data-height', 'height', 900)
+    };
+  }
+
+  function dimensionOf(slide, attribute, property, fallback) {
+    var value = Number(slide.getAttribute(attribute));
+    if (!(value > 0)) value = parseFloat(window.getComputedStyle(slide)[property]);
+    if (!(value > 0)) value = property === 'width' ? slide.offsetWidth : slide.offsetHeight;
+    return value > 0 ? value : fallback;
+  }
+
+  function layoutActiveSlide() {
+    var slide = slides[index];
+    if (!slide) return;
+    var size = sizes[index];
+    var viewportWidth = window.innerWidth || document.documentElement.clientWidth || size.width;
+    var viewportHeight = window.innerHeight || document.documentElement.clientHeight || size.height;
+    var scale = Math.min(viewportWidth / size.width, viewportHeight / size.height);
+    if (!(scale > 0) || !isFinite(scale)) scale = 1;
+    slide.style.setProperty('--ppt-fit-scale', String(scale));
+    slide.style.setProperty('--ppt-fit-left', (viewportWidth - size.width * scale) / 2 + 'px');
+    slide.style.setProperty('--ppt-fit-top', (viewportHeight - size.height * scale) / 2 + 'px');
+  }
+
+  function buildControls() {
+    if (slides.length < 2) return;
+    controls = document.createElement('div');
+    controls.setAttribute('data-ppt-runtime-controls', '1');
+    controls.setAttribute('data-testid', 'runtime-controls');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', '投影片導覽');
+    previousButton = document.createElement('button');
+    previousButton.type = 'button';
+    previousButton.setAttribute('data-testid', 'runtime-prev');
+    previousButton.setAttribute('aria-label', '上一頁');
+    previousButton.textContent = '上一頁';
+    pageIndicator = document.createElement('span');
+    pageIndicator.setAttribute('data-testid', 'runtime-page');
+    pageIndicator.setAttribute('aria-live', 'polite');
+    nextButton = document.createElement('button');
+    nextButton.type = 'button';
+    nextButton.setAttribute('data-testid', 'runtime-next');
+    nextButton.setAttribute('aria-label', '下一頁');
+    nextButton.textContent = '下一頁';
+    previousButton.addEventListener('click', function () { show(index - 1, true); });
+    nextButton.addEventListener('click', function () { show(index + 1, true); });
+    controls.appendChild(previousButton);
+    controls.appendChild(pageIndicator);
+    controls.appendChild(nextButton);
+    document.body.appendChild(controls);
+  }
+
+  function renderControls() {
+    if (!controls) return;
+    pageIndicator.textContent = (index + 1) + ' / ' + slides.length;
+    previousButton.disabled = index <= 0;
+    nextButton.disabled = index >= slides.length - 1;
+  }
 
   function createSessionId() {
     if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
@@ -102,6 +171,15 @@
       var role = element.getAttribute('role');
       if (role === 'button' || role === 'link') return true;
       if (element.isContentEditable) return true;
+      element = element.parentElement;
+    }
+    return false;
+  }
+
+  function isControl(target) {
+    var element = target;
+    while (element && element !== document.body) {
+      if (element.hasAttribute && element.hasAttribute('data-ppt-runtime-controls')) return true;
       element = element.parentElement;
     }
     return false;
@@ -143,6 +221,8 @@
     slides.forEach(function (slide, i) {
       slide.style.display = i === index ? originalDisplay[i] : 'none';
     });
+    layoutActiveSlide();
+    renderControls();
     if (changed && animate !== false) animateSlide(slides[index]);
     history.replaceState(null, '', '#/' + (index + 1));
     postState();
@@ -383,6 +463,7 @@
 
   function snapshotHtml() {
     var clone = document.documentElement.cloneNode(true);
+    clone.removeAttribute('data-ppt-runtime-fit');
     var copied = clone.querySelectorAll('[data-slide-id]');
     for (var i = 0; i < copied.length && i < originalDisplay.length; i += 1) {
       copied[i].style.display = originalDisplay[i];
@@ -499,9 +580,11 @@
   });
 
   document.addEventListener('click', function (event) {
-    if (event.defaultPrevented || isInteractive(event.target)) return;
+    if (event.defaultPrevented || isInteractive(event.target) || isControl(event.target)) return;
     show(index + 1, true);
   });
+
+  window.addEventListener('resize', layoutActiveSlide);
 
   window.addEventListener('hashchange', function () {
     var match = /#\/(\d+)/.exec(location.hash);
@@ -513,8 +596,18 @@
     style.setAttribute(runtimeStyle, '1');
     style.textContent = '@media print{[data-slide-id]{break-after:page;page-break-after:always}}' +
       '[data-ppt-notes]{display:none!important}' +
+      '@media screen{' +
+      'html[data-ppt-runtime-fit="1"],html[data-ppt-runtime-fit="1"] body{overflow:hidden}' +
+      'html[data-ppt-runtime-fit="1"] [data-slide-id]{position:fixed!important;left:var(--ppt-fit-left,0);top:var(--ppt-fit-top,0);margin:0!important;transform:scale(var(--ppt-fit-scale,1));transform-origin:top left}' +
+      '}' +
+      '[data-ppt-runtime-controls]{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147483646;display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.22);background:rgba(12,14,20,.72);color:#f4f4f5;font:13px/1.2 system-ui,sans-serif;backdrop-filter:blur(8px)}' +
+      '[data-ppt-runtime-controls] button{border:1px solid rgba(255,255,255,.28);background:transparent;color:inherit;font:inherit;padding:5px 12px;border-radius:999px;cursor:pointer}' +
+      '[data-ppt-runtime-controls] button:hover:not(:disabled){border-color:rgba(255,255,255,.6);background:rgba(255,255,255,.1)}' +
+      '[data-ppt-runtime-controls] button:disabled{opacity:.35;cursor:default}' +
+      '[data-ppt-runtime-controls] [data-testid="runtime-page"]{min-width:48px;text-align:center;font-variant-numeric:tabular-nums;color:rgba(244,244,245,.85)}' +
+      '@media print{[data-ppt-runtime-controls]{display:none!important}}' +
       '@keyframes htmlppt-runtime-fade{from{opacity:0}to{opacity:1}}' +
-      '@keyframes htmlppt-runtime-slide{from{opacity:.4;transform:translateX(6%)}to{opacity:1;transform:translateX(0)}}' +
+      '@keyframes htmlppt-runtime-slide{from{opacity:.4;translate:6% 0}to{opacity:1;translate:0 0}}' +
       '.htmlppt-runtime-fade{animation:htmlppt-runtime-fade 450ms ease-out}' +
       '.htmlppt-runtime-slide{animation:htmlppt-runtime-slide 450ms ease-out}' +
       '@media (prefers-reduced-motion: reduce){.htmlppt-runtime-fade,.htmlppt-runtime-slide{animation:none}}';
@@ -535,6 +628,8 @@
   window.addEventListener('pagehide', function () {
     closePresenter(true);
   });
+
+  buildControls();
 
   var initial = /#\/(\d+)/.exec(location.hash);
   show(initial ? Number(initial[1]) - 1 : 0, false);
