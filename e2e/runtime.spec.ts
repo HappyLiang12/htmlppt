@@ -312,10 +312,15 @@ test.describe('presentation runtime', () => {
       expect(wide?.height).toBeCloseTo(720, 0);
 
       await page.setViewportSize({ width: 800, height: 600 });
-      const tall = await page.locator('[data-slide-id="s1"]').boundingBox();
-      expect(tall?.width).toBeCloseTo(800, 0);
-      expect(tall?.height).toBeCloseTo(450, 0);
-      expect(tall?.y).toBeCloseTo(75, 0);
+      // setViewportSize resolves before the renderer dispatches its resize event.
+      await expect
+        .poll(async () => {
+          const box = await page.locator('[data-slide-id="s1"]').boundingBox();
+          return box === null
+            ? null
+            : [Math.round(box.width), Math.round(box.height), Math.round(box.y)];
+        })
+        .toEqual([800, 450, 75]);
     } finally {
       await server.close();
     }
