@@ -1,7 +1,8 @@
 # Editor URL, open-file, localization, and theming design
 
-Date: 2026-10-23
-Status: Approved in chat, pending spec review
+Date: 2026-10-24
+Status: URL/open/i18n approved in chat; light-mode decisions confirmed; final spec
+approval pending. No implementation starts before approval.
 
 ## Context
 
@@ -63,6 +64,8 @@ deck. It must stay. The fix is to hide it from the visible URL, not remove it.
   presenter, and runtime controls stay dark as described in Non-goals. This
   keeps arbitrary slide content untouched and avoids theming a stage that sits
   over authored colors.
+- Theme control: a three-segment Light/Dark/System control in the toolbar,
+  rather than a dropdown or a two-state toggle.
 
 ## 1. Friendly URL and cookie bootstrap
 
@@ -254,9 +257,11 @@ stated in Non-goals.
   script: it reads the stored mode, falls back to the media query, and sets
   `data-theme` to prevent a light flash before React mounts. The provider adopts
   the same value on first render instead of repainting.
-- The toolbar gets a compact three-state control next to the language menu with
-  `data-testid="theme-select"` and a localized `aria-label`. Options are
-  localized Light, Dark, and System labels.
+- The toolbar gets a three-segment Light/Dark/System control next to the
+  language menu. The group carries `data-testid="theme-select"` and a localized
+  `aria-label`; each button carries `data-testid="theme-light"`,
+  `"theme-dark"`, or `"theme-system"`, plus `aria-pressed` for the active mode.
+  Options are localized Light, Dark, and System labels.
 - The provider lives in `packages/editor/src/theme/` with `ThemeProvider`,
   `useTheme()`, and pure helpers for resolution and storage. It composes with
   `LocaleProvider`; the phase ordering keeps theme labels in the dictionaries
@@ -306,8 +311,10 @@ Theming E2E:
 - With `colorScheme: 'light'` and no stored preference, the chrome renders the
   light palette; with `'dark'` it renders the dark palette.
 - Choosing Light or Dark overrides emulated OS preference, updates
-  `data-theme` and `data-theme-mode`, and survives reload.
-- Choosing System resumes following `colorScheme` changes.
+  `data-theme` and `data-theme-mode`, marks the chosen segment with
+  `aria-pressed="true"`, and survives reload.
+- System is the default when storage is empty; choosing System resumes following
+  `colorScheme` changes.
 - Primary text against its surface meets a 4.5:1 contrast ratio in both
   palettes, and focus outlines remain visible.
 - A slide's computed text and background colors are identical in both themes.
