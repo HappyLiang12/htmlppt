@@ -15,6 +15,8 @@ afterEach(() => {
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.removeAttribute('data-theme-mode');
   document.documentElement.style.colorScheme = '';
+  vi.unstubAllGlobals();
+  localStorage.clear();
 });
 
 describe('theme helpers', () => {
@@ -56,7 +58,6 @@ describe('theme helpers', () => {
     vi.stubGlobal('localStorage', undefined);
     expect(() => readStoredTheme()).not.toThrow();
     expect(readStoredTheme()).toBe('system');
-    vi.unstubAllGlobals();
   });
 
   it('writes the resolved theme and color scheme', () => {
@@ -77,6 +78,8 @@ interface FakeMatchMedia {
   query: {
     matches: boolean;
     media: string;
+    addEventListener: ReturnType<typeof vi.fn>;
+    removeEventListener: ReturnType<typeof vi.fn>;
   };
   emit: (matches: boolean) => void;
   listenerCount: () => number;
@@ -121,6 +124,7 @@ type Theme = ReturnType<typeof useTheme>;
 let container: HTMLDivElement;
 let root: Root;
 let current: Theme;
+let renders: Theme[];
 let mounted: boolean;
 
 function Probe({ onRender }: { onRender: (value: Theme) => void }) {
@@ -138,6 +142,7 @@ async function renderThemeProvider(initialMode?: ThemeMode): Promise<void> {
         children: createElement(Probe, {
           onRender: (value) => {
             current = value;
+            renders.push(value);
           }
         })
       })
@@ -157,6 +162,7 @@ describe('ThemeProvider', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    renders = [];
   });
 
   afterEach(async () => {
@@ -167,11 +173,6 @@ describe('ThemeProvider', () => {
       mounted = false;
     }
     container.remove();
-    vi.unstubAllGlobals();
-    localStorage.clear();
-    document.documentElement.removeAttribute('data-theme');
-    document.documentElement.removeAttribute('data-theme-mode');
-    document.documentElement.style.colorScheme = '';
   });
 
   it('applies an explicit initial mode', async () => {
@@ -254,6 +255,42 @@ describe('ThemeProvider', () => {
     await renderThemeProvider('light');
     expect(media.listenerCount()).toBe(0);
     expect(current.resolved).toBe('light');
+  });
+
+  it('removes the system listener for an explicit mode and resyncs on return', async () => {
+    const media = installMatchMedia(false);
+    await renderThemeProvider('system');
+    expect(current.mode).toBe('system');
+    expect(current.resolved).toBe('light');
+    expect(media.listenerCount()).toBe(1);
+    expect(media.query.addEventListener).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      current.setMode('dark');
+    });
+    expect(current.mode).toBe('dark');
+    expect(current.resolved).toBe('dark');
+    expect(media.listenerCount()).toBe(0);
+    expect(media.query.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.themeMode).toBe('dark');
+
+    // The OS preference flips while an explicit mode suppresses it.
+    media.query.matches = true;
+    renders = [];
+
+    await act(async () => {
+      current.setMode('system');
+    });
+    expect(media.listenerCount()).toBe(1);
+    expect(media.query.addEventListener).toHaveBeenCalledTimes(2);
+    expect(current.mode).toBe('system');
+    expect(current.resolved).toBe('dark');
+    expect(renders[0].mode).toBe('system');
+    expect(renders[0].resolved).toBe('dark');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.themeMode).toBe('system');
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('system');
   });
 
   it('still renders and switches when localStorage is unavailable', async () => {

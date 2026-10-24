@@ -6,6 +6,15 @@
     <title>htmlppt</title>
     <script>
       (function () {
+        var presenter = false;
+        try {
+          presenter =
+            new URLSearchParams(location.search).get('presenter') === '1';
+        } catch (error) {
+          presenter = false;
+        }
+        if (presenter) return;
+
         var mode = 'system';
         try {
           var stored = localStorage.getItem('htmlppt.theme');
@@ -15,15 +24,28 @@
         } catch (error) {
           mode = 'system';
         }
-        var resolved =
-          mode === 'system'
-            ? window.matchMedia('(prefers-color-scheme: dark)').matches
-              ? 'dark'
-              : 'light'
-            : mode;
-        document.documentElement.dataset.theme = resolved;
-        document.documentElement.dataset.themeMode = mode;
-        document.documentElement.style.colorScheme = resolved;
+
+        var resolved = mode;
+        if (mode === 'system') {
+          var systemDark = true;
+          if (typeof window.matchMedia === 'function') {
+            try {
+              var query = window.matchMedia('(prefers-color-scheme: dark)');
+              systemDark = query.matches;
+            } catch (error) {
+              systemDark = true;
+            }
+          }
+          resolved = systemDark ? 'dark' : 'light';
+        }
+
+        try {
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.dataset.themeMode = mode;
+          document.documentElement.style.colorScheme = resolved;
+        } catch (error) {
+          // Pre-paint attributes are an enhancement; never block loading.
+        }
       })();
     </script>
   </head>

@@ -48,6 +48,11 @@ export function ThemeProvider({
 
   const setMode = useCallback((next: ThemeMode) => {
     if (!isThemeMode(next)) return;
+    if (next === 'system') {
+      // Refresh the OS preference in the same update so returning to system
+      // renders the current value instead of the last observed one.
+      setSystemDark(systemPrefersDark());
+    }
     setModeState(next);
     try {
       localStorage.setItem(THEME_STORAGE_KEY, next);
