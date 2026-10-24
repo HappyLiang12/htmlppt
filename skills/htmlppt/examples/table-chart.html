@@ -151,18 +151,14 @@
   function runtimeLocale() {
     var override = document.documentElement.getAttribute('data-ppt-locale');
     var value = String(override || navigator.language || 'en').toLowerCase();
-    if (value.indexOf('zh') === 0) {
-      if (
-        value === 'zh-tw' ||
-        value === 'zh-hk' ||
-        value === 'zh-mo' ||
-        value.indexOf('hant') !== -1
-      ) {
-        return 'zh-Hant';
-      }
-      return 'zh-Hans';
+    var subtags = value.split('-');
+    if (subtags[0] !== 'zh') return 'en';
+    if (subtags.indexOf('hant') !== -1) return 'zh-Hant';
+    if (subtags.indexOf('hans') !== -1) return 'zh-Hans';
+    if (value === 'zh-tw' || value === 'zh-hk' || value === 'zh-mo') {
+      return 'zh-Hant';
     }
-    return 'en';
+    return 'zh-Hans';
   }
 
   var strings = RUNTIME_STRINGS[runtimeLocale()];
@@ -396,6 +392,7 @@
 
   function buildPresenterWindow(win) {
     var doc = win.document;
+    doc.documentElement.lang = runtimeLocale();
     doc.title = strings.presenterTitle;
     while (doc.body.firstChild) doc.body.removeChild(doc.body.firstChild);
     doc.body.setAttribute('data-ppt-strings', JSON.stringify(strings));

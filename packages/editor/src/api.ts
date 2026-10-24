@@ -160,8 +160,9 @@ export async function openDeck(path: string): Promise<OpenDeckResponse> {
       response.status,
       typeof body.error === 'string' ? body.error : 'open-failed',
       // Never fall back to the raw body: a JSON error payload without a
-      // message would otherwise be shown to the user verbatim.
-      typeof body.message === 'string' ? body.message : '開啟失敗。',
+      // message would otherwise be shown to the user verbatim. The editor
+      // substitutes its localized fallback for an empty message.
+      typeof body.message === 'string' ? body.message : '',
       typeof body.url === 'string' ? body.url : undefined
     );
   }

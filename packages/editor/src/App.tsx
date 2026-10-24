@@ -630,8 +630,13 @@ export function App() {
   }, []);
 
   const handleAddSlide = useCallback(() => {
-    void runSlideOp(() => addSlideAfterActive(slideOpsContext()));
-  }, [runSlideOp, slideOpsContext]);
+    void runSlideOp(() =>
+      addSlideAfterActive(
+        slideOpsContext(),
+        '<h1>' + t('editor.newSlideTitle') + '</h1>'
+      )
+    );
+  }, [runSlideOp, slideOpsContext, t]);
 
   const handleDuplicateSlide = useCallback(
     (index?: number) => {

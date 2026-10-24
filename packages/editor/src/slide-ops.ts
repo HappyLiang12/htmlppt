@@ -8,9 +8,6 @@ import {
 } from '@htmlppt/core';
 import { clampSlideIndex } from './slide-index';
 
-/** Content created by the editor for a new, blank slide. */
-export const NEW_SLIDE_HTML = '<h1>新投影片</h1>';
-
 /**
  * The controller surface slide operations need. It is deliberately narrow so
  * the operations can run against a controller double in unit tests and the
@@ -76,10 +73,14 @@ async function commitAndShow(
   return index;
 }
 
+/**
+ * Inserts a slide with caller-supplied content after `afterIndex`. The caller
+ * localizes the content; the helper has no UI strings of its own.
+ */
 export async function addSlideAfterActive(
   ctx: SlideOpsContext,
-  afterIndex = ctx.activeIndex,
-  html: string = NEW_SLIDE_HTML
+  html: string,
+  afterIndex = ctx.activeIndex
 ): Promise<number | null> {
   const anchor = ctx.slides[afterIndex];
   if (!ctx.master || !anchor) return null;

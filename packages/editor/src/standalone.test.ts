@@ -66,9 +66,11 @@ describe('standalone persistence', () => {
   it('rejects saves before a deck is open', async () => {
     const persistence = createStandalonePersistence(() => null);
     await expect(persistence.save('<html></html>', '')).rejects.toThrow(
-      /沒有開啟/
+      'No deck is open.'
     );
-    await expect(persistence.load()).rejects.toThrow(/需要先開啟/);
+    await expect(persistence.load()).rejects.toThrow(
+      'Open an HTML file before using standalone mode.'
+    );
   });
 
   it('downloads HTML under a file-safe name', () => {

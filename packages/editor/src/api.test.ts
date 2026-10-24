@@ -149,7 +149,7 @@ describe('host API authentication', () => {
     expect(call[1].body).toBe(JSON.stringify({ path: 'next.html' }));
   });
 
-  it('never exposes a raw error body when the payload has no message', async () => {
+  it('never exposes a raw error body and leaves a missing message empty', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -166,15 +166,17 @@ describe('host API authentication', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
 
+    // The editor supplies the localized fallback; the API layer must not
+    // embed a language of its own.
     await expect(openDeck('deck.html')).rejects.toMatchObject({
       name: 'DeckOpenError',
       code: 'internal',
-      message: '開啟失敗。'
+      message: ''
     });
     await expect(openDeck('deck.html')).rejects.toMatchObject({
       name: 'DeckOpenError',
       code: 'open-failed',
-      message: '開啟失敗。'
+      message: ''
     });
   });
 

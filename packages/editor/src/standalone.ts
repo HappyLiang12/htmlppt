@@ -72,7 +72,7 @@ export function createStandalonePersistence(
 ): DeckPersistence {
   const save = async (html: string): Promise<{ revision: string }> => {
     const session = getSession();
-    if (!session) throw new Error('目前沒有開啟的簡報。');
+    if (!session) throw new Error('No deck is open.');
     if (session.handle) {
       const writable = await session.handle.createWritable();
       try {
@@ -93,7 +93,7 @@ export function createStandalonePersistence(
 
   return {
     load: async () => {
-      throw new Error('獨立模式需要先開啟 HTML 檔案。');
+      throw new Error('Open an HTML file before using standalone mode.');
     },
     save: (html) => save(html),
     flush: (html) => {

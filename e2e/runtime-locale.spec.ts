@@ -69,6 +69,7 @@ test.describe('runtime locale', () => {
     await page.keyboard.press('p');
     const presenter = await popupPromise;
     await expect(presenter).toHaveTitle('Presenter view');
+    await expect(presenter.locator('html')).toHaveAttribute('lang', 'en');
     await expect(presenter.locator('h1')).toHaveText('Presenter view');
     await expect(presenter.getByTestId('presenter-status')).toHaveText(
       'Connected'
@@ -116,6 +117,43 @@ test.describe('runtime locale', () => {
       '下一頁'
     );
     await expect(page.getByTestId('runtime-page')).toHaveText('第 1 / 2 頁');
+
+    const popupPromise = page.waitForEvent('popup');
+    await page.keyboard.press('p');
+    const presenter = await popupPromise;
+    await expect(presenter.locator('html')).toHaveAttribute(
+      'lang',
+      'zh-Hant'
+    );
+  });
+
+  // An authored tag must match whole subtags, like the editor's detection.
+  test('treats a zh-prefixed non-Chinese tag as English', async ({ page }) => {
+    await server.close();
+    server = await serveHtml(
+      localeDeck(RUNTIME_SOURCE, 'lang="en" data-ppt-locale="zhx"')
+    );
+    await page.goto(server.url);
+    await expect(page.getByTestId('runtime-next')).toHaveAttribute(
+      'aria-label',
+      'Next slide'
+    );
+    await expect(page.getByTestId('runtime-page')).toHaveText('1 / 2');
+  });
+
+  test('does not treat a hant prefix as a Traditional subtag', async ({
+    page
+  }) => {
+    await server.close();
+    server = await serveHtml(
+      localeDeck(RUNTIME_SOURCE, 'lang="en" data-ppt-locale="zh-hantish"')
+    );
+    await page.goto(server.url);
+    await expect(page.getByTestId('runtime-next')).toHaveAttribute(
+      'aria-label',
+      '下一页'
+    );
+    await expect(page.getByTestId('runtime-page')).toHaveText('第 1 / 2 页');
   });
 });
 

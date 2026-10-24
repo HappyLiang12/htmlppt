@@ -81,3 +81,61 @@ test.describe('browser language detection', () => {
     }
   });
 });
+
+test.describe('English first visit', () => {
+  test.use({ locale: 'en-US' });
+
+  test('uses English labels and html lang on first visit', async ({ page }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-i18n-en-'));
+    await createDeck(directory);
+    const host = await startCliHost(cliPath, directory, 'deck.html');
+    try {
+      await page.goto(host.url);
+      await expect(page.getByTestId('shortcuts-open')).toHaveText('Shortcuts');
+      await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+      await expect(page.getByTestId('locale-select')).toHaveValue('en');
+      await expect(page.getByTestId('locale-select')).toHaveAttribute(
+        'aria-label',
+        'Language'
+      );
+      await expect(
+        page.getByTestId('locale-select').locator('option')
+      ).toHaveText(['English', '繁體中文', '简体中文']);
+    } finally {
+      await host.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+test.describe('manual language selection', () => {
+  test.use({ locale: 'en-US' });
+
+  test('switches to Simplified Chinese and persists across reload', async ({
+    page
+  }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'htmlppt-i18n-hans-'));
+    await createDeck(directory);
+    const host = await startCliHost(cliPath, directory, 'deck.html');
+    try {
+      await page.goto(host.url);
+      await expect(page.getByTestId('locale-select')).toHaveValue('en');
+
+      await page.getByTestId('locale-select').selectOption('zh-Hans');
+      await expect(page.getByTestId('shortcuts-open')).toHaveText('快捷键');
+      await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans');
+      await expect(page.getByTestId('locale-select')).toHaveAttribute(
+        'aria-label',
+        '语言'
+      );
+
+      await page.reload();
+      await expect(page.getByTestId('shortcuts-open')).toHaveText('快捷键');
+      await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans');
+      await expect(page.getByTestId('locale-select')).toHaveValue('zh-Hans');
+    } finally {
+      await host.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

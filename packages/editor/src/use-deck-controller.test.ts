@@ -11,7 +11,8 @@ import {
   useDeckController,
   type DeckController
 } from './use-deck-controller.js';
-import type { Translator } from './i18n';
+import type { MessageKey, Translator } from './i18n';
+import { zhHant } from './i18n/messages/zh-Hant';
 
 const DECK: DeckResponse = {
   revision: 'revision-1',
@@ -33,7 +34,14 @@ let root: Root;
 let controller!: DeckController;
 let persistence: DeckPersistence;
 let translate: Translator | undefined;
+const requestedKeys: MessageKey[] = [];
 const saveCalls: Array<{ force?: boolean }> = [];
+
+/** Translates with the real Traditional Chinese dictionary and records keys. */
+const zhHantTranslator: Translator = (key) => {
+  requestedKeys.push(key);
+  return zhHant[key];
+};
 
 function Probe() {
   controller = useDeckController({ persistence, translate });
@@ -42,6 +50,7 @@ function Probe() {
 
 beforeEach(async () => {
   saveCalls.length = 0;
+  requestedKeys.length = 0;
   translate = undefined;
   persistence = {
     load: () => Promise.reject(new Error('Unexpected load.')),
@@ -386,7 +395,7 @@ describe('useDeckController', () => {
   });
 
   it('translates a failed pending edit through the supplied translator', async () => {
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-pending' }));
     });
@@ -403,11 +412,12 @@ describe('useDeckController', () => {
     });
 
     expect(settled).toBe(false);
-    expect(controller.state.error).toBe('translated:editor.pendingEditFailed');
+    expect(controller.state.error).toBe('無法套用編輯。');
+    expect(requestedKeys).toContain('editor.pendingEditFailed');
   });
 
   it('translates a reload failure through the supplied translator', async () => {
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-reload' }));
     });
@@ -417,7 +427,8 @@ describe('useDeckController', () => {
     });
 
     expect(controller.state.status).toBe('error');
-    expect(controller.state.error).toBe('translated:editor.reloadFailed');
+    expect(controller.state.error).toBe('無法重新載入簡報。');
+    expect(requestedKeys).toContain('editor.reloadFailed');
   });
 
   it('keeps decks with authored data-ppt-editing markers unnormalized', async () => {
@@ -596,7 +607,7 @@ describe('useDeckController', () => {
   });
 
   it('refuses to overwrite a conflict raised by a deck switch', async () => {
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-switched' }));
     });
@@ -630,11 +641,12 @@ describe('useDeckController', () => {
     expect(saveCalls).toEqual([]);
     expect(controller.state.conflict).not.toBeNull();
     expect(controller.state.dirty).toBe(true);
-    expect(controller.state.error).toBe('translated:conflict.switched');
+    expect(controller.state.error).toBe('主機已切換到另一個檔案；只能重新載入。');
+    expect(requestedKeys).toContain('conflict.switched');
   });
 
   it('keeps a switched-file conflict after a later conflict without a path', async () => {
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-switched-sticky' }));
     });
@@ -688,14 +700,15 @@ describe('useDeckController', () => {
       source: 'external',
       filePath: 'other.html'
     });
-    expect(controller.state.error).toBe('translated:conflict.switched');
+    expect(controller.state.error).toBe('主機已切換到另一個檔案；只能重新載入。');
+    expect(requestedKeys).toContain('conflict.switched');
   });
 
   it('refuses to overwrite a switched conflict when the loaded path is unknown', async () => {
     // The tab does not know which file it loaded, so it cannot prove the
     // conflict belongs to the same deck. Treating it as switched is the only
     // safe choice; a force write could replace the deck the host just opened.
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-switched-unknown' }));
     });
@@ -734,11 +747,12 @@ describe('useDeckController', () => {
     });
     expect(controller.state.status).toBe('conflict');
     expect(controller.state.dirty).toBe(true);
-    expect(controller.state.error).toBe('translated:conflict.switched');
+    expect(controller.state.error).toBe('主機已切換到另一個檔案；只能重新載入。');
+    expect(requestedKeys).toContain('conflict.switched');
   });
 
   it('translates the pending-edit overwrite instruction', async () => {
-    translate = (key) => `translated:${key}`;
+    translate = zhHantTranslator;
     await act(async () => {
       root.render(createElement(Probe, { key: 'translated-pending-overwrite' }));
     });
@@ -757,8 +771,7 @@ describe('useDeckController', () => {
     });
 
     expect(saveCalls).toEqual([]);
-    expect(controller.state.error).toBe(
-      'translated:editor.pendingEditInstruction'
-    );
+    expect(controller.state.error).toBe(zhHant['editor.pendingEditInstruction']);
+    expect(requestedKeys).toContain('editor.pendingEditInstruction');
   });
 });

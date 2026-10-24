@@ -185,6 +185,22 @@ within `0..total-1`, and `total` is capped at 10,000. The editor opens its
 presenter as `/?presenter=1&session=...`; the standalone runtime opens a popup
 and builds the presenter UI in it. Presenter preview iframes are script-free.
 
+## Localization
+
+The editor wraps both routes (`App` and `PresenterView`) in `LocaleProvider`
+from `packages/editor/src/i18n`. The provider resolves the stored
+`htmlppt.locale` value first, then `navigator.language`, and exposes a typed
+`t(key, vars)` over the three dictionaries. It mirrors the active locale to
+`<html lang>` and persists manual choices.
+
+The runtime imports nothing from the editor, so `RUNTIME_SOURCE` carries its
+own `RUNTIME_STRINGS` table. It resolves `data-ppt-locale` on `<html>`, then
+`navigator.language`, then English, using the same whole-subtag rules as the
+editor. The standalone presenter popup is built by the runtime; its strings
+cross the window boundary as JSON in `data-ppt-strings` on the popup body
+because `PRESENTER_CLIENT.toString()` cannot close over outer variables. The
+popup copies the resolved locale to its own `<html lang>`.
+
 ## Renderer pipeline
 
 1. **Find Chromium.** `HTMLPPT_CHROMIUM` wins. An explicitly set but invalid

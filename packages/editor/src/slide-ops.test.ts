@@ -39,6 +39,9 @@ const SINGLE_SLIDE_HTML = `<!doctype html>
 </body>
 </html>`;
 
+/** Neutral caller-supplied content; the helper owns no localized string. */
+const ADDED_SLIDE_HTML = '<h1>Fresh slide</h1>';
+
 /**
  * A test-local controller double: commit applies the mutation synchronously
  * against the master and every getter reads the current document, mirroring
@@ -100,7 +103,7 @@ describe('slide operations', () => {
     const originalOrder = masterSlideIds(controller);
     expect(originalOrder).toHaveLength(2);
 
-    expect(await addSlideAfterActive(controller)).toBe(1);
+    expect(await addSlideAfterActive(controller, ADDED_SLIDE_HTML)).toBe(1);
 
     const addedId = controller.slides[1]?.id ?? '';
     expect(slideIds(controller)).toHaveLength(3);
@@ -112,14 +115,14 @@ describe('slide operations', () => {
     expect(controller.activeIndex).toBe(1);
     expect(controller.commitCount).toBe(1);
     const added = slideElementAt(controller, 1);
-    expect(added.querySelector('h1')?.textContent).toBe('新投影片');
+    expect(added.querySelector('h1')?.textContent).toBe('Fresh slide');
     expect(added.getAttribute('data-width')).toBe('1600');
   });
 
   it('adds a slide after a non-active sorter tile', async () => {
     const controller = new ControllerDouble(DECK_HTML);
 
-    expect(await addSlideAfterActive(controller, 1)).toBe(2);
+    expect(await addSlideAfterActive(controller, ADDED_SLIDE_HTML, 1)).toBe(2);
 
     expect(slideIds(controller)).toHaveLength(3);
     expect(controller.activeIndex).toBe(2);
