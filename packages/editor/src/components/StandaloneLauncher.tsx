@@ -108,7 +108,7 @@ export function StandaloneLauncher({
           <p
             data-testid="standalone-error"
             role="alert"
-            className="mt-4 rounded border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger"
+            className="mt-4 rounded border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
           >
             {error}
           </p>
@@ -124,12 +124,12 @@ export function StandaloneLauncher({
                 <li
                   key={draft.key}
                   data-testid="recovery-draft"
-                  className="flex flex-wrap items-center gap-3 rounded border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning"
+                  className="flex flex-wrap items-center gap-3 rounded border border-warning bg-warning-soft px-3 py-2 text-xs text-warning"
                 >
                   <span className="min-w-0 flex-1 truncate">
                     {draft.filePath}
                   </span>
-                  <span className="text-warning/70">
+                  <span data-testid="recovery-time" className="text-warning">
                     {formatDraftTime(draft.savedAt, locale)}
                   </span>
                   <button

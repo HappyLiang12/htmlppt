@@ -3403,7 +3403,7 @@ export function App() {
       {(error || slideOpError || exportError) && (
         <div
           data-testid="editor-error"
-          className="max-h-24 overflow-auto border-b border-danger/30 bg-danger-soft px-4 py-2 text-xs text-danger"
+          className="max-h-24 overflow-auto border-b border-danger bg-danger-soft px-4 py-2 text-xs text-danger"
         >
           {[error, slideOpError, exportError].filter(Boolean).join(' · ')}
         </div>
@@ -3413,13 +3413,13 @@ export function App() {
         <div
           data-testid="export-result"
           role="status"
-          className="flex items-center gap-3 border-b border-success/30 bg-success-soft px-4 py-2 text-xs text-success"
+          className="flex items-center gap-3 border-b border-success bg-success-soft px-4 py-2 text-xs text-success"
         >
           <span className="min-w-0 flex-1 truncate">{exportMessage}</span>
           <button
             type="button"
             data-testid="export-dismiss"
-            className="rounded border border-success/40 px-2 py-0.5 text-success"
+            className="rounded border border-success px-2 py-0.5 text-success"
             onClick={() => setExportMessage('')}
           >
             {t('common.close')}
@@ -3431,7 +3431,7 @@ export function App() {
         <div
           data-testid="recovery-banner"
           role="alert"
-          className="flex flex-wrap items-center gap-3 border-b border-warning/30 bg-warning-soft px-4 py-2 text-xs text-warning"
+          className="flex flex-wrap items-center gap-3 border-b border-warning bg-warning-soft px-4 py-2 text-xs text-warning"
         >
           <span className="min-w-0 flex-1 truncate">
             {t('recovery.found', { path: recoveryDraft.filePath })}
@@ -3439,7 +3439,7 @@ export function App() {
           <button
             type="button"
             data-testid="recovery-restore"
-            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning"
+            className="rounded border border-warning px-2 py-1 text-xs text-warning"
             onClick={() => {
               actions.restoreDraft(recoveryDraft.html);
               setRecoveryDraft(null);
@@ -3450,7 +3450,7 @@ export function App() {
           <button
             type="button"
             data-testid="recovery-discard"
-            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning"
+            className="rounded border border-warning px-2 py-1 text-xs text-warning"
             onClick={() => {
               void deleteDraft(recoveryDraft.key);
               setRecoveryDraft(null);
@@ -3465,7 +3465,7 @@ export function App() {
         <div
           data-testid="conflict-banner"
           role="alert"
-          className="flex flex-wrap items-center gap-3 border-b border-warning/30 bg-warning-soft px-4 py-2 text-xs text-warning"
+          className="flex flex-wrap items-center gap-3 border-b border-warning bg-warning-soft px-4 py-2 text-xs text-warning"
         >
           <span>
             {switchedFileConflict
@@ -3482,7 +3482,7 @@ export function App() {
             data-testid="conflict-reload"
             disabled={state.recoveryBusy}
             onPointerDown={(event) => event.preventDefault()}
-            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning transition-colors hover:border-warning"
+            className="rounded border border-warning px-2 py-1 text-xs text-warning transition-colors"
             onClick={() => resolveConflict('reload')}
           >
             {t('conflict.reload')}
@@ -3493,7 +3493,7 @@ export function App() {
               data-testid="conflict-overwrite"
               disabled={state.recoveryBusy || state.pending}
               onPointerDown={(event) => event.preventDefault()}
-              className="rounded border border-warning/40 px-2 py-1 text-xs text-warning transition-colors hover:border-warning"
+              className="rounded border border-warning px-2 py-1 text-xs text-warning transition-colors"
               onClick={() => resolveConflict('overwrite')}
             >
               {t('conflict.overwrite')}

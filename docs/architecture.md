@@ -210,6 +210,9 @@ popup copies the resolved locale to its own `<html lang>`.
   `index.html` prevents a first-paint flash. The presenter route is
   intentionally excluded: it mounts outside `ThemeProvider`, and the bootstrap
   skips `?presenter=1`, so presenter view keeps its original styling.
+  Selection indicators use invariant amber and dark halo tokens instead of the
+  chrome accent because slide content keeps its authored colors, and play mode
+  overrides the light-theme focus ring with the same invariant amber.
 
 ## Renderer pipeline
 

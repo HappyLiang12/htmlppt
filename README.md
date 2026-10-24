@@ -157,9 +157,11 @@ export guarantees in full.
   presenter window showing notes, the next-slide preview, and a timer, synced
   through `BroadcastChannel`.
 - **Theme:** the editor chrome supports Light, Dark, and System. The toolbar's
-  three-segment control persists the choice per browser; System follows the
-  operating-system preference. Slide content, play mode, presenter view, and
-  the exported runtime controls keep their own styling.
+  three-segment control persists the choice per browser origin; System follows
+  the operating-system preference. A new host port or origin therefore starts
+  with the default System choice because `localStorage` is origin-scoped. Slide
+  content, play mode, presenter view, and the exported runtime controls keep
+  their own styling.
 - **Keyboard and accessibility:** shortcuts for saving, undo/redo, nudge,
   grouping, zoom, and presentation, plus an in-editor shortcut reference (`?`)
   and ARIA-labelled controls.

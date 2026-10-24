@@ -97,7 +97,7 @@ export function CanvasOverlay({
             data-selected-path={box.path.join('.')}
             className={`pointer-events-none absolute ${
               index === 0 ? 'border-2' : 'border'
-            } border-accent`}
+            } border-selection shadow-[0_0_0_1px_var(--editor-selection-contrast)]`}
             style={{
               left: box.rect.x * scale,
               top: box.rect.y * scale,
@@ -111,7 +111,7 @@ export function CanvasOverlay({
               <span
                 data-testid="selection-marker"
                 aria-hidden="true"
-                className="absolute left-0 top-0 rounded-br bg-accent px-1 text-[10px] font-semibold text-on-accent"
+                className="absolute left-0 top-0 rounded-br bg-selection px-1 text-[10px] font-semibold text-selection-contrast"
               >
                 {t('canvas.selected')}
               </span>
@@ -122,7 +122,7 @@ export function CanvasOverlay({
                   <div
                     key={handle}
                     data-testid={`handle-${handle}`}
-                    className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-on-accent bg-accent"
+                    className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-selection-contrast bg-selection"
                     style={{
                       ...HANDLE_POSITIONS[handle],
                       transform: 'translate(-50%, -50%)'
@@ -132,7 +132,7 @@ export function CanvasOverlay({
                 ))}
                 <div
                   data-testid="rotate-handle"
-                  className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-on-accent bg-accent"
+                  className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-selection-contrast bg-selection"
                   style={{
                     top: 0,
                     transform: 'translate(-50%, calc(-100% - 16px))'

@@ -1,10 +1,9 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, normalize, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
+import { startStaticEditor } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const editorDir = join(repoRoot, 'packages/editor/dist');
@@ -28,55 +27,6 @@ const DECK = `<!doctype html>
 </html>
 `;
 
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2'
-};
-
-async function startStaticEditor(): Promise<{
-  url: string;
-  close(): Promise<void>;
-}> {
-  const root = resolve(editorDir);
-  const server = createServer(async (request, response) => {
-    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-    const relative = normalize(pathname).replace(/^([/\\])+/, '');
-    const target = resolve(root, relative || 'index.html');
-    if (target !== root && !target.startsWith(`${root}\\`) && !target.startsWith(`${root}/`)) {
-      response.writeHead(403);
-      response.end('forbidden');
-      return;
-    }
-    try {
-      const bytes = await readFile(
-        pathname === '/' ? join(root, 'index.html') : target
-      );
-      response.writeHead(200, {
-        'content-type': MIME[extname(target)] ?? 'application/octet-stream'
-      });
-      response.end(bytes);
-    } catch {
-      response.writeHead(404, { 'content-type': 'text/plain' });
-      response.end('not found');
-    }
-  });
-  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
-  const address = server.address() as AddressInfo;
-  return {
-    url: `http://127.0.0.1:${address.port}/`,
-    close: () =>
-      new Promise<void>((resolvePromise, reject) => {
-        server.closeAllConnections();
-        server.close((error) => (error ? reject(error) : resolvePromise()));
-      })
-  };
-}
-
 async function openDeck(page: Page, directory: string): Promise<void> {
   await page.getByTestId('standalone-file').setInputFiles(join(directory, 'standalone.html'));
   await expect(page.getByTestId('save-status')).toHaveText('已開啟');
@@ -92,7 +42,7 @@ test.describe('standalone editor fallback', () => {
     async ({ page }) => {
       test.setTimeout(120_000);
       const directory = await mkdtemp(join(tmpdir(), 'htmlppt-standalone-'));
-      const editor = await startStaticEditor();
+      const editor = await startStaticEditor(editorDir);
       try {
         await writeFile(join(directory, 'standalone.html'), DECK, 'utf8');
         await page.goto(editor.url);
@@ -157,7 +107,7 @@ test.describe('standalone editor fallback', () => {
     async ({ page }) => {
       test.setTimeout(120_000);
       const directory = await mkdtemp(join(tmpdir(), 'htmlppt-recovery-'));
-      const editor = await startStaticEditor();
+      const editor = await startStaticEditor(editorDir);
       try {
         await writeFile(join(directory, 'standalone.html'), DECK, 'utf8');
         await page.goto(editor.url);

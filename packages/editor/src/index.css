@@ -11,10 +11,11 @@
   --color-line-strong: var(--editor-line-strong);
   --color-ink: var(--editor-ink);
   --color-muted: var(--editor-muted);
-  --color-faint: var(--editor-faint);
   --color-accent: var(--editor-accent);
   --color-on-accent: var(--editor-on-accent);
   --color-accent-soft: var(--editor-accent-soft);
+  --color-selection: var(--editor-selection);
+  --color-selection-contrast: var(--editor-selection-contrast);
   --color-danger: var(--editor-danger);
   --color-danger-soft: var(--editor-danger-soft);
   --color-warning: var(--editor-warning);
@@ -27,17 +28,21 @@
 }
 
 /* Content that sits on an overlay keeps one readable pair in both palettes.
-   Unlike `overlay`, these are opaque and do not vary with the theme. */
+   Unlike `overlay`, these are opaque and do not vary with the theme.
+   Selection indicators also stay invariant: slide content can be any color,
+   so the amber outline and its dark halo must not follow the chrome theme. */
 :root {
   --editor-overlay-solid: #18181b;
   --editor-on-overlay: #fafafa;
+  --editor-selection: #fbbf24;
+  --editor-selection-contrast: #18181b;
 }
 
 /* Editor chrome palettes. The provider and the pre-paint bootstrap set
    data-theme on <html>; slide content, play mode, and the presenter never
    consume these variables. :root carries the dark palette so routes without
    a data-theme attribute (the presenter) keep their original colors and the
-   global focus ring. */
+   invariant focus ring. */
 :root,
 :root[data-theme='dark'] {
   --editor-canvas: #0f1115;
@@ -51,7 +56,6 @@
   --editor-line-strong: rgba(255, 255, 255, 0.4);
   --editor-ink: #f4f4f5;
   --editor-muted: #a1a1aa;
-  --editor-faint: #71717a;
   --editor-accent: #fbbf24;
   --editor-on-accent: #18181b;
   --editor-accent-soft: rgba(251, 191, 36, 0.12);
@@ -78,7 +82,6 @@
   --editor-line-strong: rgba(24, 24, 27, 0.5);
   --editor-ink: #18181b;
   --editor-muted: #52525b;
-  --editor-faint: #71717a;
   /* Accent text clears 4.5:1 on surface and on accent-soft, including the
      text toolbar's stacked soft layers. */
   --editor-accent: #92400e;
@@ -109,7 +112,10 @@ body {
   box-sizing: border-box;
 }
 
-/* One visible keyboard focus ring for every editor chrome control. */
+/* One visible keyboard focus ring for every control. The invariant amber is
+   the fallback for routes without a data-theme attribute (the presenter) and
+   for play mode, whose black stage would drop the light-theme accent below
+   3:1. Editor chrome opts into the themed accent. */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -118,8 +124,30 @@ textarea:focus-visible,
 [role='button']:focus-visible,
 [role='tab']:focus-visible,
 [role='option']:focus-visible {
-  outline: 2px solid var(--editor-accent);
+  outline: 2px solid var(--editor-selection);
   outline-offset: 2px;
+}
+
+:root[data-theme] button:focus-visible,
+:root[data-theme] a:focus-visible,
+:root[data-theme] input:focus-visible,
+:root[data-theme] select:focus-visible,
+:root[data-theme] textarea:focus-visible,
+:root[data-theme] [role='button']:focus-visible,
+:root[data-theme] [role='tab']:focus-visible,
+:root[data-theme] [role='option']:focus-visible {
+  outline-color: var(--editor-accent);
+}
+
+:root[data-theme='light'] [data-testid='play-view'] button:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] a:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] input:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] select:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] textarea:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] [role='button']:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] [role='tab']:focus-visible,
+:root[data-theme='light'] [data-testid='play-view'] [role='option']:focus-visible {
+  outline-color: var(--editor-selection);
 }
 
 @keyframes htmlppt-preview-fade {
