@@ -129,13 +129,13 @@ export function SorterView({
   return (
     <main
       data-testid="sorter-view"
-      className="min-h-0 flex-1 overflow-auto bg-[#0a0c10] p-6"
+      className="min-h-0 flex-1 overflow-auto bg-canvas p-6"
     >
       <div className="mb-4 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-zinc-200">
+        <h2 className="text-sm font-semibold text-ink">
           {t('sorter.title')}
         </h2>
-        <p className="text-xs text-zinc-400">{t('sorter.hint')}</p>
+        <p className="text-xs text-muted">{t('sorter.hint')}</p>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {slides.map((slide, index) => {
@@ -153,10 +153,10 @@ export function SorterView({
               onPointerCancel={finishDrag}
               className={`relative flex cursor-grab flex-col gap-2 rounded-lg border p-2 transition-colors ${
                 active
-                  ? 'border-amber-400/70 bg-amber-400/10'
-                  : 'border-white/10 bg-white/[0.02] hover:border-white/25'
+                  ? 'border-accent/70 bg-accent-soft'
+                  : 'border-line bg-surface hover:border-line-strong'
               } ${dragging === index ? 'opacity-50' : ''} ${
-                isDropTarget ? 'ring-2 ring-amber-400' : ''
+                isDropTarget ? 'ring-2 ring-accent' : ''
               }`}
             >
               {/* One single-option listbox per tile keeps its action row
@@ -179,16 +179,16 @@ export function SorterView({
                   data-slide-id={slide.id}
                   data-slide-title={title}
                   onKeyDown={(event) => handleKeyDown(event, index)}
-                  className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+                  className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                 >
-                  <span className="absolute left-1 top-1 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-200">
+                  <span className="absolute left-1 top-1 z-10 rounded bg-overlay px-1.5 py-0.5 text-[11px] tabular-nums text-white">
                     {index + 1}
                   </span>
                   {active && (
                     <span
                       data-testid="sorter-active-marker"
                       aria-hidden="true"
-                      className="absolute right-1 top-1 z-10 rounded bg-amber-400 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-950"
+                      className="absolute right-1 top-1 z-10 rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-on-accent"
                     >
                       {t('sorter.current')}
                     </span>
@@ -197,11 +197,11 @@ export function SorterView({
                     master={master}
                     slide={slide}
                     width={SORTER_PREVIEW_WIDTH}
-                    className="rounded-[3px] shadow-md shadow-black/40"
+                    className="rounded-[3px] shadow-[0_4px_12px_var(--editor-shadow-panel)]"
                   />
                   <span
                     className={`truncate px-1 text-xs ${
-                      active ? 'text-amber-200' : 'text-zinc-300'
+                      active ? 'text-accent' : 'text-muted'
                     }`}
                   >
                     {title}
@@ -216,7 +216,7 @@ export function SorterView({
                   onClick={(event) => {
                     if (event.detail <= 1) onDuplicate(index);
                   }}
-                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/60"
+                  className="rounded border border-line-strong px-2 py-1 text-[11px] text-muted hover:bg-hover hover:text-ink"
                 >
                   {t('sorter.copy')}
                 </button>
@@ -228,7 +228,7 @@ export function SorterView({
                     if (event.detail <= 1) onDelete(index);
                   }}
                   disabled={!canDelete}
-                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 hover:border-white/60 disabled:opacity-40"
+                  className="rounded border border-line-strong px-2 py-1 text-[11px] text-muted hover:bg-hover hover:text-ink disabled:opacity-40"
                 >
                   {t('sorter.delete')}
                 </button>

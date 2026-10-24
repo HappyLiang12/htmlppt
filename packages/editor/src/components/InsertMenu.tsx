@@ -12,11 +12,11 @@ export interface InsertMenuProps {
 }
 
 const BUTTON =
-  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
+  'rounded border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40';
 const MENU =
-  'absolute left-0 top-full z-20 mt-1 flex w-max flex-col gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl';
+  'absolute left-0 top-full z-20 mt-1 flex w-max flex-col gap-1 rounded border border-line-strong bg-raised p-2 shadow-[0_24px_60px_var(--editor-shadow-panel)]';
 const FIELD =
-  'w-16 rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70';
+  'w-16 rounded border border-line-strong bg-input px-2 py-1 text-xs text-ink outline-none focus:border-accent/70';
 
 type MenuName = 'shape' | 'table' | 'image';
 
@@ -120,7 +120,7 @@ export function InsertMenu({
                 key={shape}
                 type="button"
                 data-testid={`insert-shape-${shape}`}
-                className="rounded px-2 py-1 text-left text-xs text-zinc-200 hover:bg-white/10"
+                className="rounded px-2 py-1 text-left text-xs text-ink hover:bg-hover"
                 onClick={() => {
                   setMenu(null);
                   onInsertShape(shape);
@@ -156,7 +156,7 @@ export function InsertMenu({
             className={MENU}
             onKeyDown={(event) => menuKeyDown(event, 'table')}
           >
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
+            <label className="flex items-center justify-between gap-2 text-xs text-muted">
               {t('insert.rows')}
               <input
                 type="number"
@@ -169,7 +169,7 @@ export function InsertMenu({
                 className={FIELD}
               />
             </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-300">
+            <label className="flex items-center justify-between gap-2 text-xs text-muted">
               {t('insert.columns')}
               <input
                 type="number"
@@ -186,7 +186,7 @@ export function InsertMenu({
               type="button"
               data-testid="table-insert"
               disabled={rowCount === null || columnCount === null}
-              className="rounded bg-amber-400/20 px-2 py-1 text-xs text-amber-100 transition-colors hover:bg-amber-400/30 disabled:opacity-40"
+              className="rounded bg-accent-soft px-2 py-1 text-xs text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
               onClick={() => {
                 if (rowCount === null || columnCount === null) return;
                 setMenu(null);
@@ -235,7 +235,7 @@ export function InsertMenu({
             <button
               type="button"
               data-testid="insert-image-upload"
-              className="rounded px-2 py-1 text-left text-xs text-zinc-200 hover:bg-white/10"
+              className="rounded px-2 py-1 text-left text-xs text-ink hover:bg-hover"
               onClick={() => {
                 setMenu(null);
                 fileInput.current?.click();
@@ -246,7 +246,7 @@ export function InsertMenu({
             <button
               type="button"
               data-testid="insert-image-url"
-              className="rounded px-2 py-1 text-left text-xs text-zinc-200 hover:bg-white/10"
+              className="rounded px-2 py-1 text-left text-xs text-ink hover:bg-hover"
               onClick={() => {
                 setMenu(null);
                 onInsertImageUrl();

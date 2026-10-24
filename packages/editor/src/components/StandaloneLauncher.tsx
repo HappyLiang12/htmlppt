@@ -15,7 +15,7 @@ export interface StandaloneLauncherProps {
 }
 
 const BUTTON =
-  'rounded border border-white/40 px-3 py-2 text-sm text-zinc-200 transition-colors hover:border-amber-300/70 disabled:opacity-40';
+  'rounded border border-line-strong px-3 py-2 text-sm text-ink transition-colors hover:border-accent/70 hover:bg-hover disabled:opacity-40';
 
 export function StandaloneLauncher({
   drafts,
@@ -49,18 +49,18 @@ export function StandaloneLauncher({
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[#0f1115] p-8 text-zinc-100">
+    <div className="flex h-screen items-center justify-center bg-canvas p-8 text-ink">
       <section
         aria-labelledby="standalone-title"
-        className="w-full max-w-xl rounded border border-white/15 bg-[#141821] p-8 shadow-2xl"
+        className="w-full max-w-xl rounded border border-line-strong bg-surface p-8 shadow-[0_24px_60px_var(--editor-shadow-panel)]"
       >
-        <p className="text-xs uppercase tracking-[0.2em] text-amber-300/80">
+        <p className="text-xs uppercase tracking-[0.2em] text-accent">
           htmlppt
         </p>
         <h1 id="standalone-title" className="mt-2 text-xl font-semibold">
           {t('standalone.title')}
         </h1>
-        <p className="mt-2 text-sm text-zinc-400">
+        <p className="mt-2 text-sm text-muted">
           {t('standalone.description')}
         </p>
 
@@ -74,8 +74,8 @@ export function StandaloneLauncher({
           onDrop={drop}
           className={`mt-6 flex flex-col items-center gap-3 rounded border-2 border-dashed p-8 transition-colors ${
             dragging
-              ? 'border-amber-300/80 bg-amber-300/5'
-              : 'border-white/20'
+              ? 'border-accent/70 bg-accent-soft'
+              : 'border-line-strong'
           }`}
         >
           <button
@@ -87,7 +87,7 @@ export function StandaloneLauncher({
           >
             {t('standalone.open')}
           </button>
-          <label className="cursor-pointer text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline">
+          <label className="cursor-pointer text-xs text-muted underline-offset-2 hover:text-ink hover:underline">
             {t('standalone.upload')}
             <input
               data-testid="standalone-file"
@@ -108,7 +108,7 @@ export function StandaloneLauncher({
           <p
             data-testid="standalone-error"
             role="alert"
-            className="mt-4 rounded border border-red-500/30 bg-red-950/40 px-3 py-2 text-xs text-red-200"
+            className="mt-4 rounded border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger"
           >
             {error}
           </p>
@@ -116,7 +116,7 @@ export function StandaloneLauncher({
 
         {drafts.length > 0 && (
           <div className="mt-6">
-            <h2 className="text-sm font-medium text-zinc-200">
+            <h2 className="text-sm font-medium text-ink">
               {t('recovery.available')}
             </h2>
             <ul className="mt-2 space-y-2">
@@ -124,12 +124,12 @@ export function StandaloneLauncher({
                 <li
                   key={draft.key}
                   data-testid="recovery-draft"
-                  className="flex flex-wrap items-center gap-3 rounded border border-amber-400/30 bg-amber-950/30 px-3 py-2 text-xs text-amber-100"
+                  className="flex flex-wrap items-center gap-3 rounded border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning"
                 >
                   <span className="min-w-0 flex-1 truncate">
                     {draft.filePath}
                   </span>
-                  <span className="text-amber-200/70">
+                  <span className="text-warning/70">
                     {formatDraftTime(draft.savedAt, locale)}
                   </span>
                   <button
@@ -156,9 +156,9 @@ export function StandaloneLauncher({
           </div>
         )}
 
-        <p className="mt-6 text-xs text-zinc-500">
+        <p className="mt-6 text-xs text-faint">
           {t('standalone.commandHint')}{' '}
-          <code className="rounded bg-white/10 px-1 py-0.5">
+          <code className="rounded bg-chip px-1 py-0.5">
             htmlppt open deck.html
           </code>
         </p>

@@ -108,13 +108,13 @@ export function ModalDialog({
       role="dialog"
       aria-modal="true"
       aria-label={label}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6"
       onPointerDown={focusPanel}
     >
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`flex max-h-full flex-col gap-3 rounded-lg border border-white/30 bg-[#12151b] p-4 shadow-2xl outline-none ${panelClassName}`}
+        className={`flex max-h-full flex-col gap-3 rounded-lg border border-line-strong bg-surface p-4 shadow-[0_24px_60px_var(--editor-shadow-panel)] outline-none ${panelClassName}`}
       >
         {children}
       </div>

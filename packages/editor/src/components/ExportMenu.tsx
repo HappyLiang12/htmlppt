@@ -12,9 +12,9 @@ export interface ExportMenuProps {
 }
 
 const BUTTON =
-  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
+  'rounded border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40';
 const ITEM =
-  'rounded px-2 py-1 text-left text-xs text-zinc-200 transition-colors hover:bg-white/10 disabled:opacity-40';
+  'rounded px-2 py-1 text-left text-xs text-ink transition-colors hover:bg-hover disabled:opacity-40';
 
 const FORMATS: {
   format: ExportFormat;
@@ -117,7 +117,7 @@ export function ExportMenu({
           role="menu"
           aria-label={t('export.format')}
           data-testid="export-menu"
-          className="absolute right-0 top-full z-20 mt-1 flex w-56 flex-col gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl"
+          className="absolute right-0 top-full z-20 mt-1 flex w-56 flex-col gap-1 rounded border border-line-strong bg-raised p-2 shadow-[0_24px_60px_var(--editor-shadow-panel)]"
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
               event.preventDefault();
@@ -156,7 +156,7 @@ export function ExportMenu({
                 onClick={() => choose(format)}
               >
                 <span className="block">{t(label)}</span>
-                <span className="block text-[10px] text-zinc-400">
+                <span className="block text-[10px] text-muted">
                   {standalone && hostOnly ? t('export.hostOnly') : t(hint)}
                 </span>
               </button>

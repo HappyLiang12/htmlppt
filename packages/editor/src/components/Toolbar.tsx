@@ -61,9 +61,9 @@ const STATUS_KEY: Record<SaveStatus, MessageKey> = {
 };
 
 const BUTTON_CLASS =
-  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
+  'rounded border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40';
 const ACTIVE_VIEW_CLASS =
-  'rounded border border-amber-400/70 bg-amber-400/10 px-2 py-1 text-xs text-amber-200';
+  'rounded border border-accent/70 bg-accent-soft px-2 py-1 text-xs text-accent';
 
 export function Toolbar({
   filePath,
@@ -110,7 +110,7 @@ export function Toolbar({
   return (
     <header
       data-testid="toolbar"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-white/10 px-4 py-2"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-2"
     >
       <div className="flex min-w-0 items-center gap-3">
         <span className="text-sm font-semibold tracking-wide">htmlppt</span>
@@ -129,10 +129,10 @@ export function Toolbar({
         role="status"
         className={`text-xs ${
           status === 'error' || status === 'load-error'
-            ? 'text-red-400'
+            ? 'text-danger'
             : status === 'conflict' || status === 'external'
-              ? 'text-amber-300'
-              : 'text-zinc-400'
+              ? 'text-warning'
+              : 'text-muted'
         }`}
       >
         {standaloneMode && status === 'ready'
@@ -144,7 +144,7 @@ export function Toolbar({
       {standaloneMode && (
         <span
           data-testid="standalone-badge"
-          className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] text-amber-200"
+          className="rounded border border-accent/40 px-2 py-0.5 text-[10px] text-accent"
           title={t('toolbar.standaloneHint')}
         >
           {t('toolbar.standaloneBadge')}
@@ -222,7 +222,7 @@ export function Toolbar({
         </button>
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-zinc-400">
+      <div className="flex items-center gap-2 text-xs text-muted">
         <button
           type="button"
           className={BUTTON_CLASS}
@@ -275,7 +275,7 @@ export function Toolbar({
           aria-label={t('locale.label')}
           value={locale}
           onChange={(event) => setLocale(event.target.value as Locale)}
-          className="rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-200"
+          className="rounded border border-line-strong bg-input px-2 py-1 text-xs text-ink"
         >
           <option value="en">English</option>
           <option value="zh-Hant">繁體中文</option>
@@ -296,7 +296,7 @@ export function Toolbar({
               className={
                 mode === value
                   ? 'rounded border border-accent/70 bg-accent-soft px-2 py-1 text-xs text-accent'
-                  : 'rounded border border-line-strong px-2 py-1 text-xs text-muted hover:border-line-strong'
+                  : 'rounded border border-line-strong px-2 py-1 text-xs text-muted hover:bg-hover hover:text-ink'
               }
               onClick={() => setMode(value)}
             >

@@ -90,7 +90,7 @@ export interface InspectorProps {
 }
 
 const ACTION_CLASS =
-  'rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:cursor-not-allowed disabled:opacity-40';
+  'rounded border border-line-strong px-2 py-1 text-[11px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40';
 
 function ActionButton({
   testId,
@@ -123,11 +123,11 @@ const TABS: readonly { id: InspectorTab; labelKey: MessageKey }[] = [
 ];
 
 const FIELD_CLASS =
-  'w-full rounded border border-white/40 bg-black/20 px-2 py-1 text-xs tabular-nums text-zinc-100 outline-none transition-colors focus:border-amber-400/70 disabled:opacity-50';
+  'w-full rounded border border-line-strong bg-input px-2 py-1 text-xs tabular-nums text-ink outline-none transition-colors focus:border-accent/70 disabled:opacity-50';
 const SECTION_CLASS =
-  'flex flex-col gap-2 border-b border-white/10 px-3 py-3 last:border-b-0';
+  'flex flex-col gap-2 border-b border-line px-3 py-3 last:border-b-0';
 const HEADING_CLASS =
-  'text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400';
+  'text-[11px] font-semibold uppercase tracking-[0.14em] text-muted';
 
 interface NumberFieldProps {
   pendingActions: PendingActions;
@@ -189,7 +189,7 @@ function NumberField({
 
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[11px] text-zinc-400">{label}</span>
+      <span className="text-[11px] text-muted">{label}</span>
       <input
         type="text"
         inputMode="decimal"
@@ -211,7 +211,7 @@ function NumberField({
         }}
         className={FIELD_CLASS}
       />
-      {invalid && <span role="alert" className="text-[11px] text-red-300">{t('inspector.invalidNumber')}</span>}
+      {invalid && <span role="alert" className="text-[11px] text-danger">{t('inspector.invalidNumber')}</span>}
     </label>
   );
 }
@@ -278,7 +278,7 @@ function StyleField({
 
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[11px] text-zinc-400">{label}</span>
+      <span className="text-[11px] text-muted">{label}</span>
       <input
         type="text"
         data-testid={testId}
@@ -301,7 +301,7 @@ function StyleField({
         className={FIELD_CLASS}
       />
       {invalid && (
-        <span role="alert" className="text-[11px] text-red-300">
+        <span role="alert" className="text-[11px] text-danger">
           {t('inspector.invalidValue')}
         </span>
       )}
@@ -462,12 +462,12 @@ export function Inspector({
     <aside
       data-testid="inspector"
       aria-label={t('inspector.panel')}
-      className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-white/10 bg-[#0d0f14]"
+      className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-line bg-surface"
     >
       <div
         role="tablist"
         aria-label={t('inspector.tabs')}
-        className="flex border-b border-white/10"
+        className="flex border-b border-line"
       >
         {TABS.map((candidate) => {
           const active = tab === candidate.id;
@@ -488,8 +488,8 @@ export function Inspector({
               onKeyDown={(event) => handleTabKeyDown(event, candidate.id)}
               className={`flex-1 border-b-2 px-2 py-2 text-xs transition-colors ${
                 active
-                  ? 'border-amber-400 text-amber-200'
-                  : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-muted hover:text-ink'
               }`}
             >
               {t(candidate.labelKey)}
@@ -508,7 +508,7 @@ export function Inspector({
         <section aria-label={t('inspector.objects')} className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
           {objects.length === 0 ? (
-            <p className="text-xs text-zinc-400">{t('inspector.noObjects')}</p>
+            <p className="text-xs text-muted">{t('inspector.noObjects')}</p>
           ) : (
             <ul data-testid="object-list" className="flex flex-col gap-1">
               {objects.map((object) => {
@@ -518,8 +518,8 @@ export function Inspector({
                     key={object.path.join('.')}
                     className={`flex items-stretch gap-1 rounded border transition-colors ${
                       selected
-                        ? 'border-amber-400/70 bg-amber-400/10'
-                        : 'border-white/10 hover:border-white/25'
+                        ? 'border-accent/70 bg-accent-soft'
+                        : 'border-line hover:border-line-strong'
                     }`}
                   >
                     <button
@@ -530,14 +530,14 @@ export function Inspector({
                       aria-current={selected ? 'true' : undefined}
                       onClick={() => onSelectObject(object.path)}
                       className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs ${
-                        selected ? 'text-amber-100' : 'text-zinc-300'
+                        selected ? 'text-accent' : 'text-muted'
                       }`}
                     >
-                      <span className="rounded bg-white/5 px-1 py-0.5 font-mono text-[10px] text-zinc-400">
+                      <span className="rounded bg-chip px-1 py-0.5 font-mono text-[10px] text-muted">
                         {object.tag}
                       </span>
                       {object.elementId && (
-                        <span className="font-mono text-[10px] text-amber-200/80">
+                        <span className="font-mono text-[10px] text-accent">
                           {object.elementId}
                         </span>
                       )}
@@ -545,14 +545,14 @@ export function Inspector({
                         {object.text || t('inspector.emptyText')}
                       </span>
                       {object.group && (
-                        <span className="rounded bg-sky-400/15 px-1 py-0.5 text-[10px] text-sky-200">
+                        <span className="rounded bg-chip px-1 py-0.5 text-[10px] text-muted">
                           {t('inspector.group')}
                         </span>
                       )}
                       {object.locked && (
                         <span
                           data-testid="object-locked-badge"
-                          className="rounded bg-rose-400/15 px-1 py-0.5 text-[10px] text-rose-200"
+                          className="rounded bg-danger-soft px-1 py-0.5 text-[10px] text-danger"
                         >
                           {t('inspector.locked')}
                         </span>
@@ -560,7 +560,7 @@ export function Inspector({
                       {object.hidden && (
                         <span
                           data-testid="object-hidden-badge"
-                          className="rounded bg-violet-400/15 px-1 py-0.5 text-[10px] text-violet-200"
+                          className="rounded bg-warning-soft px-1 py-0.5 text-[10px] text-warning"
                         >
                           {t('inspector.hidden')}
                         </span>
@@ -574,7 +574,7 @@ export function Inspector({
                           name: object.text || object.elementId || object.tag
                         })}
                         onClick={() => onObjectRecovery(object.path, 'unlock')}
-                        className="shrink-0 px-2 text-[11px] text-rose-200 hover:text-rose-100"
+                        className="shrink-0 px-2 text-[11px] text-danger underline-offset-2 hover:underline"
                       >
                         {t('inspector.unlockItem')}
                       </button>
@@ -587,7 +587,7 @@ export function Inspector({
                           name: object.text || object.elementId || object.tag
                         })}
                         onClick={() => onObjectRecovery(object.path, 'unhide')}
-                        className="shrink-0 px-2 text-[11px] text-violet-200 hover:text-violet-100"
+                        className="shrink-0 px-2 text-[11px] text-warning underline-offset-2 hover:underline"
                       >
                         {t('inspector.showItem')}
                       </button>
@@ -706,7 +706,7 @@ export function Inspector({
             className={SECTION_CLASS}
           >
             <h3 className={HEADING_CLASS}>{t('inspector.chart')}</h3>
-            <p data-testid="chart-summary" className="text-xs text-zinc-400">
+            <p data-testid="chart-summary" className="text-xs text-muted">
               {chart.type} · {chart.title || t('inspector.untitled')}
             </p>
             <button
@@ -773,7 +773,7 @@ export function Inspector({
                   disabled={styleDisabled}
                   onCommit={onSetImageAlt}
                 />
-                <span className="text-[11px] text-zinc-400">{t('inspector.crop')}</span>
+                <span className="text-[11px] text-muted">{t('inspector.crop')}</span>
                 <div className="grid grid-cols-4 gap-1">
                   {(
                     [
@@ -926,24 +926,24 @@ export function Inspector({
           >
             <h3 className={HEADING_CLASS}>{t('inspector.geometry')}</h3>
             {objectActions.hidden ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
+              <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.hiddenHint')}
               </p>
             ) : objectActions.locked ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
+              <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.lockedHint')}
               </p>
             ) : multi ? (
-              <p className="text-[11px] text-zinc-400">
+              <p className="text-[11px] text-muted">
                 {t('inspector.multiHint', { count: selectionCount })}
               </p>
             ) : objectActions.group ? (
-              <p data-testid="object-state-message" className="text-[11px] text-zinc-400">
+              <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.groupHint')}
               </p>
             ) : (
               readOnly && (
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-[11px] text-muted">
                   {t('inspector.nestedHint')}
                 </p>
               )
@@ -1001,7 +1001,7 @@ export function Inspector({
           >
             <h3 className={HEADING_CLASS}>{t('inspector.slide')}</h3>
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] text-zinc-400">{t('inspector.transition')}</span>
+              <span className="text-[11px] text-muted">{t('inspector.transition')}</span>
               <select
                 data-testid="transition-select"
                 aria-label={t('inspector.transition')}
@@ -1045,14 +1045,14 @@ export function Inspector({
                 </button>
               </div>
               {transitionDirty && (
-                <span className="text-[11px] text-amber-300">
+                <span className="text-[11px] text-warning">
                   {t('inspector.notApplied')}
                 </span>
               )}
             </div>
 
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] text-zinc-400">{t('inspector.background')}</span>
+              <span className="text-[11px] text-muted">{t('inspector.background')}</span>
               <div className="flex gap-1">
                 <select
                   data-testid="background-kind"
@@ -1098,7 +1098,7 @@ export function Inspector({
                   data-testid="clear-background"
                   onClick={clearBackground}
                   disabled={background === null}
-                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
+                  className="rounded border border-line-strong px-2 py-1 text-[11px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40"
                 >
                   {t('inspector.clearBackground')}
                 </button>
@@ -1107,7 +1107,7 @@ export function Inspector({
                   data-testid="apply-background"
                   onClick={applyBackground}
                   disabled={!backgroundValue.trim()}
-                  className="rounded border border-white/40 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40"
+                  className="rounded border border-line-strong px-2 py-1 text-[11px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40"
                 >
                   {t('common.apply')}
                 </button>
@@ -1116,7 +1116,7 @@ export function Inspector({
                 <p
                   data-testid="background-error"
                   role="alert"
-                  className="text-[11px] text-red-300"
+                  className="text-[11px] text-danger"
                 >
                   {backgroundError}
                 </p>
@@ -1135,7 +1135,7 @@ export function Inspector({
       >
         <div className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>{t('inspector.text')}</h3>
-          <p data-testid="text-placeholder" className="text-xs text-zinc-400">
+          <p data-testid="text-placeholder" className="text-xs text-muted">
             {t('inspector.textHint')}
           </p>
         </div>
@@ -1179,7 +1179,7 @@ export function Inspector({
             }}
             className={`${FIELD_CLASS} resize-y font-sans`}
           />
-          <p className="text-[11px] text-zinc-400">
+          <p className="text-[11px] text-muted">
             {t('inspector.notesHint')}
           </p>
         </div>

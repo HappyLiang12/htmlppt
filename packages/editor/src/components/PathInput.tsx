@@ -48,7 +48,7 @@ export function PathInput({
         aria-label={t('path.label')}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? 'deck-path-error' : undefined}
-        className="w-64 truncate rounded border border-white/40 bg-black/30 px-2 py-1 text-xs text-zinc-100 outline-none focus:border-amber-400/70"
+        className="w-64 truncate rounded border border-line-strong bg-input px-2 py-1 text-xs text-ink outline-none focus:border-accent/70"
         value={draft}
         readOnly={!editable}
         disabled={opening}
@@ -78,7 +78,7 @@ export function PathInput({
       <button
         type="button"
         data-testid="deck-picker"
-        className="rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 hover:border-white/60"
+        className="rounded border border-line-strong px-2 py-1 text-xs text-muted hover:bg-hover hover:text-ink"
         title={t('path.openHint')}
         aria-label={t('path.openHint')}
         disabled={opening}
@@ -91,7 +91,7 @@ export function PathInput({
         <span
           id="deck-path-error"
           role="alert"
-          className="max-w-64 truncate text-xs text-red-300"
+          className="max-w-64 truncate text-xs text-danger"
           title={error}
         >
           {error}

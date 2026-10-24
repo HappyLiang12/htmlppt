@@ -35,11 +35,11 @@ export function ChartDialog({
     >
       <div className="flex flex-col gap-3" onKeyDown={handleKeyDown}>
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100">
+          <h2 className="text-sm font-semibold text-ink">
             {t('inspector.chartDialog')}
           </h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
-            <code className="rounded bg-white/10 px-1 py-0.5">
+          <p className="mt-1 text-[11px] leading-relaxed text-muted">
+            <code className="rounded bg-chip px-1 py-0.5">
               type (bar/line/pie) · labels · series
             </code>{' '}
             {t('inspector.chartHint')}
@@ -52,13 +52,13 @@ export function ChartDialog({
           rows={18}
           spellCheck={false}
           onChange={(event) => onChange(event.target.value)}
-          className="w-full resize-y rounded border border-white/40 bg-black/30 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-100 outline-none focus:border-amber-400/70"
+          className="w-full resize-y rounded border border-line-strong bg-input px-3 py-2 font-mono text-xs leading-relaxed text-ink outline-none focus:border-accent/70"
         />
         {error && (
           <p
             data-testid="chart-error"
             role="alert"
-            className="text-[11px] text-red-300"
+            className="text-[11px] text-danger"
           >
             {error}
           </p>
@@ -68,7 +68,7 @@ export function ChartDialog({
             type="button"
             data-testid="chart-cancel"
             onClick={onCancel}
-            className="rounded border border-white/40 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/60"
+            className="rounded border border-line-strong px-3 py-1.5 text-xs text-muted transition-colors hover:bg-hover hover:text-ink"
           >
             {t('common.cancel')}
           </button>
@@ -76,7 +76,7 @@ export function ChartDialog({
             type="button"
             data-testid="chart-apply"
             onClick={onApply}
-            className="rounded border border-amber-400/70 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:bg-amber-400/20"
+            className="rounded border border-accent/70 bg-accent-soft px-3 py-1.5 text-xs text-accent transition-colors hover:bg-accent/20"
           >
             {t('common.apply')}
           </button>

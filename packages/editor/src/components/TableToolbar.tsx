@@ -20,8 +20,8 @@ export interface TableToolbarProps {
 }
 
 const BUTTON =
-  'rounded border border-white/40 px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:cursor-not-allowed disabled:opacity-40';
-const COLOR_LABEL = 'flex items-center gap-1 text-[11px] text-zinc-400';
+  'rounded border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40';
+const COLOR_LABEL = 'flex items-center gap-1 text-[11px] text-muted';
 
 function colorValue(value: string, fallback: string): string {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
@@ -47,9 +47,9 @@ export function TableToolbar({
       data-testid="table-toolbar"
       role="toolbar"
       aria-label={t('table.tools')}
-      className="flex flex-wrap items-center gap-1 border-b border-white/10 bg-[#12151b] px-3 py-2"
+      className="flex flex-wrap items-center gap-1 border-b border-line bg-surface px-3 py-2"
     >
-      <span className="mr-1 font-mono text-[11px] text-zinc-400">
+      <span className="mr-1 font-mono text-[11px] text-muted">
         {t('table.position', {
           row: state.row + 1,
           rows: state.rows,
@@ -135,7 +135,7 @@ export function TableToolbar({
               onCellStyle({ background: fill });
             }
           }}
-          className="h-6 w-8 cursor-pointer rounded border border-white/40 bg-transparent"
+          className="h-6 w-8 cursor-pointer rounded border border-line-strong bg-transparent"
         />
       </label>
       <label className={COLOR_LABEL}>
@@ -152,7 +152,7 @@ export function TableToolbar({
               onCellStyle({ 'border-color': border });
             }
           }}
-          className="h-6 w-8 cursor-pointer rounded border border-white/40 bg-transparent"
+          className="h-6 w-8 cursor-pointer rounded border border-line-strong bg-transparent"
         />
       </label>
     </div>

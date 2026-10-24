@@ -3311,7 +3311,7 @@ export function App() {
 
   return (
     <div
-      className="flex h-screen flex-col bg-[#0f1115] text-zinc-100"
+      className="flex h-screen flex-col bg-canvas text-ink"
       aria-busy={openingDeck || undefined}
     >
       <p
@@ -3403,7 +3403,7 @@ export function App() {
       {(error || slideOpError || exportError) && (
         <div
           data-testid="editor-error"
-          className="max-h-24 overflow-auto border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200"
+          className="max-h-24 overflow-auto border-b border-danger/30 bg-danger-soft px-4 py-2 text-xs text-danger"
         >
           {[error, slideOpError, exportError].filter(Boolean).join(' · ')}
         </div>
@@ -3413,13 +3413,13 @@ export function App() {
         <div
           data-testid="export-result"
           role="status"
-          className="flex items-center gap-3 border-b border-emerald-500/30 bg-emerald-950/50 px-4 py-2 text-xs text-emerald-100"
+          className="flex items-center gap-3 border-b border-success/30 bg-success-soft px-4 py-2 text-xs text-success"
         >
           <span className="min-w-0 flex-1 truncate">{exportMessage}</span>
           <button
             type="button"
             data-testid="export-dismiss"
-            className="rounded border border-emerald-300/40 px-2 py-0.5 text-emerald-100"
+            className="rounded border border-success/40 px-2 py-0.5 text-success"
             onClick={() => setExportMessage('')}
           >
             {t('common.close')}
@@ -3431,7 +3431,7 @@ export function App() {
         <div
           data-testid="recovery-banner"
           role="alert"
-          className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/40 px-4 py-2 text-xs text-amber-100"
+          className="flex flex-wrap items-center gap-3 border-b border-warning/30 bg-warning-soft px-4 py-2 text-xs text-warning"
         >
           <span className="min-w-0 flex-1 truncate">
             {t('recovery.found', { path: recoveryDraft.filePath })}
@@ -3439,7 +3439,7 @@ export function App() {
           <button
             type="button"
             data-testid="recovery-restore"
-            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100"
+            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning"
             onClick={() => {
               actions.restoreDraft(recoveryDraft.html);
               setRecoveryDraft(null);
@@ -3450,7 +3450,7 @@ export function App() {
           <button
             type="button"
             data-testid="recovery-discard"
-            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100"
+            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning"
             onClick={() => {
               void deleteDraft(recoveryDraft.key);
               setRecoveryDraft(null);
@@ -3465,7 +3465,7 @@ export function App() {
         <div
           data-testid="conflict-banner"
           role="alert"
-          className="flex flex-wrap items-center gap-3 border-b border-amber-400/30 bg-amber-950/50 px-4 py-2 text-xs text-amber-100"
+          className="flex flex-wrap items-center gap-3 border-b border-warning/30 bg-warning-soft px-4 py-2 text-xs text-warning"
         >
           <span>
             {switchedFileConflict
@@ -3482,7 +3482,7 @@ export function App() {
             data-testid="conflict-reload"
             disabled={state.recoveryBusy}
             onPointerDown={(event) => event.preventDefault()}
-            className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
+            className="rounded border border-warning/40 px-2 py-1 text-xs text-warning transition-colors hover:border-warning"
             onClick={() => resolveConflict('reload')}
           >
             {t('conflict.reload')}
@@ -3493,7 +3493,7 @@ export function App() {
               data-testid="conflict-overwrite"
               disabled={state.recoveryBusy || state.pending}
               onPointerDown={(event) => event.preventDefault()}
-              className="rounded border border-amber-300/50 px-2 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200"
+              className="rounded border border-warning/40 px-2 py-1 text-xs text-warning transition-colors hover:border-warning"
               onClick={() => resolveConflict('overwrite')}
             >
               {t('conflict.overwrite')}
@@ -3530,11 +3530,11 @@ export function App() {
               actions.clearSelection();
               clearOverlay();
             }}
-            className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#0a0c10] p-12"
+            className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-12"
           >
             {activeSlide ? (
               <div
-                className="relative shadow-2xl shadow-black/60"
+                className="relative shadow-[0_24px_80px_var(--editor-shadow-stage)]"
                 style={{
                   width: activeSlide.width * scale,
                   height: activeSlide.height * scale
@@ -3582,9 +3582,9 @@ export function App() {
                 )}
               </div>
             ) : status === 'loading' ? (
-              <p className="text-sm text-zinc-400">{t('common.loading')}</p>
+              <p className="text-sm text-muted">{t('common.loading')}</p>
             ) : (
-              <p className="text-sm text-zinc-400">{t('editor.noSlides')}</p>
+              <p className="text-sm text-muted">{t('editor.noSlides')}</p>
             )}
           </main>
 
@@ -3623,7 +3623,7 @@ export function App() {
         <div
           data-testid="opening-overlay"
           aria-hidden="true"
-          className="fixed inset-0 z-50 cursor-progress bg-black/10"
+          className="fixed inset-0 z-50 cursor-progress bg-overlay/20"
           onPointerDown={(event) => {
             event.preventDefault();
             event.stopPropagation();

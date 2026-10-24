@@ -71,14 +71,14 @@ export function CanvasOverlay({
           <div
             key={`x-${index}`}
             data-testid="guide-x"
-            className="absolute top-0 h-full w-px bg-rose-400/80"
+            className="absolute top-0 h-full w-px bg-danger/80"
             style={{ left: guide.position * scale }}
           />
         ) : (
           <div
             key={`y-${index}`}
             data-testid="guide-y"
-            className="absolute left-0 h-px w-full bg-rose-400/80"
+            className="absolute left-0 h-px w-full bg-danger/80"
             style={{ top: guide.position * scale }}
           />
         )
@@ -97,7 +97,7 @@ export function CanvasOverlay({
             data-selected-path={box.path.join('.')}
             className={`pointer-events-none absolute ${
               index === 0 ? 'border-2' : 'border'
-            } border-amber-400`}
+            } border-accent`}
             style={{
               left: box.rect.x * scale,
               top: box.rect.y * scale,
@@ -111,7 +111,7 @@ export function CanvasOverlay({
               <span
                 data-testid="selection-marker"
                 aria-hidden="true"
-                className="absolute left-0 top-0 rounded-br bg-amber-400 px-1 text-[10px] font-semibold text-zinc-950"
+                className="absolute left-0 top-0 rounded-br bg-accent px-1 text-[10px] font-semibold text-on-accent"
               >
                 {t('canvas.selected')}
               </span>
@@ -122,7 +122,7 @@ export function CanvasOverlay({
                   <div
                     key={handle}
                     data-testid={`handle-${handle}`}
-                    className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-amber-200 bg-amber-400"
+                    className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-on-accent bg-accent"
                     style={{
                       ...HANDLE_POSITIONS[handle],
                       transform: 'translate(-50%, -50%)'
@@ -132,7 +132,7 @@ export function CanvasOverlay({
                 ))}
                 <div
                   data-testid="rotate-handle"
-                  className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-amber-200 bg-amber-400"
+                  className="pointer-events-auto absolute left-1/2 h-3 w-3 rounded-full border border-on-accent bg-accent"
                   style={{
                     top: 0,
                     transform: 'translate(-50%, calc(-100% - 16px))'

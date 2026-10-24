@@ -71,10 +71,10 @@ export function ShortcutsDialog({ onClose }: ShortcutsDialogProps) {
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100">
+          <h2 className="text-sm font-semibold text-ink">
             {t('shortcuts.title')}
           </h2>
-          <p className="mt-1 text-[11px] text-zinc-400">
+          <p className="mt-1 text-[11px] text-muted">
             {t('shortcuts.note')}
           </p>
         </div>
@@ -83,7 +83,7 @@ export function ShortcutsDialog({ onClose }: ShortcutsDialogProps) {
           data-testid="shortcuts-dialog-close"
           aria-label={t('shortcuts.close')}
           onClick={onClose}
-          className="rounded border border-white/40 px-2 py-1 text-xs text-zinc-200 transition-colors hover:border-white/60"
+          className="rounded border border-line-strong px-2 py-1 text-xs text-ink transition-colors hover:bg-hover"
         >
           {t('common.close')}
         </button>
@@ -92,7 +92,7 @@ export function ShortcutsDialog({ onClose }: ShortcutsDialogProps) {
       <div className="max-h-[60vh] overflow-y-auto pr-1">
         {GROUPS.map((group) => (
           <section key={group.title} className="mb-3 last:mb-0">
-            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
               {t(group.title)}
             </h3>
             <dl className="flex flex-col gap-1">
@@ -102,11 +102,11 @@ export function ShortcutsDialog({ onClose }: ShortcutsDialogProps) {
                   className="flex items-baseline justify-between gap-4 text-xs"
                 >
                   <dt>
-                    <kbd className="rounded border border-white/40 bg-white/10 px-1.5 py-0.5 font-mono text-[11px] text-zinc-100">
+                    <kbd className="rounded border border-line-strong bg-chip px-1.5 py-0.5 font-mono text-[11px] text-ink">
                       {row.keysMessage ? t(row.keysMessage) : row.keys}
                     </kbd>
                   </dt>
-                  <dd className="text-right text-zinc-300">
+                  <dd className="text-right text-muted">
                     {t(row.description)}
                   </dd>
                 </div>
@@ -122,7 +122,7 @@ export function ShortcutsDialog({ onClose }: ShortcutsDialogProps) {
           data-testid="shortcuts-dialog-done"
           aria-label={t('shortcuts.closeHelp')}
           onClick={onClose}
-          className="rounded border border-amber-400/70 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:bg-amber-400/20"
+          className="rounded border border-accent/70 bg-accent-soft px-3 py-1.5 text-xs text-accent transition-colors hover:bg-accent/20"
         >
           {t('common.close')}
         </button>

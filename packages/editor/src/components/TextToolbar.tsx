@@ -58,11 +58,11 @@ type Menu = 'color' | 'highlight' | 'font' | 'size' | 'line' | null;
 type OpenMenu = Exclude<Menu, null>;
 
 const BUTTON =
-  'rounded border border-white/40 px-1.5 py-1 text-xs text-zinc-300 transition-colors hover:border-white/60 disabled:opacity-40';
+  'rounded border border-line-strong px-1.5 py-1 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-40';
 const ACTIVE =
-  'rounded border border-amber-400/80 bg-amber-400/15 px-1.5 py-1 text-xs text-amber-200';
+  'rounded border border-accent/80 bg-accent-soft px-1.5 py-1 text-xs text-accent';
 const MENU =
-  'absolute left-0 top-full z-20 mt-1 flex max-h-64 w-max flex-wrap gap-1 rounded border border-white/30 bg-[#161a21] p-2 shadow-xl';
+  'absolute left-0 top-full z-20 mt-1 flex max-h-64 w-max flex-wrap gap-1 rounded border border-line-strong bg-raised p-2 shadow-[0_24px_60px_var(--editor-shadow-panel)]';
 
 function toggleClass(active: boolean): string {
   return active ? ACTIVE : BUTTON;
@@ -126,10 +126,10 @@ export function TextToolbar({
       data-testid="text-toolbar"
       role="toolbar"
       aria-label={t('text.toolbar')}
-      className="relative flex flex-wrap items-center gap-1 border-b border-amber-400/20 bg-amber-950/20 px-4 py-1.5"
+      className="relative flex flex-wrap items-center gap-1 border-b border-accent/20 bg-accent-soft px-4 py-1.5"
       onPointerDown={(event) => event.preventDefault()}
     >
-      <span className="mr-1 text-xs text-amber-200/80">{t('text.group')}</span>
+      <span className="mr-1 text-xs text-accent">{t('text.group')}</span>
 
       <button
         type="button"
@@ -176,7 +176,7 @@ export function TextToolbar({
         S
       </button>
 
-      <span className="mx-1 h-4 w-px bg-white/15" />
+      <span className="mx-1 h-4 w-px bg-line" />
 
       <div className="relative">
         <button
@@ -191,7 +191,7 @@ export function TextToolbar({
         >
           <span
             data-testid="text-color-indicator"
-            className="inline-block h-3 w-3 rounded-sm border border-white/30 align-middle"
+            className="inline-block h-3 w-3 rounded-sm border border-line-strong align-middle"
             style={{ backgroundColor: state.color || '#111827' }}
           />
         </button>
@@ -208,7 +208,7 @@ export function TextToolbar({
                 data-testid={`text-color-${color.slice(1)}`}
                 aria-label={t('text.colorSwatch', { color })}
                 title={color}
-                className="h-6 w-6 rounded border border-white/30"
+                className="h-6 w-6 rounded border border-line-strong"
                 style={{ backgroundColor: color }}
                 onClick={() => run({ type: 'color', value: color })}
               />
@@ -229,7 +229,7 @@ export function TextToolbar({
           onClick={() => toggleMenu('highlight')}
         >
           <span
-            className="inline-block h-3 w-3 rounded-sm border border-white/30 align-middle"
+            className="inline-block h-3 w-3 rounded-sm border border-line-strong align-middle"
             style={{ backgroundColor: state.highlight || '#fff59d' }}
           />
         </button>
@@ -246,7 +246,7 @@ export function TextToolbar({
                 data-testid={`text-highlight-${color.slice(1)}`}
                 aria-label={t('text.highlightSwatch', { color })}
                 title={color}
-                className="h-6 w-6 rounded border border-white/30"
+                className="h-6 w-6 rounded border border-line-strong"
                 style={{ backgroundColor: color }}
                 onClick={() => run({ type: 'highlight', value: color })}
               />
@@ -284,7 +284,7 @@ export function TextToolbar({
                 data-testid={`text-font-${font.value
                   .toLowerCase()
                   .replace(/[^a-z0-9]+/g, '-')}`}
-                className="rounded px-2 py-1 text-left text-xs text-zinc-200 hover:bg-white/10"
+                className="rounded px-2 py-1 text-left text-xs text-ink hover:bg-hover"
                 style={{ fontFamily: font.value }}
                 onClick={() => run({ type: 'fontFamily', value: font.value })}
               >
@@ -320,7 +320,7 @@ export function TextToolbar({
                 key={size}
                 type="button"
                 data-testid={`text-size-${size}`}
-                className="rounded px-2 py-1 text-xs text-zinc-200 hover:bg-white/10"
+                className="rounded px-2 py-1 text-xs text-ink hover:bg-hover"
                 onClick={() =>
                   run({ type: 'fontSize', value: `${size}px` })
                 }
@@ -332,7 +332,7 @@ export function TextToolbar({
         )}
       </div>
 
-      <span className="mx-1 h-4 w-px bg-white/15" />
+      <span className="mx-1 h-4 w-px bg-line" />
 
       {(['left', 'center', 'right', 'justify'] as const).map((align) => (
         <button
@@ -379,7 +379,7 @@ export function TextToolbar({
                 key={value}
                 type="button"
                 data-testid={`text-line-${value.replace('.', '-')}`}
-                className="rounded px-2 py-1 text-xs text-zinc-200 hover:bg-white/10"
+                className="rounded px-2 py-1 text-xs text-ink hover:bg-hover"
                 onClick={() => run({ type: 'lineHeight', value })}
               >
                 {value}
@@ -389,7 +389,7 @@ export function TextToolbar({
         )}
       </div>
 
-      <span className="mx-1 h-4 w-px bg-white/15" />
+      <span className="mx-1 h-4 w-px bg-line" />
 
       <button
         type="button"
@@ -439,7 +439,7 @@ export function TextToolbar({
         <span
           data-testid="text-error"
           role="alert"
-          className="ml-2 text-xs text-red-300"
+          className="ml-2 text-xs text-danger"
         >
           {error}
         </span>
