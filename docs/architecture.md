@@ -201,6 +201,16 @@ cross the window boundary as JSON in `data-ppt-strings` on the popup body
 because `PRESENTER_CLIENT.toString()` cannot close over outer variables. The
 popup copies the resolved locale to its own `<html lang>`.
 
+## Editor theme
+
+- **Theme:** semantic CSS variables in `packages/editor/src/index.css` feed
+  Tailwind `@theme inline` utilities. `ThemeProvider` resolves
+  `light | dark | system`, writes `data-theme` and `color-scheme` on `<html>`,
+  and follows `prefers-color-scheme` only in system mode. An inline bootstrap in
+  `index.html` prevents a first-paint flash. The presenter route is
+  intentionally excluded: it mounts outside `ThemeProvider`, and the bootstrap
+  skips `?presenter=1`, so presenter view keeps its original styling.
+
 ## Renderer pipeline
 
 1. **Find Chromium.** `HTMLPPT_CHROMIUM` wins. An explicitly set but invalid
