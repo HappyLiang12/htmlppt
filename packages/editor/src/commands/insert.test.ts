@@ -46,10 +46,13 @@ describe('defaultInsertRect', () => {
 
 describe('prepareInsertion', () => {
   it('prepares a text box with real text', async () => {
-    const prepared = await prepareInsertion({ kind: 'text' }, { width: 1600, height: 900 });
+    const prepared = await prepareInsertion(
+      { kind: 'text', text: 'Test text' },
+      { width: 1600, height: 900 }
+    );
     const element = prepared.apply(slide());
 
-    expect(element.textContent).toBe('新文字方塊');
+    expect(element.textContent).toBe('Test text');
     expect(element.getAttribute('data-ppt-el')).toBe('e1');
   });
 

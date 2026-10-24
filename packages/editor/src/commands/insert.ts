@@ -62,7 +62,7 @@ export async function prepareInsertion(
 ): Promise<PreparedInsertion> {
   const rect = defaultInsertRect(canvas, request.kind);
   if (request.kind === 'text') {
-    const text = request.text ?? '新文字方塊';
+    const text = request.text ?? 'Text box';
     return {
       apply: (slide) => insertTextBox(slide, { ...rect, text })
     };

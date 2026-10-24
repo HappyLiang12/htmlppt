@@ -291,6 +291,7 @@ export const zhHant: Record<MessageKey, string> = {
   'conflict.overwrite': '覆寫',
   'editor.noSlides': '找不到投影片。',
   'editor.newSlideTitle': '新投影片',
+  'editor.newTextBox': '新文字方塊',
   'editor.pendingEditFailed': '無法套用編輯。',
   'editor.pendingEditInstruction': '請先套用或取消尚未完成的編輯，再覆寫。',
   'editor.reloadFailed': '無法重新載入簡報。',

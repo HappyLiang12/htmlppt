@@ -3338,7 +3338,9 @@ export function App() {
         onAddSlide={handleAddSlide}
         onDuplicateSlide={() => handleDuplicateSlide()}
         onDeleteSlide={() => handleDeleteSlide()}
-        onInsertText={() => void runInsertion({ kind: 'text' })}
+        onInsertText={() =>
+          void runInsertion({ kind: 'text', text: t('editor.newTextBox') })
+        }
         onInsertShape={handleInsertShape}
         onInsertTable={(rows, columns) =>
           void runInsertion({ kind: 'table', rows, columns })
