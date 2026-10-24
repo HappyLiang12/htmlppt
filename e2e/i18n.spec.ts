@@ -101,6 +101,17 @@ test.describe('English first visit', () => {
       await expect(
         page.getByTestId('locale-select').locator('option')
       ).toHaveText(['English', '繁體中文', '简体中文']);
+
+      await page.getByTestId('insert-text').click();
+      await expect(page.getByTestId('save-status')).toHaveText('Saved', {
+        timeout: 10_000
+      });
+      // The preview title is localized too; this is the English counterpart
+      // of the insertion spec's zh-Hant frame selector.
+      const frame = page.frameLocator('iframe[title="Slide preview"]');
+      await expect(frame.locator('div[data-ppt-el]').last()).toHaveText(
+        'Text box'
+      );
     } finally {
       await host.stop();
       await rm(directory, { recursive: true, force: true });
