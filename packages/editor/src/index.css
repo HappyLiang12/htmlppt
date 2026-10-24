@@ -1,5 +1,87 @@
 @import "tailwindcss";
 
+@theme inline {
+  --color-canvas: var(--editor-canvas);
+  --color-surface: var(--editor-surface);
+  --color-raised: var(--editor-raised);
+  --color-input: var(--editor-input);
+  --color-chip: var(--editor-chip);
+  --color-hover: var(--editor-hover);
+  --color-line: var(--editor-line);
+  --color-line-strong: var(--editor-line-strong);
+  --color-ink: var(--editor-ink);
+  --color-muted: var(--editor-muted);
+  --color-faint: var(--editor-faint);
+  --color-accent: var(--editor-accent);
+  --color-on-accent: var(--editor-on-accent);
+  --color-accent-soft: var(--editor-accent-soft);
+  --color-danger: var(--editor-danger);
+  --color-danger-soft: var(--editor-danger-soft);
+  --color-warning: var(--editor-warning);
+  --color-warning-soft: var(--editor-warning-soft);
+  --color-success: var(--editor-success);
+  --color-success-soft: var(--editor-success-soft);
+  --color-overlay: var(--editor-overlay);
+}
+
+/* Editor chrome palettes. The provider and the pre-paint bootstrap set
+   data-theme on <html>; slide content, play mode, and the presenter never
+   consume these variables. :root carries the dark palette so routes without
+   a data-theme attribute (the presenter) keep their original colors and the
+   global focus ring. */
+:root,
+:root[data-theme='dark'] {
+  --editor-canvas: #0f1115;
+  --editor-surface: #12151b;
+  --editor-raised: #161a21;
+  --editor-input: #0b0d12;
+  --editor-chip: rgba(255, 255, 255, 0.05);
+  --editor-hover: rgba(255, 255, 255, 0.12);
+  --editor-line: rgba(255, 255, 255, 0.1);
+  --editor-line-strong: rgba(255, 255, 255, 0.3);
+  --editor-ink: #f4f4f5;
+  --editor-muted: #a1a1aa;
+  --editor-faint: #71717a;
+  --editor-accent: #fbbf24;
+  --editor-on-accent: #18181b;
+  --editor-accent-soft: rgba(251, 191, 36, 0.12);
+  --editor-danger: #f87171;
+  --editor-danger-soft: rgba(127, 29, 29, 0.6);
+  --editor-warning: #fcd34d;
+  --editor-warning-soft: rgba(69, 26, 3, 0.55);
+  --editor-success: #6ee7b7;
+  --editor-success-soft: rgba(6, 78, 59, 0.5);
+  --editor-overlay: rgba(0, 0, 0, 0.7);
+  --editor-shadow-panel: rgba(0, 0, 0, 0.6);
+  --editor-shadow-stage: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme='light'] {
+  --editor-canvas: #f4f4f5;
+  --editor-surface: #ffffff;
+  --editor-raised: #fafafa;
+  --editor-input: #ffffff;
+  --editor-chip: rgba(24, 24, 27, 0.04);
+  --editor-hover: rgba(24, 24, 27, 0.06);
+  --editor-line: rgba(24, 24, 27, 0.12);
+  --editor-line-strong: rgba(24, 24, 27, 0.3);
+  --editor-ink: #18181b;
+  --editor-muted: #52525b;
+  --editor-faint: #71717a;
+  --editor-accent: #b45309;
+  --editor-on-accent: #fffbeb;
+  --editor-accent-soft: rgba(180, 83, 9, 0.1);
+  --editor-danger: #b91c1c;
+  --editor-danger-soft: #fef2f2;
+  --editor-warning: #92400e;
+  --editor-warning-soft: #fffbeb;
+  --editor-success: #047857;
+  --editor-success-soft: #ecfdf5;
+  --editor-overlay: rgba(0, 0, 0, 0.45);
+  --editor-shadow-panel: rgba(24, 24, 27, 0.18);
+  --editor-shadow-stage: rgba(24, 24, 27, 0.15);
+}
+
 html,
 body,
 #root {
@@ -23,7 +105,7 @@ textarea:focus-visible,
 [role='button']:focus-visible,
 [role='tab']:focus-visible,
 [role='option']:focus-visible {
-  outline: 2px solid #fbbf24;
+  outline: 2px solid var(--editor-accent);
   outline-offset: 2px;
 }
 
@@ -50,7 +132,7 @@ textarea:focus-visible,
   inset: 0;
   z-index: 30;
   pointer-events: none;
-  background: #0a0c10;
+  background: var(--editor-canvas);
 }
 
 .htmlppt-transition-preview--fade {

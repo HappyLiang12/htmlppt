@@ -5,6 +5,7 @@ import {
   type Locale,
   type MessageKey
 } from '../i18n';
+import { useTheme } from '../theme';
 import { ExportMenu, type ExportFormat } from './ExportMenu';
 import { InsertMenu } from './InsertMenu';
 import { PathInput } from './PathInput';
@@ -99,6 +100,12 @@ export function Toolbar({
   standaloneMode = false
 }: ToolbarProps) {
   const { locale, setLocale, t } = useI18n();
+  const { mode, setMode } = useTheme();
+  const themeOptions = [
+    ['light', t('theme.light')],
+    ['dark', t('theme.dark')],
+    ['system', t('theme.system')]
+  ] as const;
 
   return (
     <header
@@ -274,6 +281,29 @@ export function Toolbar({
           <option value="zh-Hant">繁體中文</option>
           <option value="zh-Hans">简体中文</option>
         </select>
+        <div
+          role="group"
+          aria-label={t('theme.label')}
+          data-testid="theme-select"
+          className="flex items-center gap-1"
+        >
+          {themeOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              data-testid={`theme-${value}`}
+              aria-pressed={mode === value}
+              className={
+                mode === value
+                  ? 'rounded border border-accent/70 bg-accent-soft px-2 py-1 text-xs text-accent'
+                  : 'rounded border border-line-strong px-2 py-1 text-xs text-muted hover:border-line-strong'
+              }
+              onClick={() => setMode(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           data-testid="shortcuts-open"

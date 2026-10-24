@@ -16,6 +16,9 @@ export default defineConfig({
     // Pin a zh-TW browser locale so their first visit keeps those labels;
     // locale-specific tests override this per describe block.
     locale: 'zh-TW',
+    // Existing visual assertions were captured against the dark editor
+    // palette. Theme tests override this per describe block.
+    colorScheme: 'dark',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
