@@ -87,7 +87,7 @@ git commit -m "feat(core): ..."
 Orchestrator review and merge (local mode, authorized):
 
 ```bash
-cd /d/project/tmp/html-ppt-editor
+cd /d/project/htmlppt
 git status
 git merge --no-ff m0/core -m "merge: m0/core"
 git worktree remove .worktrees/m0-core
