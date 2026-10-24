@@ -156,7 +156,7 @@ export function StandaloneLauncher({
           </div>
         )}
 
-        <p className="mt-6 text-xs text-faint">
+        <p className="mt-6 text-xs text-muted">
           {t('standalone.commandHint')}{' '}
           <code className="rounded bg-chip px-1 py-0.5">
             htmlppt open deck.html

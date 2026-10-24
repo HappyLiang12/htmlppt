@@ -181,7 +181,10 @@ export function SorterView({
                   onKeyDown={(event) => handleKeyDown(event, index)}
                   className="relative flex flex-col gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                 >
-                  <span className="absolute left-1 top-1 z-10 rounded bg-overlay px-1.5 py-0.5 text-[11px] tabular-nums text-white">
+                  <span
+                    data-testid="sorter-slide-number"
+                    className="absolute left-1 top-1 z-10 rounded bg-overlay-solid px-1.5 py-0.5 text-[11px] tabular-nums text-on-overlay"
+                  >
                     {index + 1}
                   </span>
                   {active && (

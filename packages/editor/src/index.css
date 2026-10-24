@@ -22,6 +22,15 @@
   --color-success: var(--editor-success);
   --color-success-soft: var(--editor-success-soft);
   --color-overlay: var(--editor-overlay);
+  --color-overlay-solid: var(--editor-overlay-solid);
+  --color-on-overlay: var(--editor-on-overlay);
+}
+
+/* Content that sits on an overlay keeps one readable pair in both palettes.
+   Unlike `overlay`, these are opaque and do not vary with the theme. */
+:root {
+  --editor-overlay-solid: #18181b;
+  --editor-on-overlay: #fafafa;
 }
 
 /* Editor chrome palettes. The provider and the pre-paint bootstrap set
@@ -38,7 +47,8 @@
   --editor-chip: rgba(255, 255, 255, 0.05);
   --editor-hover: rgba(255, 255, 255, 0.12);
   --editor-line: rgba(255, 255, 255, 0.1);
-  --editor-line-strong: rgba(255, 255, 255, 0.3);
+  /* Border token: >=3:1 against canvas, surface, and raised. */
+  --editor-line-strong: rgba(255, 255, 255, 0.4);
   --editor-ink: #f4f4f5;
   --editor-muted: #a1a1aa;
   --editor-faint: #71717a;
@@ -64,13 +74,16 @@
   --editor-chip: rgba(24, 24, 27, 0.04);
   --editor-hover: rgba(24, 24, 27, 0.06);
   --editor-line: rgba(24, 24, 27, 0.12);
-  --editor-line-strong: rgba(24, 24, 27, 0.3);
+  /* Border token: >=3:1 against canvas, surface, and raised. */
+  --editor-line-strong: rgba(24, 24, 27, 0.5);
   --editor-ink: #18181b;
   --editor-muted: #52525b;
   --editor-faint: #71717a;
-  --editor-accent: #b45309;
+  /* Accent text clears 4.5:1 on surface and on accent-soft, including the
+     text toolbar's stacked soft layers. */
+  --editor-accent: #92400e;
   --editor-on-accent: #fffbeb;
-  --editor-accent-soft: rgba(180, 83, 9, 0.1);
+  --editor-accent-soft: rgba(146, 64, 14, 0.1);
   --editor-danger: #b91c1c;
   --editor-danger-soft: #fef2f2;
   --editor-warning: #92400e;

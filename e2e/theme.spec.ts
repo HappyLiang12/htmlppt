@@ -50,14 +50,24 @@ interface ContrastSample {
   paintedBy: { tag: string; testId: string | null };
 }
 
+interface BorderSample {
+  border: string;
+  background: string;
+  ratio: number;
+  width: number;
+  style: string;
+}
+
 /**
- * Measures the rendered text color of an element against the first ancestor
- * that actually paints a background. The toolbar is deliberately transparent
- * over the shell, so sampling the toolbar's own computed background would
- * measure `rgba(0, 0, 0, 0)` and pass for the wrong reason.
+ * Measures the rendered text color of an element against its background
+ * stack. Each translucent layer is composited bottom-up, so a control that
+ * paints `bg-accent-soft` above the toolbar's own `bg-accent-soft` is measured
+ * against both layers over the shell, not against white. The toolbar is
+ * deliberately transparent over the shell, so sampling the toolbar's own
+ * computed background would pass for the wrong reason.
  */
 function measureContrast(page: Page, testId: string): Promise<ContrastSample> {
-  return page.getByTestId(testId).evaluate((node) => {
+  return page.getByTestId(testId).first().evaluate((node) => {
     const parse = (value: string): { rgb: number[]; alpha: number } => {
       const match = value.match(/rgba?\(\s*([^)]+)\)/);
       if (!match || !match[1]) {
@@ -94,7 +104,7 @@ function measureContrast(page: Page, testId: string): Promise<ContrastSample> {
       );
     };
 
-    let background = [255, 255, 255];
+    const layers: { rgb: number[]; alpha: number }[] = [];
     let paintedBy: { tag: string; testId: string | null } | null = null;
     for (
       let element: Element | null = node;
@@ -103,7 +113,7 @@ function measureContrast(page: Page, testId: string): Promise<ContrastSample> {
     ) {
       const { rgb, alpha } = parse(getComputedStyle(element).backgroundColor);
       if (alpha > 0) {
-        background = composite(rgb, alpha, background);
+        layers.push({ rgb, alpha });
         if (!paintedBy) {
           paintedBy = {
             tag: element.tagName.toLowerCase(),
@@ -113,6 +123,15 @@ function measureContrast(page: Page, testId: string): Promise<ContrastSample> {
       }
       // A fully opaque ancestor hides every color below it.
       if (alpha === 1) break;
+    }
+
+    // Paint order is bottom-up: start at the page and composite each collected
+    // layer on top of the one below it.
+    let background = [255, 255, 255];
+    for (let index = layers.length - 1; index >= 0; index -= 1) {
+      const layer = layers[index];
+      if (!layer) continue;
+      background = composite(layer.rgb, layer.alpha, background);
     }
 
     const foreground = parse(getComputedStyle(node).color);
@@ -129,6 +148,85 @@ function measureContrast(page: Page, testId: string): Promise<ContrastSample> {
       ratio:
         (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05),
       paintedBy: paintedBy ?? { tag: 'body', testId: null }
+    };
+  });
+}
+
+/**
+ * Measures a control's top border against the background it is painted on.
+ * Borders are translucent tokens, so the border color is composited over the
+ * same bottom-up background stack as the text measurement.
+ */
+function measureBorderContrast(
+  page: Page,
+  testId: string
+): Promise<BorderSample> {
+  return page.getByTestId(testId).first().evaluate((node) => {
+    const parse = (value: string): { rgb: number[]; alpha: number } => {
+      const match = value.match(/rgba?\(\s*([^)]+)\)/);
+      if (!match || !match[1]) {
+        throw new Error(`Unsupported computed color: ${value}`);
+      }
+      const parts = match[1]
+        .split(/[,\s/]+/)
+        .filter(Boolean)
+        .map(Number);
+      return {
+        rgb: parts.slice(0, 3),
+        alpha: parts.length > 3 ? (parts[3] ?? 1) : 1
+      };
+    };
+    const composite = (
+      top: readonly number[],
+      alpha: number,
+      bottom: readonly number[]
+    ): number[] =>
+      top.map(
+        (channel, index) => channel * alpha + (bottom[index] ?? 0) * (1 - alpha)
+      );
+    const luminance = (rgb: readonly number[]): number => {
+      const channels = rgb.map((value) => {
+        const channel = value / 255;
+        return channel <= 0.03928
+          ? channel / 12.92
+          : Math.pow((channel + 0.055) / 1.055, 2.4);
+      });
+      return (
+        0.2126 * (channels[0] ?? 0) +
+        0.7152 * (channels[1] ?? 0) +
+        0.0722 * (channels[2] ?? 0)
+      );
+    };
+
+    const layers: { rgb: number[]; alpha: number }[] = [];
+    for (
+      let element: Element | null = node;
+      element;
+      element = element.parentElement
+    ) {
+      const { rgb, alpha } = parse(getComputedStyle(element).backgroundColor);
+      if (alpha > 0) layers.push({ rgb, alpha });
+      if (alpha === 1) break;
+    }
+    let background = [255, 255, 255];
+    for (let index = layers.length - 1; index >= 0; index -= 1) {
+      const layer = layers[index];
+      if (!layer) continue;
+      background = composite(layer.rgb, layer.alpha, background);
+    }
+
+    const style = getComputedStyle(node);
+    const border = parse(style.borderTopColor);
+    const paintedBorder = composite(border.rgb, border.alpha, background);
+    const first = luminance(paintedBorder);
+    const second = luminance(background);
+    return {
+      border: `rgb(${paintedBorder.map(Math.round).join(', ')})`,
+      background: `rgb(${background.map(Math.round).join(', ')})`,
+      ratio:
+        (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05),
+      width: Number.parseFloat(style.borderTopWidth),
+      style: style.borderTopStyle
     };
   });
 }
@@ -303,6 +401,8 @@ test.describe('theme', () => {
       );
       const light = await measureContrast(page, 'save-status');
       const lightControl = await measureContrast(page, 'theme-dark');
+      const lightActiveControl = await measureContrast(page, 'theme-light');
+      const lightBorder = await measureBorderContrast(page, 'theme-dark');
       const lightPalette = await samplePrimaryPalette(page);
       const lightCanvas = await resolvedTokenColor(page, '--editor-canvas');
       const lightAccent = await resolvedTokenColor(page, '--editor-accent');
@@ -315,6 +415,8 @@ test.describe('theme', () => {
       await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
       const dark = await measureContrast(page, 'save-status');
       const darkControl = await measureContrast(page, 'theme-light');
+      const darkActiveControl = await measureContrast(page, 'theme-dark');
+      const darkBorder = await measureBorderContrast(page, 'theme-light');
       const darkPalette = await samplePrimaryPalette(page);
       const darkCanvas = await resolvedTokenColor(page, '--editor-canvas');
       const darkAccent = await resolvedTokenColor(page, '--editor-accent');
@@ -334,17 +436,49 @@ test.describe('theme', () => {
         darkCanvas
       );
 
+      // An active control paints its own soft accent over the shell, so the
+      // measurement must include that layer instead of falling through to the
+      // canvas. The old 3.5:1 light pair was invisible to a canvas-only probe.
+      expect(lightActiveControl.paintedBy.testId).toBe('theme-light');
+      expect(darkActiveControl.paintedBy.testId).toBe('theme-dark');
+      expect(
+        lightActiveControl.background,
+        'light active control composites accent-soft over the canvas'
+      ).not.toBe(lightCanvas);
+      expect(
+        darkActiveControl.background,
+        'dark active control composites accent-soft over the canvas'
+      ).not.toBe(darkCanvas);
+
       for (const [label, sample] of [
         ['light save-status', light],
         ['light inactive theme control', lightControl],
+        ['light active theme control', lightActiveControl],
         ['dark save-status', dark],
-        ['dark inactive theme control', darkControl]
+        ['dark inactive theme control', darkControl],
+        ['dark active theme control', darkActiveControl]
       ] as const) {
         expect(
           sample.ratio,
           `${label}: ${sample.foreground} on ${sample.background}`
         ).toBeGreaterThanOrEqual(4.5);
       }
+
+      // Inactive theme controls carry border-line-strong; their border is a
+      // non-text component and must stay at least 3:1 against the shell.
+      for (const [label, sample] of [
+        ['light inactive theme border', lightBorder],
+        ['dark inactive theme border', darkBorder]
+      ] as const) {
+        expect(sample.width, `${label} is a real border`).toBeGreaterThan(0);
+        expect(sample.style, `${label} is solid`).toBe('solid');
+        expect(
+          sample.ratio,
+          `${label}: ${sample.border} on ${sample.background}`
+        ).toBeGreaterThanOrEqual(3);
+      }
+      expect(lightBorder.background).toBe(lightCanvas);
+      expect(darkBorder.background).toBe(darkCanvas);
 
       // Secondary palette assertion: the semantic tokens themselves still
       // meet the text/surface contract in both themes.
@@ -357,6 +491,109 @@ test.describe('theme', () => {
         `dark palette: ${darkPalette.foreground} on ${darkPalette.background}`
       ).toBeGreaterThanOrEqual(4.5);
       expect(lightPalette.background).not.toBe(darkPalette.background);
+    } finally {
+      await closeThemeDeck(harness);
+    }
+  });
+
+  test('sorter badge and current marker keep contrast in both palettes', async ({
+    page
+  }) => {
+    const harness = await openThemeDeck(page);
+    try {
+      await page.getByTestId('theme-light').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      await page.getByTestId('view-sorter').click();
+      await expect(page.getByTestId('sorter-view')).toBeVisible();
+
+      const overlaySolid = await resolvedTokenColor(
+        page,
+        '--editor-overlay-solid'
+      );
+      const onOverlay = await resolvedTokenColor(page, '--editor-on-overlay');
+      const lightBadge = await measureContrast(page, 'sorter-slide-number');
+      const lightMarker = await measureContrast(page, 'sorter-active-marker');
+
+      await page.getByTestId('theme-dark').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+      const darkBadge = await measureContrast(page, 'sorter-slide-number');
+      const darkMarker = await measureContrast(page, 'sorter-active-marker');
+
+      // The badge paints its own opaque overlay pair, independent of the
+      // theme's translucent `bg-overlay`.
+      expect(lightBadge.paintedBy.testId).toBe('sorter-slide-number');
+      expect(darkBadge.paintedBy.testId).toBe('sorter-slide-number');
+      expect(lightBadge.background).toBe(overlaySolid);
+      expect(darkBadge.background).toBe(overlaySolid);
+      expect(lightBadge.foreground).toBe(onOverlay);
+      expect(darkBadge.foreground).toBe(onOverlay);
+      expect(lightBadge.background).toBe(darkBadge.background);
+
+      for (const [label, sample] of [
+        ['light sorter slide number', lightBadge],
+        ['light sorter current marker', lightMarker],
+        ['dark sorter slide number', darkBadge],
+        ['dark sorter current marker', darkMarker]
+      ] as const) {
+        expect(
+          sample.ratio,
+          `${label}: ${sample.foreground} on ${sample.background}`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    } finally {
+      await closeThemeDeck(harness);
+    }
+  });
+
+  test('active text toolbar control keeps contrast in both palettes', async ({
+    page
+  }) => {
+    const harness = await openThemeDeck(page);
+    try {
+      const frame = page.frameLocator(FRAME_SELECTOR);
+      const heading = frame.locator('h1').first();
+      await expect(heading).toBeVisible();
+
+      await page.getByTestId('theme-light').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      await heading.dblclick();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Control+a');
+      await page.getByTestId('text-bold').click();
+      await expect(page.getByTestId('text-bold')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+      const lightActive = await measureContrast(page, 'text-bold');
+      expect(lightActive.paintedBy.testId).toBe('text-bold');
+
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('text-toolbar')).toHaveCount(0);
+
+      // Bold is already applied, so the dark session activates a different
+      // toggle instead of turning it back off.
+      await page.getByTestId('theme-dark').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+      await heading.dblclick();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.keyboard.press('Control+a');
+      await page.getByTestId('text-italic').click();
+      await expect(page.getByTestId('text-italic')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+      const darkActive = await measureContrast(page, 'text-italic');
+      expect(darkActive.paintedBy.testId).toBe('text-italic');
+
+      for (const [label, sample] of [
+        ['light active text control', lightActive],
+        ['dark active text control', darkActive]
+      ] as const) {
+        expect(
+          sample.ratio,
+          `${label}: ${sample.foreground} on ${sample.background}`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
     } finally {
       await closeThemeDeck(harness);
     }
