@@ -1,5 +1,13 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -44,7 +52,33 @@ describe('credentials', () => {
     );
     expect(await readCredential(deck)).toEqual(credential);
     expect(await readFile(credentialFile(deck), 'utf8')).toContain('token-1');
+    if (process.platform !== 'win32') {
+      expect((await stat(credentialFile(deck))).mode & 0o777).toBe(0o600);
+      expect((await stat(credentialsDirectory())).mode & 0o777).toBe(0o700);
+    }
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'tightens credential directories and files to 0700/0600',
+    async () => {
+      // Windows ACLs cannot express POSIX mode bits, so this assertion is
+      // POSIX-only. The directory starts world-writable so the test fails if
+      // writeCredential stops chmod-ing it back down.
+      await mkdir(credentialsDirectory(), { recursive: true });
+      await chmod(credentialsDirectory(), 0o777);
+      const deck = path.join(home, 'tightened.html');
+
+      await writeCredential(deck, {
+        token: 'token-2',
+        port: 41235,
+        createdAt: '2026-10-25T00:00:00.000Z',
+        updatedAt: '2026-10-25T00:00:00.000Z'
+      });
+
+      expect((await stat(credentialsDirectory())).mode & 0o777).toBe(0o700);
+      expect((await stat(credentialFile(deck))).mode & 0o777).toBe(0o600);
+    }
+  );
 
   it('returns null for a missing or malformed file', async () => {
     const deck = path.join(home, 'missing.html');
@@ -87,5 +121,19 @@ describe('credentials', () => {
 
     expect(rotated.token).toMatch(/^[0-9a-f-]{36}$/);
     expect(rotated.port).toBe(42000);
+  });
+
+  it('falls back to ~/.htmlppt/decks when HTMLPPT_HOME is empty', () => {
+    process.env.HTMLPPT_HOME = '';
+
+    expect(credentialsDirectory()).toBe(
+      path.join(homedir(), '.htmlppt', 'decks')
+    );
+
+    delete process.env.HTMLPPT_HOME;
+
+    expect(credentialsDirectory()).toBe(
+      path.join(homedir(), '.htmlppt', 'decks')
+    );
   });
 });
