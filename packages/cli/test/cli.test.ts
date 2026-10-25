@@ -1131,6 +1131,91 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('rotates the token on stop and keeps the port', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const credentialPath = join(
+      workspace.home,
+      'decks',
+      `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+    );
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+      // Positive control: open records the identity it printed, so a later
+      // difference proves the stop rotated it.
+      const before = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+      };
+      expect(before.token).toBe(url.searchParams.get('token'));
+      expect(before.port).toBe(Number(url.port));
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      await open.waitForExit(10_000);
+
+      const after = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+      };
+      expect(after.port).toBe(before.port);
+      expect(after.port).toBe(Number(url.port));
+      expect(after.token).not.toBe(before.token);
+      expect(after.token.length).toBeGreaterThan(0);
+    } finally {
+      open.kill();
+    }
+  });
+
+  it('warns but still stops when the credential cannot be rotated', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const credentialPath = join(
+      workspace.home,
+      'decks',
+      `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+    );
+    // A directory where the credential file belongs makes the record and the
+    // rotation fail without relying on permission bits, which Windows ignores.
+    await mkdir(credentialPath, { recursive: true });
+    const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    try {
+      await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stderr).toContain('could not rotate its credential');
+      await open.waitForExit(10_000);
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      open.kill();
+      await rm(credentialPath, { recursive: true, force: true });
+    }
+  });
+
   it('reuses the deck token when an editor restarts without a stop', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);
@@ -1236,6 +1321,17 @@ describe('htmlppt cli as a real process', () => {
       });
       expect(stop.code).toBe(0);
       await first.waitForExit(10_000);
+      const credentialPath = join(
+        workspace.home,
+        'decks',
+        `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+      );
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+      };
+      expect(rotated.port).toBe(Number(firstUrl.port));
+      expect(rotated.token).not.toBe(firstUrl.searchParams.get('token'));
 
       await new Promise<void>((resolve, reject) => {
         probe.once('error', reject);
@@ -1255,21 +1351,14 @@ describe('htmlppt cli as a real process', () => {
       });
       expect(secondUrl.port).not.toBe(firstUrl.port);
 
-      // The fallback must only change the address, never the deck identity:
-      // the printed URL keeps the first token, and the recorded credential
-      // pairs that token with the new port so the next open stays stable.
-      expect(secondUrl.searchParams.get('token')).toBe(
-        firstUrl.searchParams.get('token')
-      );
-      const credentialPath = join(
-        workspace.home,
-        'decks',
-        `${sessionKey(await canonicalDeckPath(deckPath))}.json`
-      );
+      // stop rotates the token, so the fallback must keep that rotated
+      // identity and only change the address: the printed URL carries the
+      // rotated token, and the recorded credential pairs it with the new port.
+      expect(secondUrl.searchParams.get('token')).toBe(rotated.token);
       expect(
         JSON.parse(await readFile(credentialPath, 'utf8'))
       ).toMatchObject({
-        token: firstUrl.searchParams.get('token'),
+        token: rotated.token,
         port: Number(secondUrl.port)
       });
     } finally {
@@ -1361,6 +1450,7 @@ describe('htmlppt cli as a real process', () => {
     const directories = ['one', 'two'];
     const opens: CliProcess[] = [];
     const deckPaths: string[] = [];
+    const urls: URL[] = [];
     for (const name of directories) {
       const directory = join(workspace.cwd, name);
       await mkdir(directory, { recursive: true });
@@ -1376,7 +1466,8 @@ describe('htmlppt cli as a real process', () => {
 
     try {
       for (const open of opens) {
-        await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+        const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+        urls.push(new URL(match[1]));
       }
       expect(await sessionCount(workspace)).toBe(2);
 
@@ -1393,10 +1484,24 @@ describe('htmlppt cli as a real process', () => {
       expect(stopCode).toBe(0);
       expect(stop.stdout).toContain('Stopped editor');
       expect(await sessionCount(workspace)).toBe(0);
-      for (const deckPath of deckPaths) {
+      for (const [index, deckPath] of deckPaths.entries()) {
         await expect(
           readFile(sessionFilePath(workspace, deckPath), 'utf8')
         ).rejects.toMatchObject({ code: 'ENOENT' });
+        // --all routes through stopSession too, so every stopped deck must
+        // keep its port and receive a rotated token.
+        const credential = JSON.parse(
+          await readFile(
+            join(
+              workspace.home,
+              'decks',
+              `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+            ),
+            'utf8'
+          )
+        ) as { token: string; port: number };
+        expect(credential.port).toBe(Number(urls[index].port));
+        expect(credential.token).not.toBe(urls[index].searchParams.get('token'));
       }
     } finally {
       for (const open of opens) {

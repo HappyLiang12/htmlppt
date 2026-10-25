@@ -24,6 +24,7 @@ import {
   listSessions,
   readCredential,
   removeSessionIfUnchanged,
+  rotateCredential,
   sameDeckPath,
   sessionKey,
   sessionsDirectory,
@@ -260,6 +261,14 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   }
 
   await removeSessionIfUnchanged(sessionFile, snapshot);
+  // The capability token must not outlive the host it belongs to, while the
+  // recorded port stays stable so the deck keeps its address. The host is
+  // already gone, so a failed write warns instead of failing the stop.
+  await rotateCredential(session.path, session.port).catch((error: unknown) => {
+    io.stderr(
+      `Stopped the editor, but could not rotate its credential: ${error instanceof Error ? error.message : String(error)}. The next open will mint a new token.`
+    );
+  });
   io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
   return true;
 }
