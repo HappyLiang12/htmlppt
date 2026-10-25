@@ -90,6 +90,23 @@ export async function rotateCredential(
   return next;
 }
 
+/**
+ * Deletes the stored credential for a deck, resolving the same canonical file
+ * that read/write use. A missing file is not an error. A read-only credential
+ * (the usual Windows write failure) refuses to be unlinked until its write bit
+ * is restored, so try once more after chmod instead of leaving the secret on
+ * disk.
+ */
+export async function removeCredential(filePath: string): Promise<void> {
+  const target = await canonicalCredentialFile(filePath);
+  try {
+    await rm(target, { force: true });
+  } catch {
+    await chmod(target, 0o600).catch(() => undefined);
+    await rm(target, { force: true });
+  }
+}
+
 function isDeckCredential(value: unknown): value is DeckCredential {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;

@@ -4,6 +4,7 @@ export {
   credentialFile,
   credentialsDirectory,
   readCredential,
+  removeCredential,
   rotateCredential,
   writeCredential
 } from './credentials.js';

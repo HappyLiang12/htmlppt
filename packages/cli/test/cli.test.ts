@@ -4,9 +4,11 @@ import {
   type ChildProcessWithoutNullStreams
 } from 'node:child_process';
 import {
+  chmod,
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   symlink,
@@ -16,7 +18,12 @@ import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalDeckPath, sessionKey } from '@htmlppt/host';
+import {
+  canonicalDeckPath,
+  readCredential,
+  sessionKey,
+  writeCredential
+} from '@htmlppt/host';
 import {
   copyFixture,
   fixturesDir,
@@ -782,6 +789,41 @@ function sessionFilePath(workspace: CliWorkspace, deckPath: string): string {
   );
 }
 
+/** The store canonicalizes keys; tests must read the same file the CLI writes. */
+async function credentialFilePath(
+  workspace: CliWorkspace,
+  deckPath: string
+): Promise<string> {
+  return join(
+    workspace.home,
+    'decks',
+    `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+  );
+}
+
+/**
+ * Seeds a credential without touching the host module, whose store reads the
+ * test runner's own `HTMLPPT_HOME` rather than the workspace one.
+ */
+async function writeStoredCredential(
+  workspace: CliWorkspace,
+  deckPath: string,
+  credential: {
+    token: string;
+    port: number;
+    createdAt: string;
+    updatedAt: string;
+  }
+): Promise<string> {
+  const filePath = await credentialFilePath(workspace, deckPath);
+  await mkdir(join(workspace.home, 'decks'), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(credential, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600
+  });
+  return filePath;
+}
+
 async function sessionCount(workspace: CliWorkspace): Promise<number> {
   try {
     const names = await readdir(join(workspace.home, 'sessions'));
@@ -1007,6 +1049,63 @@ async function silentHost(): Promise<SilentHost> {
   };
 }
 
+interface StubbornHost {
+  pid: number;
+  port: number;
+  kill: () => void;
+}
+
+/**
+ * A live host that answers the token-authenticated health check but ignores
+ * SIGTERM, so `stop` reaches its five second timeout with the process still
+ * running. Windows cannot ignore SIGTERM (the signal terminates the process),
+ * so callers gate this helper on POSIX.
+ */
+async function stubbornHost(): Promise<StubbornHost> {
+  const script = `
+    const http = require('node:http');
+    const server = http.createServer((request, response) => {
+      if (
+        request.url === '/api/health' &&
+        request.headers.authorization === 'Bearer stale-token'
+      ) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    process.on('SIGTERM', () => undefined);
+    server.listen(0, '127.0.0.1', () => {
+      process.stdout.write('PORT=' + server.address().port + '\\n');
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', script], {
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('The stubborn host did not expose a pid.');
+  }
+  child.stdout?.setEncoding('utf8');
+  const port = await new Promise<number>((resolve, reject) => {
+    let buffer = '';
+    child.stdout?.on('data', (chunk: string) => {
+      buffer += chunk;
+      const match = /PORT=(\d+)\r?\n/.exec(buffer);
+      if (match && match[1] !== undefined) {
+        resolve(Number(match[1]));
+      }
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      reject(new Error(`The stubborn host exited early with code ${code}.`));
+    });
+  });
+  return { pid, port, kill: () => child.kill('SIGKILL') };
+}
+
 interface StaleSessionOptions {
   pid: number;
   port: number;
@@ -1153,6 +1252,7 @@ describe('htmlppt cli as a real process', () => {
       const before = JSON.parse(await readFile(credentialPath, 'utf8')) as {
         token: string;
         port: number;
+        createdAt: string;
       };
       expect(before.token).toBe(url.searchParams.get('token'));
       expect(before.port).toBe(Number(url.port));
@@ -1168,11 +1268,14 @@ describe('htmlppt cli as a real process', () => {
       const after = JSON.parse(await readFile(credentialPath, 'utf8')) as {
         token: string;
         port: number;
+        createdAt: string;
       };
       expect(after.port).toBe(before.port);
       expect(after.port).toBe(Number(url.port));
       expect(after.token).not.toBe(before.token);
       expect(after.token.length).toBeGreaterThan(0);
+      // Rotation replaces the secret, not the deck's credential history.
+      expect(after.createdAt).toBe(before.createdAt);
     } finally {
       open.kill();
     }
@@ -1205,7 +1308,10 @@ describe('htmlppt cli as a real process', () => {
 
       expect(stop.code).toBe(0);
       expect(stop.stdout).toContain('Stopped editor');
-      expect(stop.stderr).toContain('could not rotate its credential');
+      expect(stop.stderr).toContain('Could not rotate the credential');
+      // The sentinel is a directory, so the discard fails too and the warning
+      // must say so instead of claiming the old token is gone.
+      expect(stop.stderr).toContain('could not be removed');
       await open.waitForExit(10_000);
       await expect(
         readFile(sessionFilePath(workspace, deckPath), 'utf8')
@@ -1215,6 +1321,253 @@ describe('htmlppt cli as a real process', () => {
       await rm(credentialPath, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform === 'win32')(
+    'discards the stored credential when the rotated token cannot be written',
+    async (context) => {
+      const workspace = await createCliWorkspace();
+      await copyFixture('basic.deck.html', workspace.cwd);
+      const deckPath = join(workspace.cwd, 'basic.deck.html');
+      const credentialPath = await credentialFilePath(workspace, deckPath);
+      const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      let reopened: CliProcess | undefined;
+
+      try {
+        const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+        const url = new URL(match[1]);
+        const original = await readFile(credentialPath, 'utf8');
+        const before = JSON.parse(original) as {
+          token: string;
+          port: number;
+          createdAt: string;
+        };
+        expect(before.token).toBe(url.searchParams.get('token'));
+
+        // A read-only credential file rejects the atomic rename while leaving
+        // the recorded token readable: the realistic write-only failure. Prove
+        // the injection fails the replacement before relying on it; a
+        // filesystem that replaces read-only files cannot reproduce it.
+        await chmod(credentialPath, 0o444);
+        const temporary = `${credentialPath}.injection.tmp`;
+        await writeFile(temporary, '{"token":"injected-token"}\n', 'utf8');
+        let replaced = true;
+        try {
+          await rename(temporary, credentialPath);
+        } catch {
+          replaced = false;
+        }
+        if (replaced) {
+          await chmod(credentialPath, 0o600);
+          await writeFile(credentialPath, original, 'utf8');
+          await rm(temporary, { force: true });
+          context.skip(
+            'This filesystem lets a rename replace a read-only file, so the write failure cannot be injected.'
+          );
+          return;
+        }
+        await rm(temporary, { force: true });
+        expect(
+          (
+            JSON.parse(await readFile(credentialPath, 'utf8')) as {
+              token: string;
+            }
+          ).token
+        ).toBe(before.token);
+
+        const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+          cwd: workspace.cwd,
+          env: cliEnvironment(workspace)
+        });
+
+        expect(stop.code).toBe(0);
+        expect(stop.stdout).toContain('Stopped editor');
+        expect(stop.stderr).toContain('Could not rotate the credential');
+        expect(stop.stderr).toContain('stored token was discarded');
+        await open.waitForExit(10_000);
+        // The warning is literally true: the token the dead host no longer
+        // serves is gone instead of staying readable on disk.
+        await expect(readFile(credentialPath, 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT'
+        });
+
+        reopened = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+          cwd: workspace.cwd,
+          env: cliEnvironment(workspace)
+        });
+        const reopenedMatch = await reopened.waitForOutput(
+          /HTMLPPT_URL=(\S+)\r?\n/
+        );
+        const reopenedUrl = new URL(reopenedMatch[1]);
+        expect(reopenedUrl.searchParams.get('token')).not.toBe(before.token);
+        expect(
+          JSON.parse(await readFile(credentialPath, 'utf8'))
+        ).toMatchObject({
+          token: reopenedUrl.searchParams.get('token'),
+          port: Number(reopenedUrl.port)
+        });
+      } finally {
+        open.kill();
+        reopened?.kill();
+        await chmod(credentialPath, 0o600).catch(() => undefined);
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'discards the stored credential when a POSIX write fails',
+    async (context) => {
+      const workspace = await createCliWorkspace();
+      await copyFixture('basic.deck.html', workspace.cwd);
+      const deckPath = join(workspace.cwd, 'basic.deck.html');
+      const credentialPath = await credentialFilePath(workspace, deckPath);
+      const credentialsDir = join(workspace.home, 'decks');
+      const previousHome = process.env.HTMLPPT_HOME;
+      const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      let reopened: CliProcess | undefined;
+
+      try {
+        const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+        const url = new URL(match[1]);
+        const before = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+          token: string;
+        };
+        expect(before.token).toBe(url.searchParams.get('token'));
+
+        // The store tightens the credentials directory back to 0700 before
+        // every write, so a read-only directory cannot fail the temporary
+        // file when the test runner owns it. Prove the injection instead of
+        // asserting an error that will not happen, then skip with the reason.
+        process.env.HTMLPPT_HOME = workspace.home;
+        const probeDeck = join(workspace.cwd, 'probe.deck.html');
+        await chmod(credentialsDir, 0o500);
+        let blocked = false;
+        try {
+          await writeCredential(probeDeck, {
+            token: 'probe-token',
+            port: 41241,
+            createdAt: '2026-10-25T00:00:00.000Z',
+            updatedAt: '2026-10-25T00:00:00.000Z'
+          });
+        } catch {
+          blocked = true;
+        } finally {
+          await chmod(credentialsDir, 0o700).catch(() => undefined);
+          if (previousHome === undefined) delete process.env.HTMLPPT_HOME;
+          else process.env.HTMLPPT_HOME = previousHome;
+        }
+        await rm(await credentialFilePath(workspace, probeDeck), {
+          force: true
+        }).catch(() => undefined);
+        if (!blocked) {
+          context.skip(
+            'writeCredential restores the credentials directory to 0700 before writing, so a read-only directory cannot inject the write failure.'
+          );
+          return;
+        }
+
+        await chmod(credentialsDir, 0o500);
+        const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+          cwd: workspace.cwd,
+          env: cliEnvironment(workspace)
+        });
+        await chmod(credentialsDir, 0o700).catch(() => undefined);
+
+        expect(stop.code).toBe(0);
+        expect(stop.stdout).toContain('Stopped editor');
+        expect(stop.stderr).toContain('Could not rotate the credential');
+        expect(stop.stderr).toContain('stored token was discarded');
+        await open.waitForExit(10_000);
+        // The warning is literally true: the stored token is gone.
+        await expect(readFile(credentialPath, 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT'
+        });
+        process.env.HTMLPPT_HOME = workspace.home;
+        try {
+          expect((await readCredential(deckPath))?.token).not.toBe(
+            before.token
+          );
+        } finally {
+          if (previousHome === undefined) delete process.env.HTMLPPT_HOME;
+          else process.env.HTMLPPT_HOME = previousHome;
+        }
+
+        reopened = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+          cwd: workspace.cwd,
+          env: cliEnvironment(workspace)
+        });
+        const reopenedMatch = await reopened.waitForOutput(
+          /HTMLPPT_URL=(\S+)\r?\n/
+        );
+        const reopenedUrl = new URL(reopenedMatch[1]);
+        expect(reopenedUrl.searchParams.get('token')).not.toBe(before.token);
+      } finally {
+        open.kill();
+        reopened?.kill();
+        await chmod(credentialsDir, 0o700).catch(() => undefined);
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'leaves the credential untouched when the host does not stop in time',
+    async () => {
+      const workspace = await createCliWorkspace();
+      await copyFixture('basic.deck.html', workspace.cwd);
+      const deckPath = join(workspace.cwd, 'basic.deck.html');
+      const persistedAt = '2026-10-25T00:00:00.000Z';
+      const host = await stubbornHost();
+
+      try {
+        await writeStaleSession(workspace, deckPath, {
+          pid: host.pid,
+          port: host.port
+        });
+        await writeStoredCredential(workspace, deckPath, {
+          token: 'stale-token',
+          port: host.port,
+          createdAt: persistedAt,
+          updatedAt: persistedAt
+        });
+
+        const stop = await runCliProcess(
+          ['stop', 'basic.deck.html'],
+          { cwd: workspace.cwd, env: cliEnvironment(workspace) },
+          20_000
+        );
+
+        expect(stop.code).toBe(1);
+        expect(stop.stderr).toContain('did not stop within 5 seconds');
+        // Rotation belongs after the exit check: a failed stop must leave the
+        // identity of the still-running host alone and stay silent about it.
+        expect(stop.stderr).not.toContain('Could not rotate the credential');
+        expect(
+          JSON.parse(
+            await readFile(
+              await credentialFilePath(workspace, deckPath),
+              'utf8'
+            )
+          )
+        ).toEqual({
+          token: 'stale-token',
+          port: host.port,
+          createdAt: persistedAt,
+          updatedAt: persistedAt
+        });
+        // The registry entry survives too, so the retry can still find it.
+        expect(
+          await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+        ).toContain('stale-token');
+      } finally {
+        host.kill();
+      }
+    }
+  );
 
   it('reuses the deck token when an editor restarts without a stop', async () => {
     const workspace = await createCliWorkspace();
@@ -1451,11 +1804,14 @@ describe('htmlppt cli as a real process', () => {
     const opens: CliProcess[] = [];
     const deckPaths: string[] = [];
     const urls: URL[] = [];
+    const credentialPaths: string[] = [];
+    const before: { token: string; port: number; createdAt: string }[] = [];
     for (const name of directories) {
       const directory = join(workspace.cwd, name);
       await mkdir(directory, { recursive: true });
       const deckPath = await copyFixture('basic.deck.html', directory);
       deckPaths.push(deckPath);
+      credentialPaths.push(await credentialFilePath(workspace, deckPath));
       opens.push(
         new CliProcess(
           ['open', join(name, 'basic.deck.html'), '--no-browser'],
@@ -1470,6 +1826,13 @@ describe('htmlppt cli as a real process', () => {
         urls.push(new URL(match[1]));
       }
       expect(await sessionCount(workspace)).toBe(2);
+      for (const [index, credentialPath] of credentialPaths.entries()) {
+        const recorded = JSON.parse(
+          await readFile(credentialPath, 'utf8')
+        ) as { token: string; port: number; createdAt: string };
+        expect(recorded.token).toBe(urls[index]?.searchParams.get('token'));
+        before.push(recorded);
+      }
 
       const stop = new CliProcess(['stop', '--all'], {
         cwd: workspace.cwd,
@@ -1491,17 +1854,14 @@ describe('htmlppt cli as a real process', () => {
         // --all routes through stopSession too, so every stopped deck must
         // keep its port and receive a rotated token.
         const credential = JSON.parse(
-          await readFile(
-            join(
-              workspace.home,
-              'decks',
-              `${sessionKey(await canonicalDeckPath(deckPath))}.json`
-            ),
-            'utf8'
-          )
-        ) as { token: string; port: number };
-        expect(credential.port).toBe(Number(urls[index].port));
-        expect(credential.token).not.toBe(urls[index].searchParams.get('token'));
+          await readFile(credentialPaths[index]!, 'utf8')
+        ) as { token: string; port: number; createdAt: string };
+        expect(credential.port).toBe(Number(urls[index]!.port));
+        expect(typeof credential.token).toBe('string');
+        expect(credential.token.length).toBeGreaterThan(0);
+        expect(credential.token).not.toBe(urls[index]!.searchParams.get('token'));
+        expect(credential.token).not.toBe(before[index]!.token);
+        expect(credential.createdAt).toBe(before[index]!.createdAt);
       }
     } finally {
       for (const open of opens) {
@@ -1675,6 +2035,8 @@ describe('htmlppt cli as a real process', () => {
     await mkdir(staleDir, { recursive: true });
     const liveDeck = await copyFixture('basic.deck.html', liveDir);
     const staleDeck = await copyFixture('basic.deck.html', staleDir);
+    const stalePort = await closedPort();
+    const persistedAt = '2026-10-25T00:00:00.000Z';
     const keepalive = await spawnKeepalive();
     const pid = keepalive.pid;
     if (pid === undefined) {
@@ -1690,9 +2052,14 @@ describe('htmlppt cli as a real process', () => {
       await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
       await writeStaleSession(workspace, staleDeck, {
         pid,
-        port: await closedPort()
+        port: stalePort
       });
-
+      await writeStoredCredential(workspace, staleDeck, {
+        token: 'stale-token',
+        port: stalePort,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
       stop = new CliProcess(['stop', '--all'], {
         cwd: workspace.cwd,
         env: cliEnvironment(workspace)
@@ -1713,6 +2080,16 @@ describe('htmlppt cli as a real process', () => {
         readFile(sessionFilePath(workspace, staleDeck), 'utf8')
       ).rejects.toMatchObject({ code: 'ENOENT' });
       expect(() => process.kill(pid, 0)).not.toThrow();
+      // The stale entry is cleaned without stopSession, so this branch owes
+      // the deck the same rotation a normal stop performs.
+      const rotated = JSON.parse(
+        await readFile(await credentialFilePath(workspace, staleDeck), 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(rotated.port).toBe(stalePort);
+      expect(typeof rotated.token).toBe('string');
+      expect(rotated.token.length).toBeGreaterThan(0);
+      expect(rotated.token).not.toBe('stale-token');
+      expect(rotated.createdAt).toBe(persistedAt);
     } finally {
       open.kill();
       stop?.kill();
@@ -1775,6 +2152,72 @@ describe('htmlppt cli as a real process', () => {
       readFile(sessionFilePath(workspace, deckPath), 'utf8')
     ).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await sessionCount(workspace)).toBe(0);
+  });
+
+  it('rotates the credential of a dead-pid entry cleaned by --all', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const port = await closedPort();
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port
+    });
+    const credentialPath = await credentialFilePath(workspace, deckPath);
+    await writeStoredCredential(workspace, deckPath, {
+      token: 'stale-token',
+      port,
+      createdAt: persistedAt,
+      updatedAt: persistedAt
+    });
+
+    const result = await runCliProcess(['stop', '--all'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Removed 1 stale editor session(s).');
+    // Cleaning a dead entry must not surface a rotation warning.
+    expect(result.stderr).not.toContain('Could not rotate the credential');
+    const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+      token: string;
+      port: number;
+      createdAt: string;
+    };
+    expect(rotated.port).toBe(port);
+    expect(typeof rotated.token).toBe('string');
+    expect(rotated.token.length).toBeGreaterThan(0);
+    expect(rotated.token).not.toBe('stale-token');
+    expect(rotated.createdAt).toBe(persistedAt);
+  });
+
+  it('warns but still counts a dead-pid cleanup when rotation fails', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    await writeStaleSession(workspace, deckPath, {
+      pid: await exitedPid(),
+      port: await closedPort()
+    });
+    // A directory at the credential path fails the rotation and its cleanup.
+    const credentialPath = await credentialFilePath(workspace, deckPath);
+    await mkdir(credentialPath, { recursive: true });
+
+    try {
+      const result = await runCliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('Removed 1 stale editor session(s).');
+      expect(result.stderr).toContain('Could not rotate the credential');
+      expect(result.stderr).toContain('could not be removed');
+    } finally {
+      await rm(credentialPath, { recursive: true, force: true });
+    }
   });
 
   it('never kills a registered pid when the host fails the health check', async () => {

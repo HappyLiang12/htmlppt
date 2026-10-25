@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
-import { join, parse, resolve } from 'node:path';
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  realpath
+} from 'node:fs/promises';
+import { isAbsolute, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -21,8 +27,10 @@ import {
 } from '@htmlppt/core/node';
 import {
   canonicalDeckPath,
+  credentialFile,
   listSessions,
   readCredential,
+  removeCredential,
   removeSessionIfUnchanged,
   rotateCredential,
   sameDeckPath,
@@ -213,6 +221,82 @@ async function waitForProcessExit(
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Rotates the credential of a deck whose host is gone. A capability token must
+ * not outlive the host it belongs to, so a failed rotation discards the stored
+ * credential instead of leaving a token nobody can use. The recorded port is
+ * kept only when the write succeeds; after a discard the next `open` starts on
+ * a new port with a new token.
+ */
+async function rotateStoppedCredential(
+  filePath: string,
+  port: number,
+  io: CliIO
+): Promise<void> {
+  try {
+    await rotateCredential(filePath, port);
+    return;
+  } catch (rotateError) {
+    try {
+      await removeCredential(filePath);
+    } catch (removeError) {
+      const target = credentialFile(await canonicalDeckPath(filePath));
+      io.stderr(
+        `Could not rotate the credential for ${filePath}: ${errorMessage(rotateError)}. The stored credential could not be removed: ${errorMessage(removeError)}. Delete ${target} to discard the old token.`
+      );
+      return;
+    }
+    io.stderr(
+      `Could not rotate the credential for ${filePath}: ${errorMessage(rotateError)}. The stored token was discarded, so the next open will use a new port and token.`
+    );
+  }
+}
+
+interface ListedEntry {
+  path: string;
+  port: number;
+}
+
+/**
+ * Reads the registry files named by `registrySessionNames` before
+ * `listSessions` prunes stale entries, so `stop --all` can still rotate the
+ * credential of a dead session it cleans. Malformed entries are skipped: they
+ * carry no deck identity to rotate.
+ */
+async function readListedEntries(names: string[]): Promise<ListedEntry[]> {
+  const entries: ListedEntry[] = [];
+  for (const name of names) {
+    let value: unknown;
+    try {
+      value = JSON.parse(
+        await readFile(join(sessionsDirectory(), name), 'utf8')
+      );
+    } catch {
+      continue;
+    }
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    const { path: deckPath, port } = value as Record<string, unknown>;
+    if (
+      typeof deckPath !== 'string' ||
+      !isAbsolute(deckPath) ||
+      typeof port !== 'number' ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535
+    ) {
+      continue;
+    }
+    entries.push({ path: deckPath, port });
+  }
+  return entries;
+}
+
 async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   const sessionFile = join(
     sessionsDirectory(),
@@ -264,11 +348,7 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   // The capability token must not outlive the host it belongs to, while the
   // recorded port stays stable so the deck keeps its address. The host is
   // already gone, so a failed write warns instead of failing the stop.
-  await rotateCredential(session.path, session.port).catch((error: unknown) => {
-    io.stderr(
-      `Stopped the editor, but could not rotate its credential: ${error instanceof Error ? error.message : String(error)}. The next open will mint a new token.`
-    );
-  });
+  await rotateStoppedCredential(session.path, session.port, io);
   io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
   return true;
 }
@@ -725,6 +805,7 @@ export async function runCli(
           exitCode = 1;
           return;
         }
+        const listedEntries = await readListedEntries(registrySnapshot);
         const sessions = await listSessions();
         if (sessions.length === 0) {
           if (registrySnapshot.length === 0) {
@@ -752,6 +833,11 @@ export async function runCli(
             exitCode = 1;
             return;
           }
+          // The prune only removed dead sessions. Their hosts are gone, so
+          // every listed credential gets the same rotation a normal stop does.
+          for (const entry of listedEntries) {
+            await rotateStoppedCredential(entry.path, entry.port, io);
+          }
           io.stdout(
             `Removed ${registrySnapshot.length} stale editor session(s).`
           );
@@ -766,7 +852,9 @@ export async function runCli(
             const entryState = await sessionFileState(session.path);
             if (entryState === 'missing') {
               // The health check definitively proved the entry stale and
-              // already removed it; there is no live host left to fail.
+              // already removed it; there is no live host left to fail. Its
+              // credential must not outlive that host either.
+              await rotateStoppedCredential(session.path, session.port, io);
               cleaned += 1;
               io.stdout(`Removed stale editor session for ${session.path}.`);
               continue;

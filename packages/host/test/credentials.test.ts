@@ -17,6 +17,7 @@ import {
   credentialFile,
   credentialsDirectory,
   readCredential,
+  removeCredential,
   rotateCredential,
   writeCredential
 } from '../src/credentials.js';
@@ -128,6 +129,76 @@ describe('credentials', () => {
     expect(await readdir(credentialsDirectory())).toEqual([
       `${sessionKey(deck)}.json`
     ]);
+  });
+
+  it('removes the credential file and ignores a missing one', async () => {
+    const deck = path.join(home, 'removed.html');
+    await writeCredential(deck, {
+      token: 'token-removed',
+      port: 41238,
+      createdAt: '2026-10-25T00:00:00.000Z',
+      updatedAt: '2026-10-25T00:00:00.000Z'
+    });
+
+    await removeCredential(deck);
+
+    expect(await readCredential(deck)).toBeNull();
+    await expect(readFile(credentialFile(deck), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+    await expect(removeCredential(deck)).resolves.toBeUndefined();
+  });
+
+  it('removes a read-only credential', async () => {
+    // Windows refuses to unlink a read-only file until its write bit is
+    // restored; POSIX only needs the directory to stay writable. Both must
+    // discard the stored secret.
+    const deck = path.join(home, 'read-only.html');
+    await writeCredential(deck, {
+      token: 'token-read-only',
+      port: 41239,
+      createdAt: '2026-10-25T00:00:00.000Z',
+      updatedAt: '2026-10-25T00:00:00.000Z'
+    });
+    await chmod(credentialFile(deck), 0o400);
+
+    await removeCredential(deck);
+
+    expect(await readCredential(deck)).toBeNull();
+  });
+
+  it('removes the canonical credential when called through an alias', async (context) => {
+    const realDirectory = path.join(home, 'removal-real');
+    await mkdir(realDirectory, { recursive: true });
+    const deck = path.join(realDirectory, 'deck.html');
+    await writeFile(deck, '<!doctype html>', 'utf8');
+    const alias = path.join(home, 'removal-alias');
+    let aliased = true;
+    try {
+      await symlink(
+        realDirectory,
+        alias,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
+    } catch {
+      aliased = false;
+    }
+    if (!aliased) {
+      context.skip('Directory aliases are unavailable on this platform.');
+    }
+    const spelled = path.join(alias, 'deck.html');
+    await writeCredential(deck, {
+      token: 'token-alias',
+      port: 41240,
+      createdAt: '2026-10-25T00:00:00.000Z',
+      updatedAt: '2026-10-25T00:00:00.000Z'
+    });
+    expect(credentialFile(spelled)).not.toBe(credentialFile(deck));
+
+    await removeCredential(spelled);
+
+    expect(await readCredential(deck)).toBeNull();
+    expect(await readdir(credentialsDirectory())).toEqual([]);
   });
 
   it.skipIf(process.platform === 'win32')(
