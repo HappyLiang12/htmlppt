@@ -1218,6 +1218,7 @@ describe('htmlppt cli as a real process', () => {
   it('falls back to a new port when the recorded one is taken', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
     const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
       cwd: workspace.cwd,
       env: cliEnvironment(workspace)
@@ -1253,6 +1254,24 @@ describe('htmlppt cli as a real process', () => {
         timeout: 10_000
       });
       expect(secondUrl.port).not.toBe(firstUrl.port);
+
+      // The fallback must only change the address, never the deck identity:
+      // the printed URL keeps the first token, and the recorded credential
+      // pairs that token with the new port so the next open stays stable.
+      expect(secondUrl.searchParams.get('token')).toBe(
+        firstUrl.searchParams.get('token')
+      );
+      const credentialPath = join(
+        workspace.home,
+        'decks',
+        `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+      );
+      expect(
+        JSON.parse(await readFile(credentialPath, 'utf8'))
+      ).toMatchObject({
+        token: firstUrl.searchParams.get('token'),
+        port: Number(secondUrl.port)
+      });
     } finally {
       first.kill();
       second?.kill();

@@ -3,9 +3,11 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   stat,
+  symlink,
   writeFile
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -61,26 +63,71 @@ describe('credentials', () => {
     }
   });
 
-  it('keys the credential by the canonical deck path', async () => {
-    // A caller may spell the same deck with a redundant segment. The store
-    // must resolve the key so a later open with the plain spelling finds the
-    // token that `stop` is expected to rotate.
-    const deck = path.join(home, 'deck.html');
-    const spelled = path.join(home, 'sub', '..', 'deck.html');
-    await mkdir(path.join(home, 'sub'), { recursive: true });
-    const credential = {
+  it('keys the credential by the canonical deck path', async (context) => {
+    // A caller may spell the same deck through a realpath alias (a directory
+    // junction on Windows, a symlink elsewhere). The store must resolve the
+    // key so a later open with either spelling finds the same credential that
+    // `stop` is expected to rotate.
+    const realDirectory = path.join(home, 'real');
+    await mkdir(realDirectory, { recursive: true });
+    const deck = path.join(realDirectory, 'deck.html');
+    await writeFile(deck, '<!doctype html>', 'utf8');
+    const alias = path.join(home, 'alias');
+    let aliased = true;
+    try {
+      await symlink(
+        realDirectory,
+        alias,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
+    } catch {
+      aliased = false;
+    }
+    if (!aliased) {
+      // Some filesystems refuse aliases (a Windows volume without junction
+      // support, a POSIX host without symlink privileges). Skip rather than
+      // fail the store contract for a platform limitation.
+      context.skip('Directory aliases are unavailable on this platform.');
+    }
+    const spelled = path.join(alias, 'deck.html');
+
+    // The two spellings really hash to different keys before canonicalization,
+    // so a store that skipped the realpath step would miss this test.
+    expect(credentialFile(spelled)).not.toBe(credentialFile(deck));
+
+    const throughAlias = {
       token: 'token-canonical',
       port: 41236,
       createdAt: '2026-10-25T00:00:00.000Z',
       updatedAt: '2026-10-25T00:00:00.000Z'
     };
 
-    await writeCredential(spelled, credential);
+    await writeCredential(spelled, throughAlias);
 
-    expect(await readCredential(deck)).toEqual(credential);
+    expect(await readCredential(deck)).toEqual(throughAlias);
     expect(await readFile(credentialFile(deck), 'utf8')).toContain(
       'token-canonical'
     );
+    expect(await readdir(credentialsDirectory())).toEqual([
+      `${sessionKey(deck)}.json`
+    ]);
+
+    // The reverse direction: a credential written under the real spelling must
+    // be readable through the alias, and must replace the same file.
+    const throughReal = {
+      token: 'token-reverse',
+      port: 41237,
+      createdAt: '2026-10-25T00:00:00.000Z',
+      updatedAt: '2026-10-25T00:00:01.000Z'
+    };
+
+    await writeCredential(deck, throughReal);
+
+    expect(await readCredential(spelled)).toEqual(throughReal);
+    expect(await readCredential(deck)).toEqual(throughReal);
+    expect(await readdir(credentialsDirectory())).toEqual([
+      `${sessionKey(deck)}.json`
+    ]);
   });
 
   it.skipIf(process.platform === 'win32')(
