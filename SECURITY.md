@@ -41,11 +41,13 @@ back to an operating-system-assigned port; an explicit `--port` (including
   `<HTMLPPT_HOME or ~/.htmlppt>/decks/<key>.json` holding `{token, port,
   createdAt, updatedAt}`. The directory is created with mode `0700` and the
   file with `0600` where the platform supports it. `open` reuses the recorded
-  token and port for that deck; `htmlppt stop` rotates the token and keeps the
-  port. If the rotation write fails, the credential is discarded instead of
-  leaving a token nobody can revoke readable on disk.
-- The printed URL carries the token as `?token=...`; treat it as a secret for
-  the lifetime of the host that serves it.
+  token and port for that deck, including across a crash/restart; the token
+  stays valid until the next `htmlppt stop` rotates it (`stop` keeps the port).
+  If the rotation write fails, the credential is discarded when possible; if
+  removing it also fails, the CLI warning names the file still holding the
+  token instead of leaving it silently on disk.
+- The printed URL carries the token as `?token=...`; treat it as a secret until
+  `htmlppt stop` rotates it.
 - A tokenized request for `/` or `/d/<name>` sets an `HttpOnly`,
   `SameSite=Strict`, `Path=/` cookie with a 30-day `Max-Age` and redirects to
   `/d/<name>`, so the address bar no longer contains the token. Successful

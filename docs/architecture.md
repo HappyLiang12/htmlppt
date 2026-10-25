@@ -51,12 +51,15 @@ agent (MCP / CLI)                    human (browser)
    `{ path, port, token, pid, startedAt, revision }` in
    `~/.htmlppt/sessions/<sha256(path)>.json`, then prints an authenticated URL.
    The host layer also keeps a per-deck credential at
-   `~/.htmlppt/decks/<sha256(canonical path)>.json` holding `{ token, port }`
-   (directory `0700`, file `0600` best effort). `open` prefers that stored port
-   and token, so a tokenized URL remains valid across a crash/restart; a deck
-   switch moves the credential to the new deck and discards the previous one.
-   `stop` rotates the token and keeps the port, discarding the credential if the
-   rotation write fails.
+   `~/.htmlppt/decks/<sha256(canonical path)>.json` holding
+   `{ token, port, createdAt, updatedAt }` (directory `0700`, file `0600` best
+   effort). `open` prefers that stored port and token, so a tokenized URL
+   remains valid across a crash/restart; a deck switch moves the credential to
+   the new deck and discards the previous one. `stop` rotates the token and
+   keeps the port, discarding the credential when possible if the rotation
+   write fails. The first tokenized visit sets the HttpOnly,
+   `SameSite=Strict` session cookie with a 30-day `Max-Age`; successful page
+   responses renew it.
 3. **Edit.** The editor fetches `/api/deck`, parses an inert master document,
    and renders the active slide into a sandboxed iframe. Human edits update
    either the iframe (gestures, inline text) or the master (inspector, slide

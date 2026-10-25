@@ -802,7 +802,9 @@ export async function runCli(
         });
         // The switch may have removed the old credential while this write was
         // in flight; repeat the discard so the old deck cannot keep the token.
-        if (deckSwitched) {
+        // A switch back to this same deck (under any spelling) already wrote
+        // the fresh credential, so only keep it when the entry still names it.
+        if (deckSwitched && !(await sameDeckPath(entry.path, filePath))) {
           await removeCredential(filePath).catch(() => undefined);
         }
       }
