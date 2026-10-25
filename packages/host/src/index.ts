@@ -1,6 +1,14 @@
 export { HOST_VERSION, startHost } from './server.js';
 export type { HostHandle, HostOptions, RevisionSource } from './server.js';
 export {
+  credentialFile,
+  credentialsDirectory,
+  readCredential,
+  rotateCredential,
+  writeCredential
+} from './credentials.js';
+export type { DeckCredential } from './credentials.js';
+export {
   canonicalDeckPath,
   listSessions,
   readSession,
