@@ -16,13 +16,13 @@ import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sessionKey } from '@htmlppt/host';
+import { canonicalDeckPath, sessionKey } from '@htmlppt/host';
 import {
   copyFixture,
   fixturesDir,
   makeTempDir
 } from '@htmlppt/test-utils';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { formatHostStartError, runCli } from '../src/index.js';
 
 function capture() {
@@ -1093,6 +1093,171 @@ describe('htmlppt cli as a real process', () => {
     } finally {
       for (const cli of processes) {
         cli.kill();
+      }
+    }
+  });
+
+  it('keeps the deck port when a stopped deck reopens', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let second: CliProcess | undefined;
+
+    try {
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const firstUrl = new URL(firstMatch[1]);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(stop.code).toBe(0);
+      await first.waitForExit(10_000);
+
+      second = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const secondUrl = new URL(secondMatch[1]);
+
+      expect(secondUrl.port).toBe(firstUrl.port);
+    } finally {
+      first.kill();
+      second?.kill();
+    }
+  });
+
+  it('reuses the deck token when an editor restarts without a stop', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let second: CliProcess | undefined;
+
+    try {
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const firstUrl = new URL(firstMatch[1]);
+      expect(firstUrl.searchParams.get('token')).toBeTruthy();
+
+      // Simulate an editor that went away without `htmlppt stop`, so the next
+      // open has to read the token back from the credential store.
+      const exited = new Promise<void>((resolve) => {
+        first.child.once('close', () => resolve());
+      });
+      first.kill();
+      await exited;
+
+      second = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const secondUrl = new URL(secondMatch[1]);
+
+      expect(secondUrl.searchParams.get('token')).toBe(
+        firstUrl.searchParams.get('token')
+      );
+      expect(secondUrl.port).toBe(firstUrl.port);
+    } finally {
+      first.kill();
+      second?.kill();
+    }
+  });
+
+  it('adopts the live identity when the credential store is empty', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let second: CliProcess | undefined;
+
+    try {
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const firstUrl = new URL(firstMatch[1]);
+      const credentialPath = join(
+        workspace.home,
+        'decks',
+        `${sessionKey(await canonicalDeckPath(deckPath))}.json`
+      );
+
+      // A live host from before the store existed has no credential file.
+      await rm(credentialPath);
+      await expect(readFile(credentialPath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+
+      second = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      expect(secondMatch[1]).toBe(firstUrl.href);
+      expect(await second.waitForExit(10_000)).toBe(0);
+
+      expect(
+        JSON.parse(await readFile(credentialPath, 'utf8'))
+      ).toMatchObject({
+        token: firstUrl.searchParams.get('token'),
+        port: Number(firstUrl.port)
+      });
+    } finally {
+      first.kill();
+      second?.kill();
+    }
+  });
+
+  it('falls back to a new port when the recorded one is taken', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let second: CliProcess | undefined;
+    const probe = createServer();
+
+    try {
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const firstUrl = new URL(firstMatch[1]);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(stop.code).toBe(0);
+      await first.waitForExit(10_000);
+
+      await new Promise<void>((resolve, reject) => {
+        probe.once('error', reject);
+        probe.listen(Number(firstUrl.port), '127.0.0.1', resolve);
+      });
+
+      second = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const secondMatch = await second.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const secondUrl = new URL(secondMatch[1]);
+
+      const warning = `Port ${firstUrl.port} is in use; starting basic.deck.html on a new port. Existing bookmarks for this deck will stop working.`;
+      await vi.waitFor(() => expect(second?.stderr).toContain(warning), {
+        timeout: 10_000
+      });
+      expect(secondUrl.port).not.toBe(firstUrl.port);
+    } finally {
+      first.kill();
+      second?.kill();
+      if (probe.listening) {
+        await new Promise<void>((resolve) => probe.close(() => resolve()));
       }
     }
   });

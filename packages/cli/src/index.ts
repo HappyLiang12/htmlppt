@@ -22,11 +22,13 @@ import {
 import {
   canonicalDeckPath,
   listSessions,
+  readCredential,
   removeSessionIfUnchanged,
   sameDeckPath,
   sessionKey,
   sessionsDirectory,
   startHost,
+  writeCredential,
   writeSession,
   type SessionEntry
 } from '@htmlppt/host';
@@ -528,6 +530,17 @@ export async function runCli(
       const existing = await findLiveSession(filePath);
       if (existing) {
         const url = sessionUrl(existing);
+        // Decks opened before the credential store existed still deserve a
+        // stable bookmark: adopt the live identity when nothing is recorded.
+        if ((await readCredential(filePath)) === null) {
+          const now = new Date().toISOString();
+          await writeCredential(filePath, {
+            token: existing.token,
+            port: existing.port,
+            createdAt: now,
+            updatedAt: now
+          }).catch(() => undefined);
+        }
         io.stdout(`HTMLPPT_URL=${url}`);
         if (options.browser) {
           await openBrowser(url, io);
@@ -544,7 +557,13 @@ export async function runCli(
       }
 
       const directory = await editorDir();
-      const token = randomUUID();
+      const credential = await readCredential(filePath);
+      const token = credential?.token ?? randomUUID();
+      const requestedPort = Number(options.port);
+      // An explicit --port wins; otherwise reuse the port the deck was last
+      // served on so a saved URL keeps resolving.
+      const stickyPort =
+        requestedPort !== 0 ? requestedPort : credential?.port ?? 0;
       const moveSession = async (event: {
         previousPath: string;
         path: string;
@@ -573,20 +592,37 @@ export async function runCli(
         sessionSnapshot = nextSnapshot;
         io.stdout(`HTMLPPT_URL=${sessionUrl(entry)}`);
       };
-      let host: Awaited<ReturnType<typeof startHost>>;
-      try {
-        host = await startHost({
+      const start = (port: number) =>
+        startHost({
           filePath,
           token,
           editorDir: directory,
-          port: Number(options.port),
+          port,
           onDeckOpened: moveSession
         });
+      let host: Awaited<ReturnType<typeof startHost>>;
+      try {
+        try {
+          host = await start(stickyPort);
+        } catch (error) {
+          if (
+            requestedPort === 0 &&
+            credential !== null &&
+            (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
+          ) {
+            io.stderr(
+              `Port ${stickyPort} is in use; starting ${file} on a new port. Existing bookmarks for this deck will stop working.`
+            );
+            host = await start(0);
+          } else {
+            throw error;
+          }
+        }
       } catch (error) {
         const message = formatHostStartError(
           error,
           filePath,
-          Number(options.port),
+          stickyPort,
           file
         );
         if (message === null) {
@@ -617,6 +653,20 @@ export async function runCli(
         throw error;
       }
       let sessionSnapshot = `${JSON.stringify(entry, null, 2)}\n`;
+
+      // Record the binding before announcing it so the printed URL is always
+      // the one the next open will reuse. A failed write must not kill a
+      // session that is otherwise healthy.
+      await writeCredential(filePath, {
+        token,
+        port: host.port,
+        createdAt: credential?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }).catch((error: unknown) => {
+        io.stderr(
+          `Could not record the deck credential: ${error instanceof Error ? error.message : String(error)}. The editor still works; the next open will print a new URL.`
+        );
+      });
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 

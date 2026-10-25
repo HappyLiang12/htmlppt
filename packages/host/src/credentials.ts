@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { sessionKey } from './sessions.js';
+import { canonicalDeckPath, sessionKey } from './sessions.js';
 
 export interface DeckCredential {
   token: string;
@@ -24,12 +24,21 @@ export function credentialFile(filePath: string): string {
   return path.join(credentialsDirectory(), `${sessionKey(filePath)}.json`);
 }
 
+/**
+ * `open` keys by the caller's spelling while a session entry can move to the
+ * realpath after a deck switch. Resolve before hashing so every spelling of
+ * the same deck reaches one credential file.
+ */
+async function canonicalCredentialFile(filePath: string): Promise<string> {
+  return credentialFile(await canonicalDeckPath(filePath));
+}
+
 export async function readCredential(
   filePath: string
 ): Promise<DeckCredential | null> {
   let raw: string;
   try {
-    raw = await readFile(credentialFile(filePath), 'utf8');
+    raw = await readFile(await canonicalCredentialFile(filePath), 'utf8');
   } catch {
     return null;
   }
@@ -49,7 +58,7 @@ export async function writeCredential(
   const directory = credentialsDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700).catch(() => undefined);
-  const target = credentialFile(filePath);
+  const target = await canonicalCredentialFile(filePath);
   const temporary = `${target}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify(credential, null, 2)}\n`, {

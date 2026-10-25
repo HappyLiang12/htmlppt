@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile
@@ -25,7 +26,9 @@ describe('credentials', () => {
 
   beforeEach(async () => {
     previousHome = process.env.HTMLPPT_HOME;
-    home = await mkdtemp(path.join(tmpdir(), 'htmlppt-cred-'));
+    // Canonicalize the root so the exact-path assertions below compare against
+    // the same spelling the store derives after resolving the deck path.
+    home = await realpath(await mkdtemp(path.join(tmpdir(), 'htmlppt-cred-')));
     process.env.HTMLPPT_HOME = home;
   });
 
@@ -56,6 +59,28 @@ describe('credentials', () => {
       expect((await stat(credentialFile(deck))).mode & 0o777).toBe(0o600);
       expect((await stat(credentialsDirectory())).mode & 0o777).toBe(0o700);
     }
+  });
+
+  it('keys the credential by the canonical deck path', async () => {
+    // A caller may spell the same deck with a redundant segment. The store
+    // must resolve the key so a later open with the plain spelling finds the
+    // token that `stop` is expected to rotate.
+    const deck = path.join(home, 'deck.html');
+    const spelled = path.join(home, 'sub', '..', 'deck.html');
+    await mkdir(path.join(home, 'sub'), { recursive: true });
+    const credential = {
+      token: 'token-canonical',
+      port: 41236,
+      createdAt: '2026-10-25T00:00:00.000Z',
+      updatedAt: '2026-10-25T00:00:00.000Z'
+    };
+
+    await writeCredential(spelled, credential);
+
+    expect(await readCredential(deck)).toEqual(credential);
+    expect(await readFile(credentialFile(deck), 'utf8')).toContain(
+      'token-canonical'
+    );
   });
 
   it.skipIf(process.platform === 'win32')(
