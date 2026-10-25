@@ -913,9 +913,6 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         401
       );
     }
-    if (queryToken === options.token) {
-      c.header('Set-Cookie', tokenCookie(options.token));
-    }
     await next();
   });
 
@@ -933,11 +930,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     if (!matchesDeckName(c.req.param('name'), filePath)) {
       return c.notFound();
     }
-    c.header('Set-Cookie', tokenCookie(options.token));
     if (url.searchParams.has('token')) {
+      c.header('Set-Cookie', tokenCookie(options.token));
       return c.redirect(`${url.pathname}${queryWithoutToken(url)}`, 302);
     }
-    return c.html(await renderEditor());
+    const html = await renderEditor();
+    c.header('Set-Cookie', tokenCookie(options.token));
+    return c.html(html);
   });
 
   app.get('/d', (c) => c.notFound());
