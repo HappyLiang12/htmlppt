@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { execa } from 'execa';
 
@@ -83,10 +84,25 @@ export async function serveHtml(html: string) {
   };
 }
 
-export async function startCliHost(cliPath: string, cwd: string, file: string) {
+export async function startCliHost(
+  cliPath: string,
+  cwd: string,
+  file: string,
+  options: { home?: string } = {}
+) {
+  // Every E2E host gets its own credential store. Inheriting the environment
+  // would make `open` write into the real `~/.htmlppt/decks` and reuse a
+  // developer's token between runs. A caller that supplies `home` owns its
+  // lifecycle (a per-test temp directory it already cleans up).
+  const home =
+    options.home ?? (await mkdtemp(join(tmpdir(), 'htmlppt-e2e-home-')));
+  const ownsHome = options.home === undefined;
+  const cleanup = () =>
+    ownsHome ? rm(home, { recursive: true, force: true }) : Promise.resolve();
   const child = execa('node', [cliPath, 'open', file, '--no-browser'], {
     cwd,
-    reject: false
+    reject: false,
+    env: { ...process.env, HTMLPPT_HOME: home }
   });
 
   let buffer = '';
@@ -115,6 +131,7 @@ export async function startCliHost(cliPath: string, cwd: string, file: string) {
   } catch (error) {
     child.kill('SIGTERM');
     await child;
+    await cleanup();
     throw error;
   }
   if (!url) throw new Error('Host did not return a URL');
@@ -124,6 +141,7 @@ export async function startCliHost(cliPath: string, cwd: string, file: string) {
     async stop() {
       child.kill('SIGTERM');
       await child;
+      await cleanup();
     }
   };
 }

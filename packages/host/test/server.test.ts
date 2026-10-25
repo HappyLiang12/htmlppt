@@ -322,12 +322,17 @@ async function setup(
   }
 }
 
+function expectedSessionCookie(token: string): string {
+  return `htmlppt_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`;
+}
+
 async function bootstrapCookie(ctx: Context): Promise<string> {
   const response = await fetch(ctx.host.url, { redirect: 'manual' });
   expect(response.status).toBe(302);
-  const setCookie = response.headers.get('set-cookie') ?? '';
-  expect(setCookie).toContain('Max-Age=2592000');
-  return setCookie.split(';')[0] ?? '';
+  const setCookies = response.headers.getSetCookie();
+  expect(setCookies).toHaveLength(1);
+  expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
+  return setCookies[0]?.split(';')[0] ?? '';
 }
 
 async function addDeck(
@@ -395,18 +400,12 @@ describe('host', () => {
     const page = await fetch(ctx.host.url, { redirect: 'manual' });
     expect(page.status).toBe(302);
     expect(page.headers.get('location')).toBe(friendlyPath);
-    const setCookie = page.headers.get('set-cookie') ?? '';
-    expect(setCookie).toContain(
-      `htmlppt_token=${encodeURIComponent(ctx.token)}`
-    );
-    expect(setCookie.toLowerCase()).toContain('httponly');
-    expect(setCookie).toContain('SameSite=Strict');
-    expect(setCookie).toContain('Path=/');
-    expect(setCookie).toContain('Max-Age=2592000');
-    expect(setCookie.toLowerCase()).not.toContain('expires');
+    const setCookies = page.headers.getSetCookie();
+    expect(setCookies).toHaveLength(1);
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
 
     const friendly = await fetch(`${ctx.base}${friendlyPath}`, {
-      headers: { cookie: setCookie.split(';')[0] ?? '' }
+      headers: { cookie: setCookies[0]?.split(';')[0] ?? '' }
     });
     expect(friendly.status).toBe(200);
     expect(await friendly.text()).toContain('editor-shell');
@@ -442,7 +441,10 @@ describe('host', () => {
   it('serves the page and assets with the session cookie', async () => {
     const ctx = await setup();
     const page = await fetch(ctx.host.url, { redirect: 'manual' });
-    const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const bootCookies = page.headers.getSetCookie();
+    expect(bootCookies).toHaveLength(1);
+    expect(bootCookies[0]).toBe(expectedSessionCookie(ctx.token));
+    const cookie = bootCookies[0]?.split(';')[0] ?? '';
     expect(cookie).toBe(`htmlppt_token=${encodeURIComponent(ctx.token)}`);
 
     const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
@@ -452,11 +454,17 @@ describe('host', () => {
     });
     expect(rootWithCookie.status).toBe(302);
     expect(rootWithCookie.headers.get('location')).toBe(friendlyPath);
+    const rootCookies = rootWithCookie.headers.getSetCookie();
+    expect(rootCookies).toHaveLength(1);
+    expect(rootCookies[0]).toBe(expectedSessionCookie(ctx.token));
 
     const withCookie = await fetch(`${ctx.base}${friendlyPath}`, {
       headers: { cookie }
     });
     expect(withCookie.status).toBe(200);
+    const pageCookies = withCookie.headers.getSetCookie();
+    expect(pageCookies).toHaveLength(1);
+    expect(pageCookies[0]).toBe(expectedSessionCookie(ctx.token));
     expect(await withCookie.text()).toContain('editor-shell');
 
     const asset = await fetch(`${ctx.base}/app.js`, {
@@ -549,7 +557,10 @@ describe('host', () => {
       expect(root.headers.get('location')).toBe(
         `/d/${encodeURIComponent(name)}`
       );
-      const cookie = (root.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+      const rootCookies = root.headers.getSetCookie();
+      expect(rootCookies).toHaveLength(1);
+      expect(rootCookies[0]).toBe(expectedSessionCookie(token));
+      const cookie = rootCookies[0]?.split(';')[0] ?? '';
       const page = await fetch(`${base}${root.headers.get('location')}`, {
         headers: { cookie }
       });
@@ -574,14 +585,7 @@ describe('host', () => {
     expect(response.headers.get('location')).toBe(path);
     const setCookies = response.headers.getSetCookie();
     expect(setCookies).toHaveLength(1);
-    const setCookie = setCookies[0] ?? '';
-    expect(setCookie).toContain(
-      `htmlppt_token=${encodeURIComponent(ctx.token)}`
-    );
-    expect(setCookie.toLowerCase()).toContain('httponly');
-    expect(setCookie).toContain('SameSite=Strict');
-    expect(setCookie).toContain('Path=/');
-    expect(setCookie).toContain('Max-Age=2592000');
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
   });
 
   it('renews the cookie on the root redirect with a cookie-only request', async () => {
@@ -598,14 +602,7 @@ describe('host', () => {
     expect(root.headers.get('location')).toBe(friendlyPath);
     const setCookies = root.headers.getSetCookie();
     expect(setCookies).toHaveLength(1);
-    const setCookie = setCookies[0] ?? '';
-    expect(setCookie).toContain(
-      `htmlppt_token=${encodeURIComponent(ctx.token)}`
-    );
-    expect(setCookie.toLowerCase()).toContain('httponly');
-    expect(setCookie).toContain('SameSite=Strict');
-    expect(setCookie).toContain('Path=/');
-    expect(setCookie).toContain('Max-Age=2592000');
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
   });
 
   it('returns 500 without a cookie when the editor HTML cannot be read', async () => {
@@ -640,7 +637,9 @@ describe('host', () => {
       }
     );
     expect(page.status).toBe(200);
-    expect(page.headers.get('set-cookie')).toContain('Max-Age=2592000');
+    const pageCookies = page.headers.getSetCookie();
+    expect(pageCookies).toHaveLength(1);
+    expect(pageCookies[0]).toBe(expectedSessionCookie(ctx.token));
 
     const api = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
     expect(api.status).toBe(200);

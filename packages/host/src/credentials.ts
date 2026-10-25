@@ -20,17 +20,18 @@ export function credentialsDirectory(): string {
   return path.join(base, 'decks');
 }
 
-export function credentialFile(filePath: string): string {
-  return path.join(credentialsDirectory(), `${sessionKey(filePath)}.json`);
-}
-
 /**
  * `open` keys by the caller's spelling while a session entry can move to the
  * realpath after a deck switch. Resolve before hashing so every spelling of
  * the same deck reaches one credential file.
  */
-async function canonicalCredentialFile(filePath: string): Promise<string> {
-  return credentialFile(await canonicalDeckPath(filePath));
+export async function canonicalCredentialFile(
+  filePath: string
+): Promise<string> {
+  return path.join(
+    credentialsDirectory(),
+    `${sessionKey(await canonicalDeckPath(filePath))}.json`
+  );
 }
 
 export async function readCredential(
@@ -55,6 +56,11 @@ export async function writeCredential(
   filePath: string,
   credential: DeckCredential
 ): Promise<void> {
+  // The read side treats a value it cannot validate as absent, so reject it at
+  // the write side too instead of persisting a credential nobody can read.
+  if (!isDeckCredential(credential)) {
+    throw new Error('Invalid deck credential.');
+  }
   const directory = credentialsDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700).catch(() => undefined);

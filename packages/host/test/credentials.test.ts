@@ -14,7 +14,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  credentialFile,
+  canonicalCredentialFile,
   credentialsDirectory,
   readCredential,
   removeCredential,
@@ -53,13 +53,17 @@ describe('credentials', () => {
     await writeCredential(deck, credential);
 
     expect(credentialsDirectory()).toBe(path.join(home, 'decks'));
-    expect(credentialFile(deck)).toBe(
+    expect(await canonicalCredentialFile(deck)).toBe(
       path.join(home, 'decks', `${sessionKey(deck)}.json`)
     );
     expect(await readCredential(deck)).toEqual(credential);
-    expect(await readFile(credentialFile(deck), 'utf8')).toContain('token-1');
+    expect(
+      await readFile(await canonicalCredentialFile(deck), 'utf8')
+    ).toContain('token-1');
     if (process.platform !== 'win32') {
-      expect((await stat(credentialFile(deck))).mode & 0o777).toBe(0o600);
+      expect(
+        (await stat(await canonicalCredentialFile(deck))).mode & 0o777
+      ).toBe(0o600);
       expect((await stat(credentialsDirectory())).mode & 0o777).toBe(0o700);
     }
   });
@@ -94,7 +98,7 @@ describe('credentials', () => {
 
     // The two spellings really hash to different keys before canonicalization,
     // so a store that skipped the realpath step would miss this test.
-    expect(credentialFile(spelled)).not.toBe(credentialFile(deck));
+    expect(sessionKey(spelled)).not.toBe(sessionKey(deck));
 
     const throughAlias = {
       token: 'token-canonical',
@@ -106,9 +110,9 @@ describe('credentials', () => {
     await writeCredential(spelled, throughAlias);
 
     expect(await readCredential(deck)).toEqual(throughAlias);
-    expect(await readFile(credentialFile(deck), 'utf8')).toContain(
-      'token-canonical'
-    );
+    expect(
+      await readFile(await canonicalCredentialFile(deck), 'utf8')
+    ).toContain('token-canonical');
     expect(await readdir(credentialsDirectory())).toEqual([
       `${sessionKey(deck)}.json`
     ]);
@@ -143,7 +147,9 @@ describe('credentials', () => {
     await removeCredential(deck);
 
     expect(await readCredential(deck)).toBeNull();
-    await expect(readFile(credentialFile(deck), 'utf8')).rejects.toMatchObject({
+    await expect(
+      readFile(await canonicalCredentialFile(deck), 'utf8')
+    ).rejects.toMatchObject({
       code: 'ENOENT'
     });
     await expect(removeCredential(deck)).resolves.toBeUndefined();
@@ -160,7 +166,7 @@ describe('credentials', () => {
       createdAt: '2026-10-25T00:00:00.000Z',
       updatedAt: '2026-10-25T00:00:00.000Z'
     });
-    await chmod(credentialFile(deck), 0o400);
+    await chmod(await canonicalCredentialFile(deck), 0o400);
 
     await removeCredential(deck);
 
@@ -193,7 +199,7 @@ describe('credentials', () => {
       createdAt: '2026-10-25T00:00:00.000Z',
       updatedAt: '2026-10-25T00:00:00.000Z'
     });
-    expect(credentialFile(spelled)).not.toBe(credentialFile(deck));
+    expect(sessionKey(spelled)).not.toBe(sessionKey(deck));
 
     await removeCredential(spelled);
 
@@ -219,7 +225,9 @@ describe('credentials', () => {
       });
 
       expect((await stat(credentialsDirectory())).mode & 0o777).toBe(0o700);
-      expect((await stat(credentialFile(deck))).mode & 0o777).toBe(0o600);
+      expect(
+        (await stat(await canonicalCredentialFile(deck))).mode & 0o777
+      ).toBe(0o600);
     }
   );
 
@@ -234,9 +242,56 @@ describe('credentials', () => {
       createdAt: '2026-10-25T00:00:00.000Z',
       updatedAt: '2026-10-25T00:00:00.000Z'
     });
-    await writeFile(credentialFile(broken), '{"token":""}');
+    await writeFile(await canonicalCredentialFile(broken), '{"token":""}');
 
     expect(await readCredential(broken)).toBeNull();
+  });
+
+  it('returns null for invalid JSON and invalid ports', async () => {
+    await mkdir(credentialsDirectory(), { recursive: true });
+    const cases = [
+      { name: 'not-json', raw: '{not-json' },
+      {
+        name: 'zero-port',
+        raw: JSON.stringify({
+          token: 't',
+          port: 0,
+          createdAt: '2026-10-25T00:00:00.000Z',
+          updatedAt: '2026-10-25T00:00:00.000Z'
+        })
+      },
+      {
+        name: 'string-port',
+        raw: JSON.stringify({
+          token: 't',
+          port: '8080',
+          createdAt: '2026-10-25T00:00:00.000Z',
+          updatedAt: '2026-10-25T00:00:00.000Z'
+        })
+      }
+    ];
+
+    for (const fixture of cases) {
+      const deck = path.join(home, `${fixture.name}.html`);
+      await writeFile(await canonicalCredentialFile(deck), fixture.raw, 'utf8');
+      expect(await readCredential(deck), fixture.name).toBeNull();
+    }
+  });
+
+  it('rejects an invalid credential instead of persisting it', async () => {
+    const deck = path.join(home, 'invalid-write.html');
+
+    await expect(
+      writeCredential(deck, {
+        token: 't',
+        port: 0,
+        createdAt: '2026-10-25T00:00:00.000Z',
+        updatedAt: '2026-10-25T00:00:00.000Z'
+      })
+    ).rejects.toThrow('Invalid deck credential.');
+    await expect(
+      readFile(await canonicalCredentialFile(deck), 'utf8')
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rotates the token and keeps the port and createdAt', async () => {
@@ -262,8 +317,11 @@ describe('credentials', () => {
 
     const rotated = await rotateCredential(deck, 42000);
 
-    expect(rotated.token).toMatch(/^[0-9a-f-]{36}$/);
+    expect(rotated.token).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     expect(rotated.port).toBe(42000);
+    expect(await readCredential(deck)).toEqual(rotated);
   });
 
   it('falls back to ~/.htmlppt/decks when HTMLPPT_HOME is empty', () => {

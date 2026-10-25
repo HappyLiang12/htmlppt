@@ -18,12 +18,7 @@ import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  canonicalDeckPath,
-  readCredential,
-  sessionKey,
-  writeCredential
-} from '@htmlppt/host';
+import { canonicalDeckPath, sessionKey } from '@htmlppt/host';
 import {
   copyFixture,
   fixturesDir,
@@ -1310,8 +1305,10 @@ describe('htmlppt cli as a real process', () => {
       expect(stop.stdout).toContain('Stopped editor');
       expect(stop.stderr).toContain('Could not rotate the credential');
       // The sentinel is a directory, so the discard fails too and the warning
-      // must say so instead of claiming the old token is gone.
+      // must say so instead of claiming the old token is gone, and it must
+      // name the canonical credential file a user has to delete.
       expect(stop.stderr).toContain('could not be removed');
+      expect(stop.stderr).toContain(credentialPath);
       await open.waitForExit(10_000);
       await expect(
         readFile(sessionFilePath(workspace, deckPath), 'utf8')
@@ -1412,104 +1409,6 @@ describe('htmlppt cli as a real process', () => {
         open.kill();
         reopened?.kill();
         await chmod(credentialPath, 0o600).catch(() => undefined);
-      }
-    }
-  );
-
-  it.skipIf(process.platform === 'win32')(
-    'discards the stored credential when a POSIX write fails',
-    async (context) => {
-      const workspace = await createCliWorkspace();
-      await copyFixture('basic.deck.html', workspace.cwd);
-      const deckPath = join(workspace.cwd, 'basic.deck.html');
-      const credentialPath = await credentialFilePath(workspace, deckPath);
-      const credentialsDir = join(workspace.home, 'decks');
-      const previousHome = process.env.HTMLPPT_HOME;
-      const open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
-        cwd: workspace.cwd,
-        env: cliEnvironment(workspace)
-      });
-      let reopened: CliProcess | undefined;
-
-      try {
-        const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
-        const url = new URL(match[1]);
-        const before = JSON.parse(await readFile(credentialPath, 'utf8')) as {
-          token: string;
-        };
-        expect(before.token).toBe(url.searchParams.get('token'));
-
-        // The store tightens the credentials directory back to 0700 before
-        // every write, so a read-only directory cannot fail the temporary
-        // file when the test runner owns it. Prove the injection instead of
-        // asserting an error that will not happen, then skip with the reason.
-        process.env.HTMLPPT_HOME = workspace.home;
-        const probeDeck = join(workspace.cwd, 'probe.deck.html');
-        await chmod(credentialsDir, 0o500);
-        let blocked = false;
-        try {
-          await writeCredential(probeDeck, {
-            token: 'probe-token',
-            port: 41241,
-            createdAt: '2026-10-25T00:00:00.000Z',
-            updatedAt: '2026-10-25T00:00:00.000Z'
-          });
-        } catch {
-          blocked = true;
-        } finally {
-          await chmod(credentialsDir, 0o700).catch(() => undefined);
-          if (previousHome === undefined) delete process.env.HTMLPPT_HOME;
-          else process.env.HTMLPPT_HOME = previousHome;
-        }
-        await rm(await credentialFilePath(workspace, probeDeck), {
-          force: true
-        }).catch(() => undefined);
-        if (!blocked) {
-          context.skip(
-            'writeCredential restores the credentials directory to 0700 before writing, so a read-only directory cannot inject the write failure.'
-          );
-          return;
-        }
-
-        await chmod(credentialsDir, 0o500);
-        const stop = await runCliProcess(['stop', 'basic.deck.html'], {
-          cwd: workspace.cwd,
-          env: cliEnvironment(workspace)
-        });
-        await chmod(credentialsDir, 0o700).catch(() => undefined);
-
-        expect(stop.code).toBe(0);
-        expect(stop.stdout).toContain('Stopped editor');
-        expect(stop.stderr).toContain('Could not rotate the credential');
-        expect(stop.stderr).toContain('stored token was discarded');
-        await open.waitForExit(10_000);
-        // The warning is literally true: the stored token is gone.
-        await expect(readFile(credentialPath, 'utf8')).rejects.toMatchObject({
-          code: 'ENOENT'
-        });
-        process.env.HTMLPPT_HOME = workspace.home;
-        try {
-          expect((await readCredential(deckPath))?.token).not.toBe(
-            before.token
-          );
-        } finally {
-          if (previousHome === undefined) delete process.env.HTMLPPT_HOME;
-          else process.env.HTMLPPT_HOME = previousHome;
-        }
-
-        reopened = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
-          cwd: workspace.cwd,
-          env: cliEnvironment(workspace)
-        });
-        const reopenedMatch = await reopened.waitForOutput(
-          /HTMLPPT_URL=(\S+)\r?\n/
-        );
-        const reopenedUrl = new URL(reopenedMatch[1]);
-        expect(reopenedUrl.searchParams.get('token')).not.toBe(before.token);
-      } finally {
-        open.kill();
-        reopened?.kill();
-        await chmod(credentialsDir, 0o700).catch(() => undefined);
       }
     }
   );
@@ -1653,6 +1552,175 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('replaces a stale credential with the live host identity', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const first = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+      cwd: workspace.cwd,
+      env: cliEnvironment(workspace)
+    });
+    let adopted: CliProcess | undefined;
+    let reopened: CliProcess | undefined;
+
+    try {
+      const firstMatch = await first.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const liveUrl = new URL(firstMatch[1]);
+      const credentialPath = await credentialFilePath(workspace, deckPath);
+      const seededAt = '2026-10-01T00:00:00.000Z';
+      // A credential left by an older incarnation whose host is gone. The
+      // live host is still answering on a different identity.
+      await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: await closedPort(),
+        createdAt: seededAt,
+        updatedAt: seededAt
+      });
+
+      adopted = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const adoptedMatch = await adopted.waitForOutput(
+        /HTMLPPT_URL=(\S+)\r?\n/
+      );
+      expect(adoptedMatch[1]).toBe(liveUrl.href);
+      expect(await adopted.waitForExit(10_000)).toBe(0);
+      const rewritten = JSON.parse(
+        await readFile(credentialPath, 'utf8')
+      ) as { token: string; port: number; createdAt: string; updatedAt: string };
+      expect(rewritten.token).toBe(liveUrl.searchParams.get('token'));
+      expect(rewritten.port).toBe(Number(liveUrl.port));
+      // Adoption keeps the credential's history but refreshes the timestamp.
+      expect(rewritten.createdAt).toBe(seededAt);
+      expect(rewritten.updatedAt).not.toBe(seededAt);
+
+      // Crash without stop. The next open must start where the live host
+      // actually was, not on the stale identity the old code kept.
+      const exited = new Promise<void>((resolve) => {
+        first.child.once('close', () => resolve());
+      });
+      first.kill();
+      await exited;
+
+      reopened = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const reopenedMatch = await reopened.waitForOutput(
+        /HTMLPPT_URL=(\S+)\r?\n/
+      );
+      const reopenedUrl = new URL(reopenedMatch[1]);
+      expect(reopenedUrl.searchParams.get('token')).toBe(
+        liveUrl.searchParams.get('token')
+      );
+      expect(reopenedUrl.port).toBe(liveUrl.port);
+    } finally {
+      first.kill();
+      adopted?.kill();
+      reopened?.kill();
+    }
+  });
+
+  it('moves the credential to the switched deck and clears the old one', async () => {
+    const workspace = await createCliWorkspace();
+    const firstDir = join(workspace.cwd, 'one');
+    const secondDir = join(workspace.cwd, 'two');
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    const firstDeck = await copyFixture('basic.deck.html', firstDir);
+    const secondDeck = await copyFixture('basic.deck.html', secondDir);
+    const open = new CliProcess(
+      ['open', join('one', 'basic.deck.html'), '--no-browser'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+    let reopened: CliProcess | undefined;
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const liveUrl = new URL(match[1]);
+      const firstCredentialPath = await credentialFilePath(
+        workspace,
+        firstDeck
+      );
+      const firstCredential = JSON.parse(
+        await readFile(firstCredentialPath, 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(firstCredential.token).toBe(liveUrl.searchParams.get('token'));
+
+      const token = liveUrl.searchParams.get('token');
+      const response = await fetch(
+        `http://127.0.0.1:${liveUrl.port}/api/open`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({ path: secondDeck })
+        }
+      );
+      expect(response.status).toBe(200);
+
+      // The host kept its token and port, so the deck it now serves owns
+      // that identity; the previous deck must lose it.
+      const secondCredentialPath = await credentialFilePath(
+        workspace,
+        secondDeck
+      );
+      const secondCredential = JSON.parse(
+        await readFile(secondCredentialPath, 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(secondCredential.token).toBe(token);
+      expect(secondCredential.port).toBe(Number(liveUrl.port));
+      const staleFirst = await readFile(firstCredentialPath, 'utf8').catch(
+        () => null
+      );
+      if (staleFirst !== null) {
+        expect(
+          (JSON.parse(staleFirst) as { token: string }).token
+        ).not.toBe(token);
+      }
+
+      reopened = new CliProcess(
+        ['open', join('one', 'basic.deck.html'), '--no-browser'],
+        { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+      );
+      const reopenedMatch = await reopened.waitForOutput(
+        /HTMLPPT_URL=(\S+)\r?\n/
+      );
+      const reopenedUrl = new URL(reopenedMatch[1]);
+      expect(reopenedUrl.searchParams.get('token')).not.toBe(token);
+      const reopenedCredential = JSON.parse(
+        await readFile(firstCredentialPath, 'utf8')
+      ) as { token: string };
+
+      const stop = await runCliProcess(
+        ['stop', join('two', 'basic.deck.html')],
+        { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+      );
+      expect(stop.code).toBe(0);
+
+      const rotatedSecond = JSON.parse(
+        await readFile(secondCredentialPath, 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(rotatedSecond.token).not.toBe(token);
+      expect(rotatedSecond.port).toBe(Number(liveUrl.port));
+      expect(rotatedSecond.createdAt).toBe(secondCredential.createdAt);
+      // stop two must not rotate the deck that is now served by another host.
+      expect(
+        (
+          JSON.parse(await readFile(firstCredentialPath, 'utf8')) as {
+            token: string;
+          }
+        ).token
+      ).toBe(reopenedCredential.token);
+    } finally {
+      open.kill();
+      reopened?.kill();
+    }
+  });
+
   it('falls back to a new port when the recorded one is taken', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);
@@ -1720,6 +1788,86 @@ describe('htmlppt cli as a real process', () => {
       if (probe.listening) {
         await new Promise<void>((resolve) => probe.close(() => resolve()));
       }
+    }
+  });
+
+  it('gives an explicit --port precedence over the stored port', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const storedPort = await closedPort();
+    const requestedPort = await closedPort();
+    const persistedAt = '2026-10-01T00:00:00.000Z';
+    await writeStoredCredential(workspace, deckPath, {
+      token: 'stored-token',
+      port: storedPort,
+      createdAt: persistedAt,
+      updatedAt: persistedAt
+    });
+    const open = new CliProcess(
+      ['open', 'basic.deck.html', '--port', String(requestedPort), '--no-browser'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+      expect(url.port).toBe(String(requestedPort));
+
+      const credential = JSON.parse(
+        await readFile(await credentialFilePath(workspace, deckPath), 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(credential.port).toBe(requestedPort);
+      expect(credential.token).toBe('stored-token');
+      expect(credential.createdAt).toBe(persistedAt);
+    } finally {
+      open.kill();
+    }
+  });
+
+  it('treats an explicit --port 0 as a fresh ephemeral port', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    // Hold the stored port so a sticky reuse would collide and warn, proving
+    // the explicit `0` was not treated as "use the recorded port".
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', resolve);
+    });
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('The probe server did not expose a TCP port.');
+    }
+    const storedPort = address.port;
+    const persistedAt = '2026-10-01T00:00:00.000Z';
+    await writeStoredCredential(workspace, deckPath, {
+      token: 'stored-token',
+      port: storedPort,
+      createdAt: persistedAt,
+      updatedAt: persistedAt
+    });
+    const open = new CliProcess(
+      ['open', 'basic.deck.html', '--port', '0', '--no-browser'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+      expect(url.port).not.toBe(String(storedPort));
+      expect(open.stderr).not.toContain('is in use');
+
+      const credential = JSON.parse(
+        await readFile(await credentialFilePath(workspace, deckPath), 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(credential.port).toBe(Number(url.port));
+      expect(credential.token).toBe('stored-token');
+      expect(credential.createdAt).toBe(persistedAt);
+    } finally {
+      open.kill();
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
     }
   });
 
@@ -2191,6 +2339,76 @@ describe('htmlppt cli as a real process', () => {
     expect(rotated.token.length).toBeGreaterThan(0);
     expect(rotated.token).not.toBe('stale-token');
     expect(rotated.createdAt).toBe(persistedAt);
+  });
+
+  it('rotates a dead credential in a mixed --all run', async () => {
+    const workspace = await createCliWorkspace();
+    const liveDir = join(workspace.cwd, 'live');
+    const deadDir = join(workspace.cwd, 'dead');
+    await mkdir(liveDir, { recursive: true });
+    await mkdir(deadDir, { recursive: true });
+    const liveDeck = await copyFixture('basic.deck.html', liveDir);
+    const deadDeck = await copyFixture('basic.deck.html', deadDir);
+    const deadPort = await closedPort();
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const open = new CliProcess(
+      ['open', join('live', 'basic.deck.html'), '--no-browser'],
+      { cwd: workspace.cwd, env: cliEnvironment(workspace) }
+    );
+    let stop: CliProcess | undefined;
+
+    try {
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const liveUrl = new URL(match[1]);
+      const liveCredentialPath = await credentialFilePath(workspace, liveDeck);
+      const liveBefore = JSON.parse(
+        await readFile(liveCredentialPath, 'utf8')
+      ) as { token: string; port: number };
+
+      // Seed the dead entry after open: `open` scans the registry and would
+      // prune a dead entry before `stop --all` could snapshot it.
+      await writeStaleSession(workspace, deadDeck, {
+        pid: await exitedPid(),
+        port: deadPort
+      });
+      await writeStoredCredential(workspace, deadDeck, {
+        token: 'stale-token',
+        port: deadPort,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+
+      stop = new CliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      stop.child.stdin.end();
+      const [stopCode] = await Promise.all([
+        stop.waitForExit(15_000),
+        open.waitForExit(5_000)
+      ]);
+
+      expect(stopCode).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(await sessionCount(workspace)).toBe(0);
+
+      // The dead entry is pruned by listSessions before the loop, but its
+      // credential must not survive the host that owned it.
+      const dead = JSON.parse(
+        await readFile(await credentialFilePath(workspace, deadDeck), 'utf8')
+      ) as { token: string; port: number; createdAt: string };
+      expect(dead.token).not.toBe('stale-token');
+      expect(dead.port).toBe(deadPort);
+      expect(dead.createdAt).toBe(persistedAt);
+      const live = JSON.parse(
+        await readFile(liveCredentialPath, 'utf8')
+      ) as { token: string; port: number };
+      expect(live.token).not.toBe(liveBefore.token);
+      expect(live.port).toBe(Number(liveUrl.port));
+    } finally {
+      open.kill();
+      stop?.kill();
+    }
   });
 
   it('warns but still counts a dead-pid cleanup when rotation fails', async () => {

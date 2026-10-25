@@ -33,14 +33,24 @@ Out of scope:
 ## Local host and session token
 
 `htmlppt open` starts an HTTP server bound to `127.0.0.1` (never a wildcard
-address) on a random port unless `--port` is supplied.
+address). Without `--port` it prefers the port recorded for the deck and falls
+back to an operating-system-assigned port; an explicit `--port` (including
+`0`) always wins.
 
-- Each run generates a random per-session token. The printed URL carries it as
-  `?token=...`; treat that URL as a secret for the session.
+- Each deck has a credential file at
+  `<HTMLPPT_HOME or ~/.htmlppt>/decks/<key>.json` holding `{token, port,
+  createdAt, updatedAt}`. The directory is created with mode `0700` and the
+  file with `0600` where the platform supports it. `open` reuses the recorded
+  token and port for that deck; `htmlppt stop` rotates the token and keeps the
+  port. If the rotation write fails, the credential is discarded instead of
+  leaving a token nobody can revoke readable on disk.
+- The printed URL carries the token as `?token=...`; treat it as a secret for
+  the lifetime of the host that serves it.
 - A tokenized request for `/` or `/d/<name>` sets an `HttpOnly`,
-  `SameSite=Strict`, `Path=/` cookie and redirects to `/d/<name>`, so the
-  address bar no longer contains the token. Static assets accept either the
-  cookie or a query token.
+  `SameSite=Strict`, `Path=/` cookie with a 30-day `Max-Age` and redirects to
+  `/d/<name>`, so the address bar no longer contains the token. Successful
+  page responses renew the cookie; asset and API responses do not. Static
+  assets accept either the cookie or a query token.
 - `/api/*` requests accept the cookie, or `Authorization: Bearer <token>` for
   CLI, MCP, and tests. The single query-string exception remains
   `GET /api/events`, where `EventSource` cannot set headers.

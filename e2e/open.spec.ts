@@ -84,22 +84,15 @@ async function createSecondDeck(
 }
 
 /**
- * Starts the real CLI host with an isolated registry. The child inherits the
- * override at spawn time; later CLI commands pass the same HOME explicitly.
+ * Starts the real CLI host with an isolated registry. The caller owns `home`
+ * and cleans it up with the surrounding temporary directory.
  */
 async function startIsolatedHost(
   directory: string,
   file: string,
   home: string
 ): Promise<StartedHost> {
-  const previous = process.env.HTMLPPT_HOME;
-  process.env.HTMLPPT_HOME = home;
-  try {
-    return await startCliHost(cliPath, directory, file);
-  } finally {
-    if (previous === undefined) delete process.env.HTMLPPT_HOME;
-    else process.env.HTMLPPT_HOME = previous;
-  }
+  return startCliHost(cliPath, directory, file, { home });
 }
 
 /** The registry path the CLI uses: HTMLPPT_HOME/sessions/<sha256(path)>.json */
