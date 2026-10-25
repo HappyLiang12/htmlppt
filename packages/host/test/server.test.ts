@@ -322,6 +322,7 @@ async function bootstrapCookie(ctx: Context): Promise<string> {
   const response = await fetch(ctx.host.url, { redirect: 'manual' });
   expect(response.status).toBe(302);
   const setCookie = response.headers.get('set-cookie') ?? '';
+  expect(setCookie).toContain('Max-Age=2592000');
   return setCookie.split(';')[0] ?? '';
 }
 
@@ -397,7 +398,7 @@ describe('host', () => {
     expect(setCookie.toLowerCase()).toContain('httponly');
     expect(setCookie).toContain('SameSite=Strict');
     expect(setCookie).toContain('Path=/');
-    expect(setCookie.toLowerCase()).not.toContain('max-age');
+    expect(setCookie).toContain('Max-Age=2592000');
     expect(setCookie.toLowerCase()).not.toContain('expires');
 
     const friendly = await fetch(`${ctx.base}${friendlyPath}`, {
@@ -541,6 +542,25 @@ describe('host', () => {
     expect(response.headers.get('set-cookie')).toContain(
       `htmlppt_token=${encodeURIComponent(ctx.token)}`
     );
+  });
+
+  it('renews the cookie on document navigations only', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const page = await fetch(
+      `${ctx.base}/d/${encodeURIComponent(basename(ctx.deckPath))}`,
+      {
+        headers: { cookie },
+        redirect: 'manual'
+      }
+    );
+    expect(page.status).toBe(200);
+    expect(page.headers.get('set-cookie')).toContain('Max-Age=2592000');
+
+    const api = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+    expect(api.status).toBe(200);
+    expect(api.headers.get('set-cookie')).toBeNull();
   });
 
   it('preserves non-token query parameters when redirecting', async () => {
