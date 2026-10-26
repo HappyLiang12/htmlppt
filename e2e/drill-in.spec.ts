@@ -808,14 +808,7 @@ test('drags a grid child without changing the grid parent', { tag: '@feature:nes
 test('styles a nested paragraph through the appearance panel and persists it', { tag: '@feature:nested-appearance' }, async ({
   page
 }) => {
-  // The panel's stroke fields edit a border colour and width; a paragraph with
-  // no authored border has neither, so the footer starts with a 1px border to
-  // prove both fields. Creating a border from an empty style stays uncovered.
-  const seeded = (await readFile(fixturePath, 'utf8')).replace(
-    '<p class="foot">Footer</p>',
-    '<p class="foot" style="border-width: 1px; border-style: solid; border-color: #000000">Footer</p>'
-  );
-  const editor = await openDeckHtml(page, seeded, 'wrapped.deck.html');
+  const editor = await openWrappedDeck(page);
   try {
     await enterPad(page);
     const pad = editor.frame.locator('.pad');
@@ -830,6 +823,9 @@ test('styles a nested paragraph through the appearance panel and persists it', {
     // the read-only hint that nested selections showed before DE3.
     await expect(page.getByTestId('object-style')).toBeVisible();
     await expect(page.getByTestId('image-alt')).toHaveCount(0);
+    // The footer authors no border, so the border edits below have to create
+    // one from an empty style instead of relying on a starting declaration.
+    expect(await foot.getAttribute('style')).toBeNull();
 
     const fill = page.getByTestId('style-fill');
     // The suite runs under the zh-TW pin, so this is the real field label.
@@ -842,8 +838,9 @@ test('styles a nested paragraph through the appearance panel and persists it', {
       .toContain('background-color: rgb(255, 238, 170)');
     await expect(foot).toHaveCSS('background-color', 'rgb(255, 238, 170)');
 
-    // Border: the panel exposes width and colour as separate fields, and the
-    // inline declaration must carry both parts of the stroke after each edit.
+    // Border: the panel exposes width and colour as separate fields, and each
+    // commit must carry both halves of the stroke. Setting the width first has
+    // to default the missing colour, or the width-only patch clears the border.
     const strokeWidth = page.getByTestId('style-stroke-width');
     await strokeWidth.fill('3');
     await strokeWidth.press('Enter');
@@ -851,13 +848,20 @@ test('styles a nested paragraph through the appearance panel and persists it', {
       .poll(async () => (await foot.getAttribute('style')) ?? '')
       .toContain('border-width: 3px');
     await expect(foot).toHaveCSS('border-top-width', '3px');
+    await expect(foot).toHaveCSS('border-top-style', 'solid');
+    await expect(foot).toHaveCSS('border-top-color', 'rgb(0, 0, 0)');
 
     const stroke = page.getByTestId('style-stroke');
     await stroke.fill('#334455');
     await stroke.press('Enter');
+    // Both edits landed on the empty style: the inline declaration carries the
+    // full border trio, not just a colour that a width patch would clear.
     await expect
       .poll(async () => (await foot.getAttribute('style')) ?? '')
-      .toContain('border-color: rgb(51, 68, 85)');
+      .toContain(
+        'border-style: solid; border-width: 3px; border-color: rgb(51, 68, 85)'
+      );
+    await expect(foot).toHaveCSS('border-top-width', '3px');
     await expect(foot).toHaveCSS('border-top-style', 'solid');
     await expect(foot).toHaveCSS('border-top-color', 'rgb(51, 68, 85)');
 
@@ -885,7 +889,7 @@ test('styles a nested paragraph through the appearance panel and persists it', {
     // live iframe change.
     const saved = await readFile(join(editor.directory, editor.file), 'utf8');
     expect(saved).toMatch(
-      /<p class="foot" style="border-width: 3px; border-style: solid; border-color: rgb\(51, 68, 85\); background-color: rgb\(255, 238, 170\); border-radius: 12px; opacity: 0\.8;"/
+      /<p class="foot" style="background-color: rgb\(255, 238, 170\); border-style: solid; border-width: 3px; border-color: rgb\(51, 68, 85\); border-radius: 12px; opacity: 0\.8;"/
     );
 
     await page.reload();
@@ -895,7 +899,7 @@ test('styles a nested paragraph through the appearance panel and persists it', {
     const reloadedFoot = reloadedFrame.locator('.pad .foot');
     await expect(reloadedFoot).toHaveAttribute(
       'style',
-      /border-width: 3px; border-style: solid; border-color: rgb\(51, 68, 85\); background-color: rgb\(255, 238, 170\); border-radius: 12px; opacity: 0\.8;/
+      /background-color: rgb\(255, 238, 170\); border-style: solid; border-width: 3px; border-color: rgb\(51, 68, 85\); border-radius: 12px; opacity: 0\.8;/
     );
     await expect(reloadedFoot).toHaveCSS(
       'background-color',

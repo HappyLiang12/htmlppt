@@ -539,6 +539,118 @@ describe('inspector object appearance', () => {
     expect(onSetAppearance).toHaveBeenCalledWith({ fill: '#ff0000' });
   });
 
+  it('creates a border from an empty style when the width is set first', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    await render({ selection, style: SHAPE_STYLE, onSetAppearance });
+
+    await act(async () => {
+      const width = inputByTestId('style-stroke-width');
+      width.focus();
+      setInputValue(width, '3');
+      width.blur();
+    });
+    // One commit must carry both halves: a width-only patch clears the border.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({
+      strokeWidth: 3,
+      stroke: '#000000'
+    });
+
+    await render({
+      selection,
+      style: {
+        ...SHAPE_STYLE,
+        appearance: {
+          ...SHAPE_STYLE.appearance,
+          stroke: 'rgb(0, 0, 0)',
+          strokeWidth: '3px'
+        }
+      },
+      onSetAppearance
+    });
+    await act(async () => {
+      const stroke = inputByTestId('style-stroke');
+      stroke.focus();
+      setInputValue(stroke, '#334455');
+      stroke.blur();
+    });
+    expect(onSetAppearance).toHaveBeenLastCalledWith({
+      stroke: '#334455',
+      strokeWidth: 3
+    });
+  });
+
+  it('creates a border from an empty style when the colour is set first', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    await render({ selection, style: SHAPE_STYLE, onSetAppearance });
+
+    await act(async () => {
+      const stroke = inputByTestId('style-stroke');
+      stroke.focus();
+      setInputValue(stroke, '#334455');
+      stroke.blur();
+    });
+    expect(onSetAppearance).toHaveBeenLastCalledWith({
+      stroke: '#334455',
+      strokeWidth: 1
+    });
+
+    await render({
+      selection,
+      style: {
+        ...SHAPE_STYLE,
+        appearance: {
+          ...SHAPE_STYLE.appearance,
+          stroke: 'rgb(51, 68, 85)',
+          strokeWidth: '1px'
+        }
+      },
+      onSetAppearance
+    });
+    await act(async () => {
+      const width = inputByTestId('style-stroke-width');
+      width.focus();
+      setInputValue(width, '3');
+      width.blur();
+    });
+    // The border already has this colour; core keeps it on a width-only patch.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({ strokeWidth: 3 });
+  });
+
+  it('keeps clearing the border when either half is emptied', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    const bordered = {
+      ...SHAPE_STYLE,
+      appearance: {
+        ...SHAPE_STYLE.appearance,
+        stroke: 'rgb(51, 68, 85)',
+        strokeWidth: '3px'
+      }
+    };
+    await render({ selection, style: bordered, onSetAppearance });
+
+    await act(async () => {
+      const stroke = inputByTestId('style-stroke');
+      stroke.focus();
+      setInputValue(stroke, '');
+      stroke.blur();
+    });
+    // An emptied colour is a clear, not a request for the default colour.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({
+      stroke: null,
+      strokeWidth: 3
+    });
+
+    await act(async () => {
+      const width = inputByTestId('style-stroke-width');
+      width.focus();
+      setInputValue(width, '');
+      width.blur();
+    });
+    // Zero width clears the border; no default colour is attached in the same
+    // commit, so an emptied field cannot resurrect a border.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({ strokeWidth: 0 });
+  });
+
   it('shows validation feedback when an appearance value is rejected', async () => {
     const onSetAppearance = vi.fn(() => false);
     await render({ selection, style: SHAPE_STYLE, onSetAppearance });
