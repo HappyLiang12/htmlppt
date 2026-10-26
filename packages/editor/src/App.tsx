@@ -63,7 +63,7 @@ import { TextToolbar } from './components/TextToolbar';
 import { TableToolbar } from './components/TableToolbar';
 import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
-import { useI18n, type Translator } from './i18n';
+import { useI18n, type MessageKey, type Translator } from './i18n';
 import { describeSelection, describeSlide } from './announcements';
 import { appearanceKindFor } from './appearance-kind';
 import {
@@ -96,6 +96,11 @@ import {
   type StandaloneSession
 } from './standalone';
 import { StandaloneLauncher } from './components/StandaloneLauncher';
+import {
+  textEditBlockFor,
+  TEXT_EDITABLE_SELECTOR,
+  type TextEditBlock
+} from './text-edit-block';
 import {
   planConflictResolution,
   type ConflictResolution
@@ -209,8 +214,15 @@ import {
   type DeckControllerState
 } from './use-deck-controller';
 
-const TEXT_EDITABLE_SELECTOR =
-  'h1, h2, h3, p, li, span, td, th, blockquote, figcaption, div';
+// One key per rejection reason, typed so a new block reason cannot ship
+// without localized copy in every catalog.
+const EDIT_HINT_KEYS: Record<TextEditBlock, MessageKey> = {
+  'not-text': 'editor.hint.not-text',
+  'has-children': 'editor.hint.has-children',
+  empty: 'editor.hint.empty'
+};
+
+const EDIT_HINT_TIMEOUT_MS = 6_000;
 
 // Div shapes and text boxes are leaf objects; a layout div with element
 // children keeps its original semantic text target rather than becoming the
@@ -630,6 +642,10 @@ export function App() {
     master: Document | null;
     slides: SlideInfo[];
   } | null>(null);
+  // A rejected double-click names its reason here; a started text edit or a
+  // container entry never sets it. The hint is advisory, so it takes no focus
+  // and no canvas space.
+  const [editHint, setEditHint] = useState<TextEditBlock | null>(null);
 
   const showPinNotice = useCallback((pinned: boolean): void => {
     if (!shouldNotifyPin(pinned, pinNoticeShownRef.current)) return;
@@ -656,6 +672,17 @@ export function App() {
       setPinNotice(false);
     }
   }, [master, pinNotice, slides]);
+
+  // The hint is informational only: it leaves on its own timer so a rejected
+  // gesture never leaves a panel behind.
+  useEffect(() => {
+    if (editHint === null) return;
+    const timer = window.setTimeout(
+      () => setEditHint(null),
+      EDIT_HINT_TIMEOUT_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [editHint]);
 
   // A container path only means something within one slide of one deck:
   // navigating or reloading starts again from the slide level. Deleting the
@@ -3112,31 +3139,30 @@ export function App() {
         return;
       }
       // Text leaves stay first: when the double-click can start an in-place
-      // text edit it consumes the gesture and never enters a container.
-      const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
-      if (editable && isLeafTextElement(editable)) {
-        // Empty semantic elements stay inert; div shapes and table cells
-        // accept a first text entry, so these rules are not reordered.
-        if (
-          editable.textContent?.trim() ||
-          editable.tagName === 'DIV' ||
-          editable.tagName === 'TD' ||
-          editable.tagName === 'TH'
-        ) {
-          event.preventDefault();
-          if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
-            textBaselineRef.current.set(editable, editable.innerHTML);
-          }
-          editable.setAttribute('contenteditable', 'true');
-          editable.setAttribute(EDITING_ATTRIBUTE, 'true');
-          editable.focus();
-          beginTextEditing(editable);
-          return;
+      // text edit it consumes the gesture and never enters a container. The
+      // reason is kept for the case where no path applies at all.
+      const block = textEditBlockFor(target);
+      if (block === null) {
+        // The block check resolved a text tag for this same target, so the
+        // selector result here cannot be null.
+        const editable = target.closest(
+          TEXT_EDITABLE_SELECTOR
+        ) as HTMLElement;
+        event.preventDefault();
+        if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
+          textBaselineRef.current.set(editable, editable.innerHTML);
         }
+        editable.setAttribute('contenteditable', 'true');
+        editable.setAttribute(EDITING_ATTRIBUTE, 'true');
+        editable.focus();
+        beginTextEditing(editable);
+        return;
       }
       // No text edit started, so a double-click on a container inside the
       // active context drills in. The path is read from the ref because this
-      // listener was registered on load and closes over that render.
+      // listener was registered on load and closes over that render. A
+      // successful entry is a real action, so only a rejected gesture — where
+      // neither path applies — names its reason.
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
       const frameSlide = slideInfo
@@ -3144,7 +3170,10 @@ export function App() {
         : null;
       if (!frameSlide) return;
       const next = contextEntry(frameSlide, target, containerPathRef.current);
-      if (!next) return;
+      if (!next) {
+        setEditHint(block);
+        return;
+      }
       event.preventDefault();
       setContainerPath(next);
       actionsRef.current.clearSelection();
@@ -3984,6 +4013,33 @@ export function App() {
                     aria-label={t('editor.notice.dismiss')}
                     className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
                     onClick={() => setPinNotice(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+            {/* The hint overlays the canvas like the pin notice, so showing a
+                reason never reflows the slide. It sits at the bottom centre so
+                both notices can be visible at once. */}
+            {editHint && (
+              <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  data-testid="edit-hint"
+                  className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
+                >
+                  <span className="min-w-0 flex-1">
+                    {t(EDIT_HINT_KEYS[editHint])}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="edit-hint-dismiss"
+                    aria-label={t('editor.notice.dismiss')}
+                    className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
+                    onClick={() => setEditHint(null)}
                   >
                     ×
                   </button>

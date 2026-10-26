@@ -309,6 +309,12 @@ export const en = {
     'This element was positioned by its container; it is now absolutely positioned.',
   'editor.notice.undo': 'Undo',
   'editor.notice.dismiss': 'Dismiss',
+  'editor.hint.not-text':
+    'Only text elements edit inline. Double-click a container background to enter it.',
+  'editor.hint.has-children':
+    'This element has children. Enter the container, then edit its text.',
+  'editor.hint.empty':
+    'This element has no text yet. Add text through the Text tools first.',
   'standalone.title': 'Standalone editor',
   'standalone.description': 'No local host is connected. Open or drop an HTML deck to edit it. Browsers with File System Access write back to the original file; others can download the exported HTML.',
   'standalone.open': 'Open HTML…',
