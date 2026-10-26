@@ -41,13 +41,14 @@ export interface RegisteredSessionCheck {
  * A registry entry is only trusted while the recorded process is alive, its
  * authenticated health endpoint answers within a bounded time, and it can
  * still serve the editor shell. Definitive failures (dead process, refused
- * connection, a non-5xx health or shell response such as 401 or 404,
- * malformed payload, a different deck path, or a shell that is no longer the
- * built editor) remove the entry so later calls do not retry a dead host. A
- * timeout or 5xx response means the host may be busy rather than stale: the
- * entry is kept and the scan continues, because another spelling of the same
- * deck may name a healthy host. Only after the scan finds no healthy entry
- * does the caller fall back to direct mode for this call.
+ * connection, a non-5xx health response such as 401 or 404, a malformed
+ * payload, a different deck path, or a shell response that is not the built
+ * editor: any non-200 status, a wrong content type, or a missing marker)
+ * remove the entry so later calls do not retry a dead host. A health 5xx or a
+ * timeout means the host may be busy rather than stale: the entry is kept and
+ * the scan continues, because another spelling of the same deck may name a
+ * healthy host. Only after the scan finds no healthy entry does the caller
+ * fall back to direct mode for this call.
  *
  * Every removal is fenced by the exact bytes that were checked. A listed
  * entry can be stale by the time the health check finishes, so each candidate
@@ -187,6 +188,10 @@ function sessionEntryFile(resolvedPath: string): string {
  * hands to the user. A build that was moved or replaced after the host
  * started answers health but no longer serves the shell, and reusing it would
  * send the user to a dead editor.
+ *
+ * Health keeps 5xx as `unknown` because that probe can sit behind the save
+ * lock. The shell route only reads the built editor, so every shell failure
+ * except a timeout is `unhealthy`.
  */
 export async function probeSessionHealth(
   entry: SessionEntry
@@ -239,8 +244,10 @@ export async function probeSessionHealth(
     );
     if (shell.status !== 200) {
       await shell.body?.cancel().catch(() => undefined);
-      // A 5xx can mean a busy host, so keep its entry.
-      return shell.status >= 500 ? 'unknown' : 'unhealthy';
+      // Health already proved the process is alive and this route only reads
+      // the built editor, so any shell status is definitive: a 5xx is a broken
+      // build (the zombie host's missing index answers 500), not a busy host.
+      return 'unhealthy';
     }
     if (!(shell.headers.get('content-type') ?? '').includes('text/html')) {
       await shell.body?.cancel().catch(() => undefined);
@@ -249,8 +256,8 @@ export async function probeSessionHealth(
     const body = await shell.text();
     return body.includes('id="root"') ? 'healthy' : 'unhealthy';
   } catch (error) {
-    // Timeouts say nothing about whether the host is alive: it may simply be
-    // busy behind its save lock, so keep the entry for later calls.
+    // Timeouts say nothing definitive: a health probe can be busy behind the
+    // save lock and a slow shell may still be fine, so keep the entry.
     return isAbortError(error) ? 'unknown' : 'unhealthy';
   }
 }

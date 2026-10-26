@@ -123,14 +123,17 @@ describe('probeSessionHealth', () => {
     }
   });
 
-  it('stays unknown when the shell responds with a server error', async () => {
+  it('is unhealthy when the shell responds with a server error', async () => {
+    // Health already proved the process is alive, and the document route only
+    // reads the editor build. A 5xx there is a broken build, such as the
+    // missing-index zombie host, so the entry must be evicted.
     const host = await fakeHost((path) =>
       path.startsWith('/api/health')
         ? { status: 200, type: 'application/json', body: healthOk }
         : { status: 503, type: 'text/plain', body: 'busy' }
     );
     try {
-      expect(await probeSessionHealth(host.entry)).toBe('unknown');
+      expect(await probeSessionHealth(host.entry)).toBe('unhealthy');
     } finally {
       await host.close();
     }
