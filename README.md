@@ -189,7 +189,11 @@ or background on the slide, to drill into that level. The breadcrumb names the
 context, Enter enters a selected container, the inspector lists the container's
 direct children, and Escape leaves one level (a breadcrumb segment jumps
 straight to it). Inside a container, a click selects its direct children and a
-double-click on a text leaf still starts inline text editing. A single entered
+double-click on a text leaf still starts inline text editing. A double-click
+that cannot edit text never fails silently: a dismissible hint names the reason
+— the element is not text, has children, is empty, or sits in a locked, hidden,
+or grouped object. Structural commands stay top-level, and the inspector
+repeats that limit for a nested selection. A single entered
 object can be moved, resized, rotated, and nudged; the first position or size
 edit pins a flow object to absolute positioning, and a one-time notice explains
 that change with Undo. Rotating a flow object also pins it to absolute,

@@ -33,6 +33,9 @@ const ENTER_COVER = /Enter cover|進入 cover|进入 cover/;
 // while the unlock button (a different label) stays visible.
 const ENTER_ANY = /Enter |進入 |进入 /;
 const SLIDE_SEGMENT = /^(Slide|投影片|幻灯片)$/;
+// The suite runs under the zh-TW pin, so the hint copy is asserted verbatim
+// rather than through a broad cross-locale substring.
+const HINT_LOCKED = '這個物件已鎖定。請先解鎖，再編輯其內容。';
 
 interface Harness {
   directory: string;
@@ -124,6 +127,23 @@ async function boxOf(
   return box;
 }
 
+// :focus-visible is the platform answer to "was this reached by keyboard", so
+// the breadcrumb proves both focus and a painted outline rather than a class.
+async function expectKeyboardFocusRing(locator: Locator): Promise<void> {
+  await expect(locator).toBeFocused();
+  const ring = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      focusVisible: element.matches(':focus-visible'),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: Number.parseFloat(style.outlineWidth)
+    };
+  });
+  expect(ring.focusVisible).toBe(true);
+  expect(ring.outlineStyle).not.toBe('none');
+  expect(ring.outlineWidth).toBeGreaterThanOrEqual(2);
+}
+
 async function dragFrom(
   page: Page,
   start: { x: number; y: number },
@@ -164,9 +184,11 @@ test('enters nested layout containers and pops one level per Escape', { tag: '@f
 
     await page.getByRole('button', { name: ENTER_COVER }).click();
     await expect(context).toContainText('.cover');
-    await expect(rows).toHaveCount(2);
+    await expect(rows).toHaveCount(3);
     await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0.0');
     await expect(rows.nth(1)).toHaveAttribute('data-object-path', '2.0.1');
+    await expect(rows.nth(2)).toHaveAttribute('data-object-path', '2.0.2');
+    await expect(rows.nth(2)).toContainText('Start');
 
     await page.keyboard.press('Escape');
     await expect(context).toContainText('.pad');
@@ -175,7 +197,7 @@ test('enters nested layout containers and pops one level per Escape', { tag: '@f
     // The rows are .pad's direct children again, not the level just popped.
     await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0');
     await expect(rows.nth(1)).toHaveAttribute('data-object-path', '2.1');
-    await expect(rows.nth(0)).toContainText('Wrapped title Body copy');
+    await expect(rows.nth(0)).toContainText('Wrapped title Body copy Start');
     await expect(rows.nth(1)).toContainText('Footer');
 
     await page.keyboard.press('Escape');
@@ -230,8 +252,8 @@ test("enters from a container's own padding and leaves on an outside click", { t
     // (100, 100) design px is inside .pad's 48px padding, not on a child.
     await slide.dblclick({ position: at(100, 100) });
     await expect(context).toContainText('.pad');
-    // .cover is also enterable and holds two rows, so the context and the
-    // slide-rooted paths are what distinguish the two levels.
+    // .cover is also enterable, and the pad level holds two rows, so the
+    // context and the slide-rooted paths distinguish the two levels.
     await expect(context).not.toContainText('.cover');
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0');
@@ -288,11 +310,98 @@ test('jumps to an ancestor from the breadcrumb', { tag: '@feature:drill-in-selec
     await page.getByRole('button', { name: ENTER_PAD }).click();
     await page.getByRole('button', { name: ENTER_COVER }).click();
     await expect(context).toContainText('.cover');
-    await expect(rows).toHaveCount(2);
+    await expect(rows).toHaveCount(3);
 
     await context.getByRole('button', { name: SLIDE_SEGMENT }).click();
     await expect(context).toBeHidden();
     await expect(rows).toHaveCount(3);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('names a locked wrapper instead of silently ignoring the double-click', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+
+    const lockedChild = editor.frame
+      .locator('[data-slide-id="s2"] .locked p')
+      .first();
+    const hint = page.getByTestId('edit-hint');
+    await lockedChild.dblclick();
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText(HINT_LOCKED);
+    // The hint accompanies a refused gesture, not a text session that began
+    // inside the locked subtree.
+    await expect(lockedChild).not.toHaveAttribute('contenteditable', 'true');
+
+    await page.getByTestId('edit-hint-dismiss').click();
+    await expect(hint).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('entering a container clears a visible hint', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    const hint = page.getByTestId('edit-hint');
+    await editor.frame.locator('.pad .cover button.cta').dblclick();
+    await expect(hint).toBeVisible();
+
+    await enterPad(page);
+    await expect(hint).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('reaches breadcrumb segments by keyboard with a visible focus ring', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const context = page.getByTestId('edit-context');
+    const slideSegment = context.getByRole('button', { name: SLIDE_SEGMENT });
+    const padSegment = context.getByRole('button', { name: /^前往 \.pad$/ });
+
+    // Focus the control immediately before the breadcrumb and let Tab, not a
+    // script focus call, land on the first segment.
+    await page.evaluate(() => {
+      const nav = document.querySelector('[data-testid="edit-context"]');
+      const first = nav?.querySelector('button');
+      if (!nav || !first) throw new Error('Breadcrumb is not rendered.');
+      const focusables = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => element.getClientRects().length > 0);
+      const index = focusables.indexOf(first);
+      const previous = index > 0 ? focusables[index - 1] : undefined;
+      if (!previous) {
+        throw new Error('No focusable control precedes the breadcrumb.');
+      }
+      previous.focus();
+    });
+    await page.keyboard.press('Tab');
+    await expectKeyboardFocusRing(slideSegment);
+
+    await page.keyboard.press('Tab');
+    await expectKeyboardFocusRing(padSegment);
+
+    // Keyboard activation works from the breadcrumb, not only its focus.
+    await page.keyboard.press('Shift+Tab');
+    await expectKeyboardFocusRing(slideSegment);
+    await page.keyboard.press('Enter');
+    await expect(context).toBeHidden();
+    await expect(page.getByTestId('object-row')).toHaveCount(3);
   } finally {
     await close(editor);
   }
