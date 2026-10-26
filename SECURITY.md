@@ -75,17 +75,25 @@ back to an operating-system-assigned port; an explicit `--port` (including
 `/api/health` endpoint must accept the deck, and the editor shell at
 `/d/<deck-name>` must be the built editor (an HTML response containing its root
 element). Health alone is not trusted, because a host can own the deck while its
-editor build is missing or broken. A live PID with a dead port is treated as
-stale and is not reused.
+editor build is missing or broken. A live PID with a refused port is not reused
+either; that entry is pruned.
 
-A host that answers health for the deck but fails the shell probe is a
-`stale-build`. Only that verified process may be signalled: `open` retries the
-probe once; if the verdict persists it stops the stale host and starts a
-replacement on the recorded port. The stop rotates the token, and the
-replacement reuses the rotated credential, so the next printed URL is the one a
-browser can actually reach. `stop` retires a stale-build host directly. A health
-timeout or 5xx never proves ownership, so `open` refuses to start a second host
-while the entry is registered; retry or stop it explicitly.
+The verdicts split on which probe failed:
+
+- `stale-build`: health accepted the deck, but the shell answered a non-200
+  status (including 5xx), returned a non-HTML 200, or omitted `id="root"`. The
+  process is reachable and owns the recorded port. `open` retries the probe
+  once; if the verdict persists it stops that exact host and starts a
+  replacement on the recorded port. The stop rotates the token, and the
+  replacement reuses the rotated credential, so the next printed URL is new and
+  is the one a browser can reach. `stop` retires a stale-build host directly.
+- `unknown`: health timed out or returned 5xx, or the shell probe timed out or
+  was aborted. Ownership is unproven, so the entry is kept and the pid is never
+  signalled; `open` refuses to start a second host until a later probe passes
+  or the user runs `stop`.
+- `unhealthy`: health answered 400/401/403/404/405, returned a malformed
+  payload or a different `filePath`, or the connection was refused. Ownership
+  is unproven, so the entry is pruned and the pid is never signalled.
 
 ## Editor isolation
 

@@ -180,10 +180,12 @@ authenticated `/api/health` endpoint accepts the deck and the editor shell is th
 built editor. A health-only host is not success; the CLI replaces a `stale-build`
 host (stopping it and starting a fresh one on the recorded port) before the tool
 returns a URL. The tool fails with `editor-unavailable` when the built CLI is
-missing, `editor-failed` when the spawned CLI exits before publishing a healthy
-session (the message names the child's exit code or signal), and
-`editor-timeout` when no healthy session appears within 5 seconds; on timeout it
-terminates the spawned host. `export_deck` requires a system Chrome, Edge, or
+missing, `editor-failed` when the spawned CLI exits with a non-zero code or is
+terminated by a signal before publishing a healthy session (the message names
+the exit code or signal), and `editor-timeout` when no healthy session appears
+within 5 seconds; on timeout it terminates the spawned host. A spawned CLI that
+exits with code 0 before publishing a session is not `editor-failed`; it
+surfaces as `editor-timeout`. `export_deck` requires a system Chrome, Edge, or
 Chromium (or `HTMLPPT_CHROMIUM`) for PDF/PNG and fails with
 `renderer-unavailable` when none is found. An invalid deck fails with
 `invalid-deck` and includes `errors`.
@@ -245,7 +247,7 @@ Domain errors return `isError: true` with a JSON payload:
 | `renderer-unavailable` | No Chrome, Edge, or Chromium was found for PDF/PNG. |
 | `export-failed` | Rendering or the host export path failed. |
 | `editor-unavailable` | The built CLI was not found; run `npm run build`. |
-| `editor-failed` | The spawned CLI exited before publishing a healthy session; the message names the child's exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
+| `editor-failed` | The spawned CLI exited with a non-zero code or was terminated by a signal before publishing a healthy session; the message names the exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
 | `editor-timeout` | No healthy editor session appeared within 5 seconds. |
 | `internal` | Unexpected failure; read `message`. |
 

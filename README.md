@@ -52,7 +52,8 @@ needs one `htmlppt open` afterwards. The recorded port is kept; the next `open`
 starts the host with the rotated token, and a request carrying the stale cookie
 gets a 401 page that names the deck and the recovery command. An editor host
 that still answers health but no longer serves the editor shell (a stale build)
-is stopped and replaced by the next `open` instead of handing out a dead URL.
+is stopped and replaced by the next `open` instead of handing out a dead URL;
+that replacement rotates the token too, so use the newly printed URL.
 
 Inside the editor, type a path into the path field and press Enter to switch
 this host to another HTML deck. Relative paths resolve against the host's

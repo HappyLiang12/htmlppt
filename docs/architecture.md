@@ -94,15 +94,18 @@ proves it can serve what the printed URL hands to the browser.
 | Verdict | Meaning | Caller behavior |
 | --- | --- | --- |
 | `healthy` | Both probes passed. | Reuse the entry and print its URL. |
-| `stale-build` | Health accepted the deck, but the shell is missing, non-HTML, or not the editor. The process is reachable and owns the recorded port. | If the verdict persists after one retry, `open` stops that exact entry and starts a replacement on the recorded port with the rotated token. `stop` retires it directly. |
-| `unhealthy` | Health definitively rejected the deck (a non-5xx status, malformed payload, or different file path) or the connection is refused. | Prune the entry; never signal the pid. |
-| `unknown` | Health timed out or returned 5xx, or the transport failed. | Keep the entry and refuse to start a second host for the deck; retry or stop it explicitly. |
+| `stale-build` | Health accepted the deck, but the shell answered a non-200 status (including 5xx), returned a non-HTML 200, or lacked `id="root"`. The process is reachable and owns the recorded port. | If the verdict persists after one retry, `open` stops that exact entry and starts a replacement on the recorded port with the rotated token. `stop` retires it directly. |
+| `unhealthy` | Health definitively rejected the deck (400, 401, 403, 404, 405, a malformed payload, or a different `filePath`) or the connection is refused. | Prune the entry; never signal the pid. |
+| `unknown` | Health timed out or returned 5xx, or the shell probe timed out or was aborted. | Keep the entry and refuse to start a second host for the deck until a later probe passes; retry or stop it explicitly. |
 
 The replacement path matters because a stale process still owns its recorded
 port: starting a second host without stopping it would fail to bind or orphan
 the old process, and printing the old URL would send the browser to a shell that
 is not the editor. Only a health-verified `stale-build` entry proves that the
-pid belongs to this deck, so only that verdict may be signalled.
+pid belongs to this deck, so only that verdict may be signalled. A shell timeout
+proves nothing about the build, so it stays `unknown` and blocks replacement
+until a retry passes; only a non-200 shell answer, a non-HTML 200, or a missing
+root element is a confirmed `stale-build`.
 
 ## Revision and conflict model
 

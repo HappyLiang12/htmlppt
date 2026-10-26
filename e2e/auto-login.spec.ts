@@ -93,14 +93,16 @@ async function expectEditor(page: Page): Promise<void> {
 async function expectRecoveryPage(
   response: Response,
   body: string,
-  token: string
+  ...tokens: string[]
 ): Promise<void> {
   expect(response.status()).toBe(401);
   expect(response.headers()['content-type']).toContain('text/html');
   expect(body).toContain(DECK_FILE);
   expect(body).toContain('htmlppt open');
-  // The page must never echo the capability secret it is asking for.
-  expect(body).not.toContain(token);
+  // The page must never echo a capability secret it is asking for.
+  for (const token of tokens) {
+    expect(body).not.toContain(token);
+  }
 }
 
 test(
@@ -174,6 +176,8 @@ test(
       const bookmarked = await restored.newPage();
       const loaded = await navigate(bookmarked, `${origin}${BOOKMARK_PATH}`);
       expect(loaded.status()).toBe(200);
+      // The bookmark is the bare deck path: the token stays out of the URL.
+      expect(new URL(bookmarked.url()).searchParams.has('token')).toBe(false);
       await expectEditor(bookmarked);
       await bookmarked.close();
 
@@ -207,7 +211,9 @@ test(
 
       const stale = await restored.newPage();
       const denied = await navigate(stale, `${origin}${BOOKMARK_PATH}`);
-      await expectRecoveryPage(denied, await denied.text(), rotatedToken);
+      const deniedBody = await denied.text();
+      // Neither the pre-stop token nor the rotated one may appear on the page.
+      await expectRecoveryPage(denied, deniedBody, token, rotatedToken);
     } finally {
       for (const context of contexts) {
         await context.close().catch(() => undefined);
@@ -226,12 +232,16 @@ test(
   async ({ browser }) => {
     test.setTimeout(120_000);
     const directory = await mkdtemp(join(tmpdir(), 'htmlppt-auto-login-401-'));
+    const home = join(directory, 'home');
     const deckPath = join(directory, DECK_FILE);
     let host: StartedHost | undefined;
     let context: BrowserContext | undefined;
     try {
       await writeFile(deckPath, DECK_HTML, 'utf8');
-      host = await startCliHost(cliPath, directory, deckPath);
+      host = await startCliHost(cliPath, directory, deckPath, { home });
+      // The host must register under this test's home, not an inherited
+      // HTMLPPT_HOME that would write into a developer's real home.
+      expect(await registeredPid(home, deckPath)).toBeGreaterThan(0);
       const origin = new URL(host.url).origin;
       const token = new URL(host.url).searchParams.get('token');
       if (!token) throw new Error(`Host URL has no token: ${host.url}`);

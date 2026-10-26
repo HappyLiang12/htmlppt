@@ -303,8 +303,11 @@ Starts a detached local editor host for an existing deck and returns
 `http://127.0.0.1:53211/?token=...`. `port` defaults to the port recorded for
 the deck, or an operating-system-assigned port when none is recorded; an
 explicit `port` wins. The token is recorded per deck and reused by later opens
-until `htmlppt stop` rotates it, so the tokenized URL keeps working across a
-host restart. `open` (default false) controls whether a browser is launched.
+until `htmlppt stop` rotates it; replacing a stale-build host rotates it too,
+because `open` stops the broken host first, so a URL from before the replacement
+needs the newly printed one. Apart from that replacement, the tokenized URL
+keeps working across a host restart. `open` (default false) controls whether a
+browser is launched.
 The host binds to 127.0.0.1 and permits only the opened deck, its export, and
 editor assets.
 
@@ -313,10 +316,12 @@ Reuses an existing session only when two probes pass: the authenticated
 `/d/<deck-name>` is the built editor. Health alone is not success; a
 `stale-build` host is stopped and replaced on the recorded port by the next
 open. Fails with `editor-unavailable` when the CLI build is missing,
-`editor-failed` when the spawned CLI exits before publishing a healthy session
-(the message names the child's exit code or signal), and `editor-timeout` when
-no healthy session appears within 5 seconds. On timeout the spawned host process
-is terminated instead of being left running.
+`editor-failed` when the spawned CLI exits with a non-zero code or is terminated
+by a signal before publishing a healthy session (the message names the exit code
+or signal), and `editor-timeout` when no healthy session appears within 5
+seconds. A spawned CLI that exits with code 0 before publishing a session is not
+`editor-failed`; it surfaces as `editor-timeout`. On timeout the spawned host
+process is terminated instead of being left running.
 
 ### `export_deck`
 
@@ -387,6 +392,6 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `invalid-background` | Background must set exactly one non-empty color/gradient/image. |
 | `invalid-transition` | Transition must be none, fade, or slide. |
 | `editor-unavailable` | The built CLI was not found. Run `npm run build`. |
-| `editor-failed` | The spawned CLI exited before publishing a healthy session; the message names its exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
+| `editor-failed` | The spawned CLI exited with a non-zero code or was terminated by a signal before publishing a healthy session; the message names the exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
 | `editor-timeout` | No healthy editor session appeared within 5 seconds; the spawned host was terminated. Check the editor build and try `htmlppt open`. |
 | `internal` | Unexpected failure; the message carries the detail. |

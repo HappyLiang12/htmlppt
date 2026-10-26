@@ -93,16 +93,20 @@ replacing the existing deck.
 
 `open_editor` starts the built CLI. If it reports `editor-unavailable`, run
 `npm run build` so `packages/editor/dist` and the CLI dist exist. If it reports
-`editor-failed`, the spawned CLI exited before publishing a healthy session and
-the message carries its exit code: run `htmlppt open <file> --no-browser`
-manually and read its stderr. If it reports `editor-timeout`, the CLI did not
-publish a healthy session within 5 seconds: run the same command manually.
+`editor-failed`, the spawned CLI exited with a non-zero code or was terminated
+by a signal before publishing a healthy session, and the message names that
+code or signal: run `htmlppt open <file> --no-browser` manually and read its
+stderr. If it reports `editor-timeout`, the CLI did not publish a healthy
+session within 5 seconds (an exit with code 0 before a session surfaces here,
+not as `editor-failed`): run the same command manually.
 
-A host that is alive but times out or answers health with a 5xx is `unknown`
-and blocks a second host for that deck; retry, or stop it explicitly. A host
-whose health passes but whose editor shell is broken (`stale-build`) is not a
-blocker: the next `open` stops it and replaces it automatically. Do not stop a
-broken editor by hand unless the automatic replacement itself fails.
+A host that is alive but times out or answers health with a 5xx is `unknown`,
+and a shell probe that times out leaves the same verdict; these hosts block a
+second host for that deck, so retry, or stop one explicitly. A host whose health
+passes but whose editor shell answers a non-200 status, returns non-HTML, or
+omits `id="root"` (`stale-build`) is not a blocker: the next `open` stops it and
+replaces it automatically, which rotates the token. Do not stop a broken editor
+by hand unless the automatic replacement itself fails.
 
 ### Unexpected host behavior
 
@@ -143,10 +147,14 @@ CLI failures print a message to stderr and exit 1.
 | `Unsupported export format "<format>". Use --format html, pdf, or png.` | Fix `--format`. |
 | `Invalid --port. Use an integer between 0 and 65535.` | Fix the port number. |
 
-`open` reuses a live editor for the same deck and prints its existing
-`HTMLPPT_URL` instead of starting a second host. The session registry lives
-under `~/.htmlppt/sessions`; set `HTMLPPT_HOME` to isolate it for tests or
-automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
+`open` reuses an editor for the same deck and prints its `HTMLPPT_URL` instead
+of starting a second host, but only when the authenticated health endpoint
+accepts the deck and `/d/<deck-name>` serves the built editor shell. A
+`stale-build` host (health OK, editor broken) is stopped and replaced on the
+recorded port; because that stop rotates the token, the printed URL carries a
+new token. The session registry lives under `~/.htmlppt/sessions`; set
+`HTMLPPT_HOME` to isolate it for tests or automation. `HTMLPPT_EDITOR_DIR`
+overrides the editor build location.
 
 ## Editor and host behavior
 

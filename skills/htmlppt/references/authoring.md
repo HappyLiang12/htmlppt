@@ -148,8 +148,10 @@ explicitly asks for that.
 
 - Use `open_editor` (MCP) or `htmlppt open <file>` (CLI) for human review. The
   URL contains the deck's capability token; treat it as a secret. The token is
-  recorded per deck and reused by later opens until `htmlppt stop` rotates it,
-  and the first visit exchanges it for a 30-day session cookie.
+  recorded per deck and reused by later opens until `htmlppt stop` rotates it;
+  replacing a stale-build host rotates it too, because `open` stops the broken
+  host first, so a URL bookmarked before the replacement needs the newly printed
+  one. The first visit exchanges the token for a 30-day session cookie.
 - Re-read after a person edits in the editor, because their writes create new
   revisions.
 - Run `validate_deck` or `htmlppt validate` before exporting.
