@@ -5,8 +5,8 @@ export type AppearanceKind = 'image' | 'shape';
 
 /**
  * Images keep crop/alt controls, HTML elements and the outermost SVG map to
- * shape styles, and SVG descendants or elements without an inline style object
- * get no appearance panel.
+ * shape styles, and every other namespace — SVG descendants included — or an
+ * element without an inline style object gets no appearance panel.
  */
 export function appearanceKindFor(element: Element): AppearanceKind | null {
   const style = (element as Element & { style?: unknown }).style;
@@ -20,5 +20,7 @@ export function appearanceKindFor(element: Element): AppearanceKind | null {
   if (element.namespaceURI === HTML_NAMESPACE) {
     return tag === 'img' ? 'image' : 'shape';
   }
-  return 'shape';
+  // Chromium gives MathML and other foreign elements a `.style` object, so the
+  // no-style guard above is not enough; core's shape mapping is HTML-only.
+  return null;
 }

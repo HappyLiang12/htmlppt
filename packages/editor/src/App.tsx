@@ -383,6 +383,22 @@ function blockedTopLevelAncestor(
     : null;
 }
 
+/**
+ * A locked, hidden, or group top-level target owns its subtree, so every edit
+ * that targets a path inside it must be rejected. Path-based callers that
+ * capture their path across an await (image uploads) cannot rely on the
+ * selection guards, so the check also runs at apply time.
+ */
+function topLevelBlocksEdit(
+  slide: Element,
+  path: readonly number[]
+): boolean {
+  const top = elementAtPath(slide, [path[0] ?? -1]);
+  return (
+    !top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
+  );
+}
+
 function objectActionStateFor(
   slide: SlideInfo | undefined,
   selections: readonly SelectionTarget[],
@@ -1204,6 +1220,7 @@ export function App() {
           master,
           (draft) => {
             const target = findSlide(draft, slideId);
+            if (topLevelBlocksEdit(target.element, path)) return false;
             const element = elementAtPath(target.element, [...path]);
             if (!element) return false;
             mutate(element);
@@ -1231,8 +1248,7 @@ export function App() {
       ) {
         return false;
       }
-      const top = elementAtPath(slideInfo.element, [selection.path[0] ?? -1]);
-      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+      if (topLevelBlocksEdit(slideInfo.element, selection.path)) {
         return false;
       }
       return applyPathEdit(slideInfo.id, selection.path, mutate);
@@ -3989,7 +4005,10 @@ export function App() {
             style={styleState}
             chart={chartState}
             styleDisabled={
-              inspectorObjectActions.locked || inspectorObjectActions.hidden
+              blockedByAncestor ||
+              inspectorObjectActions.locked ||
+              inspectorObjectActions.hidden ||
+              inspectorObjectActions.group
             }
             objectActions={inspectorObjectActions}
             onSelectObject={handleSelectObject}

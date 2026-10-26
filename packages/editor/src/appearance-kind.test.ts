@@ -50,4 +50,18 @@ describe('appearanceKindFor', () => {
     } as unknown as Element;
     expect(appearanceKindFor(bare)).toBeNull();
   });
+
+  it('returns no kind for a foreign namespace that has a style object', () => {
+    // Chromium gives MathML elements a .style object, so the old no-style guard
+    // did not stop them; jsdom does not, so the test supplies one explicitly.
+    const math = document.createElementNS(
+      'http://www.w3.org/1998/Math/MathML',
+      'math'
+    );
+    Object.defineProperty(math, 'style', { configurable: true, value: {} });
+
+    expect(math.namespaceURI).toBe('http://www.w3.org/1998/Math/MathML');
+    expect((math as Element & { style?: unknown }).style).toBeDefined();
+    expect(appearanceKindFor(math)).toBeNull();
+  });
 });

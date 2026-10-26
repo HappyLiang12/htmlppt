@@ -35,7 +35,7 @@
 - Create: `packages/editor/src/appearance-kind.test.ts`
 
 **Interfaces:**
-- Produces: `type AppearanceKind = 'image' | 'shape'`; `appearanceKindFor(element: Element): AppearanceKind`.
+- Produces: `type AppearanceKind = 'image' | 'shape'`; `appearanceKindFor(element: Element): AppearanceKind | null` (`null` means no appearance panel).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -111,9 +111,11 @@ git commit -m "feat(editor): classify appearance for any element"
     }
     const element = elementAtPath(activeSlide.element, selection.path);
     if (!element) return null;
+    const kind = appearanceKindFor(element);
+    if (!kind) return null;
     const tag = element.tagName.toLowerCase();
     return {
-      kind: appearanceKindFor(element),
+      kind,
       svg: tag === 'svg',
       appearance: readShapeAppearance(element),
       text:
