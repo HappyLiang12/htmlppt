@@ -35,3 +35,17 @@ export function shouldNotifyPin(
 ): boolean {
   return pinned && !alreadyShown;
 }
+
+/**
+ * The notice's Undo delegates to the global undo. A pending edit is settled
+ * into its own history entry (and undone) before that undo runs, and an active
+ * text-editing session is the same hazard, so the notice must step aside
+ * rather than revert the wrong change. Toolbar and Ctrl+Z undo are untouched.
+ */
+export function shouldDismissPinNotice(
+  noticeVisible: boolean,
+  pendingEdit: boolean,
+  textEditing: boolean
+): boolean {
+  return noticeVisible && (pendingEdit || textEditing);
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isPositioned,
+  shouldDismissPinNotice,
   shouldNotifyPin,
   willAnyPinToAbsolute,
   willPinToAbsolute
@@ -79,5 +80,23 @@ describe('shouldNotifyPin', () => {
     expect(shouldNotifyPin(true, false)).toBe(true);
     expect(shouldNotifyPin(true, true)).toBe(false);
     expect(shouldNotifyPin(false, false)).toBe(false);
+  });
+});
+
+describe('shouldDismissPinNotice', () => {
+  it('dismisses a visible notice when a pending edit exists', () => {
+    expect(shouldDismissPinNotice(true, true, false)).toBe(true);
+  });
+
+  it('dismisses a visible notice when a text session starts', () => {
+    expect(shouldDismissPinNotice(true, false, true)).toBe(true);
+  });
+
+  it('keeps a visible notice while neither hazard applies', () => {
+    expect(shouldDismissPinNotice(true, false, false)).toBe(false);
+  });
+
+  it('reports no dismissal when the notice is hidden', () => {
+    expect(shouldDismissPinNotice(false, true, true)).toBe(false);
   });
 });

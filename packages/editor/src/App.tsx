@@ -151,6 +151,7 @@ import {
   type TransformTarget
 } from './transform';
 import {
+  shouldDismissPinNotice,
   shouldNotifyPin,
   willAnyPinToAbsolute,
   willPinToAbsolute
@@ -2392,6 +2393,20 @@ export function App() {
     setTextToolbar(null);
   }, []);
 
+  // The notice's Undo delegates to the global undo. A pending edit is settled
+  // into its own history entry and then undone by that undo, and an active
+  // text session is the same hazard, so the notice steps aside instead of
+  // reverting the wrong change. Toolbar and Ctrl+Z undo keep their behaviour.
+  useEffect(() => {
+    if (
+      !shouldDismissPinNotice(pinNotice, state.pending, textToolbar !== null)
+    ) {
+      return;
+    }
+    pinNoticeContextRef.current = null;
+    setPinNotice(false);
+  }, [pinNotice, state.pending, textToolbar]);
+
   const finishTextEditing = useCallback(
     (editable: HTMLElement) => {
       if (
@@ -3921,13 +3936,25 @@ export function App() {
             ) : (
               <p className="text-sm text-muted">{t('editor.noSlides')}</p>
             )}
+            {/* The live region stays mounted so its first text change is
+                announced; mounting the region and its text together is missed
+                by some screen readers. */}
+            <span
+              data-testid="pin-notice-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {pinNotice ? t('editor.notice.pinned') : ''}
+            </span>
             {pinNotice && (
-              <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+              <div className="pointer-events-none absolute bottom-4 left-4 z-20">
                 <div
                   data-testid="pin-notice"
                   className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
                 >
-                  <span role="status" className="min-w-0 flex-1">
+                  <span className="min-w-0 flex-1">
                     {t('editor.notice.pinned')}
                   </span>
                   <button
