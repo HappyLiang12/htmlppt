@@ -69,6 +69,11 @@ const TEXT_TAGS = new Set([
  * breaks is a container, an empty semantic element has nothing to edit, and
  * anything else is outside the text tag contract.
  *
+ * A container explains itself only when the user clicked the container
+ * itself. A descendant such as a button, image, link, or SVG inside it is
+ * not text: entering the container the gesture already sits in cannot start
+ * an edit, so naming has-children would point at the wrong gesture.
+ *
  * Tags are compared after upper-casing instead of with instanceof: double-
  * click targets come from the preview iframe's realm, where the parent
  * window's HTMLElement constructor does not describe them.
@@ -84,7 +89,7 @@ export function textEditBlockFor(target: Element): TextEditBlock | null {
       (child) => child.tagName.toUpperCase() === 'BR'
     )
   ) {
-    return 'has-children';
+    return target === candidate ? 'has-children' : 'not-text';
   }
   if (
     !candidate.textContent?.trim() &&

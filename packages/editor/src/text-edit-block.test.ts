@@ -24,6 +24,33 @@ describe('textEditBlockFor', () => {
     expect(textEditBlockFor(pick('<div><span>a</span></div>', 'div'))).toBe('has-children');
   });
 
+  it('names a non-text descendant of a layout div as not text', () => {
+    // The nearest text tag is the container, but the gesture landed on a
+    // button, image, or link inside it. Entering the container the user is
+    // already in cannot start an edit, so has-children would mislead.
+    expect(
+      textEditBlockFor(pick('<div><button>Go</button></div>', 'button'))
+    ).toBe('not-text');
+    expect(textEditBlockFor(pick('<div><img alt=""></div>', 'img'))).toBe(
+      'not-text'
+    );
+    expect(textEditBlockFor(pick('<div><a href="#">Go</a></div>', 'a'))).toBe(
+      'not-text'
+    );
+  });
+
+  it('keeps the container itself on the has-children reason', () => {
+    expect(
+      textEditBlockFor(pick('<div><button>Go</button></div>', 'div'))
+    ).toBe('has-children');
+  });
+
+  it('keeps a strong inside a paragraph editable', () => {
+    expect(
+      textEditBlockFor(pick('<p><strong>Bold</strong></p>', 'strong'))
+    ).toBeNull();
+  });
+
   it('rejects an empty semantic element', () => {
     expect(textEditBlockFor(pick('<h1></h1>', 'h1'))).toBe('empty');
   });

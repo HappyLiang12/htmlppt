@@ -36,6 +36,7 @@ const SLIDE_SEGMENT = /^(Slide|投影片|幻灯片)$/;
 // The suite runs under the zh-TW pin, so the hint copy is asserted verbatim
 // rather than through a broad cross-locale substring.
 const HINT_LOCKED = '這個物件已鎖定。請先解鎖，再編輯其內容。';
+const HINT_NOT_TEXT = '只有文字元素可以就地編輯。連按兩下容器空白處即可進入容器。';
 
 interface Harness {
   directory: string;
@@ -357,6 +358,39 @@ test('entering a container clears a visible hint', { tag: '@feature:edit-context
 
     await enterPad(page);
     await expect(hint).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('names a non-text element and dismisses the hint', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    const context = page.getByTestId('edit-context');
+    await page.getByRole('button', { name: ENTER_PAD }).click();
+    await expect(context).toContainText('.pad');
+    await page.getByRole('button', { name: ENTER_COVER }).click();
+    await expect(context).toContainText('.cover');
+
+    // The button sits inside the active context, so "enter the container"
+    // cannot start an edit; the hint must name the text contract instead of
+    // the has-children reason, which would point at a container already in.
+    const hint = page.getByTestId('edit-hint');
+    await editor.frame.locator('.cover button.cta').dblclick();
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText(HINT_NOT_TEXT);
+    await expect(hint).not.toContainText('含有子元素');
+    // This is a rejected gesture: no text session started on the button.
+    await expect(
+      editor.frame.locator('.cover button.cta[contenteditable="true"]')
+    ).toHaveCount(0);
+
+    await page.getByTestId('edit-hint-dismiss').click();
+    await expect(hint).toHaveCount(0);
+    // Dismissing the hint does not move the context the gesture refused.
+    await expect(context).toContainText('.cover');
   } finally {
     await close(editor);
   }
