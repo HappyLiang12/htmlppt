@@ -3193,7 +3193,16 @@ export function App() {
       if (!frameSlide) return;
       const next = contextEntry(frameSlide, target, containerPathRef.current);
       if (!next) {
-        showEditHint(block);
+        // A double-click on the entered container's own padding asks to
+        // enter the level the user is already at. Neither "enter the
+        // container" nor the text contract names a gesture that could start
+        // an edit here, so the hint stays away. A descendant such as a
+        // button still explains itself.
+        const activeContainer =
+          containerPathRef.current.length > 0
+            ? elementAtPath(frameSlide, containerPathRef.current)
+            : null;
+        if (activeContainer !== target) showEditHint(block);
         return;
       }
       event.preventDefault();
@@ -4083,15 +4092,25 @@ export function App() {
                 </div>
               </div>
             )}
+            {/* The hint's live region stays mounted so the first reason is
+                announced; mounting the region and its text together is missed
+                by some screen readers. The visible panel below carries no
+                live semantics, so the same reason is never announced twice. */}
+            <span
+              data-testid="edit-hint-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {editHint ? t(EDIT_HINT_KEYS[editHint.reason]) : ''}
+            </span>
             {/* The hint overlays the canvas like the pin notice, so showing a
                 reason never reflows the slide. It sits at the bottom centre so
                 both notices can be visible at once. */}
             {editHint && (
               <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
                 <div
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
                   data-testid="edit-hint"
                   className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
                 >

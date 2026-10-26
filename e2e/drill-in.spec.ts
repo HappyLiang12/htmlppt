@@ -333,15 +333,27 @@ test('names a locked wrapper instead of silently ignoring the double-click', { t
       .locator('[data-slide-id="s2"] .locked p')
       .first();
     const hint = page.getByTestId('edit-hint');
+    const status = page.getByTestId('edit-hint-status');
+    // The live region is mounted before the first hint so its text change is
+    // announced; mounting the region and its text together is missed by some
+    // screen readers.
+    await expect(status).toHaveCount(1);
+    await expect(status).toHaveText('');
     await lockedChild.dblclick();
     await expect(hint).toBeVisible();
     await expect(hint).toContainText(HINT_LOCKED);
+    await expect(status).toHaveText(HINT_LOCKED);
+    // The visible panel is presentational; the live region owns the
+    // announcement, so the same reason is never announced twice.
+    await expect(hint).not.toHaveAttribute('role', 'status');
+    await expect(hint).not.toHaveAttribute('aria-live', 'polite');
     // The hint accompanies a refused gesture, not a text session that began
     // inside the locked subtree.
     await expect(lockedChild).not.toHaveAttribute('contenteditable', 'true');
 
     await page.getByTestId('edit-hint-dismiss').click();
     await expect(hint).toHaveCount(0);
+    await expect(status).toHaveText('');
   } finally {
     await close(editor);
   }
@@ -358,6 +370,67 @@ test('entering a container clears a visible hint', { tag: '@feature:edit-context
 
     await enterPad(page);
     await expect(hint).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('a successful text edit clears a visible hint', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    const hint = page.getByTestId('edit-hint');
+    const status = page.getByTestId('edit-hint-status');
+    // A button inside the layout container is a refused gesture: it shows
+    // the not-text hint.
+    await editor.frame.locator('.pad .cover button.cta').dblclick();
+    await expect(hint).toBeVisible();
+
+    // Starting a text edit is the success path for that gesture, so the
+    // panel and its announcement both step aside.
+    const heading = editor.frame.locator('.pad .cover h1');
+    await heading.dblclick();
+    await expect(heading).toHaveAttribute('contenteditable', 'true');
+    await expect(hint).toHaveCount(0);
+    await expect(status).toHaveText('');
+
+    await page.keyboard.press('Escape');
+    await expect(heading).not.toHaveAttribute('contenteditable', 'true');
+  } finally {
+    await close(editor);
+  }
+});
+
+test("does not hint at entering a container that is already active", { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const slide = editor.frame.locator('[data-slide-id]');
+    const box = await slide.boundingBox();
+    expect(box).not.toBeNull();
+    const scale = (box?.width ?? 0) / 1600;
+
+    // (100, 100) design px is .pad's own 48px padding, and .pad is the
+    // entered context. "Enter the container" would name a level the user is
+    // already at, so the rejected gesture stays silent.
+    await slide.dblclick({
+      position: { x: 100 * scale, y: 100 * scale }
+    });
+    // Let React flush the gesture before reading the absence; a same-tick
+    // count would pass even if the panel mounted on the next frame.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+    );
+    await expect(page.getByTestId('edit-hint')).toHaveCount(0);
+    await expect(page.getByTestId('edit-hint-status')).toHaveText('');
+    // The gesture changed nothing about the entered context.
+    await expect(page.getByTestId('edit-context')).toContainText('.pad');
   } finally {
     await close(editor);
   }
