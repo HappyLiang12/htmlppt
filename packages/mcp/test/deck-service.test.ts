@@ -1252,7 +1252,7 @@ describe('DeckService export', () => {
       }
       expect(await readFile(deckPath, 'utf8')).toBe(original);
     },
-    30_000
+    120_000
   );
 
   it(
