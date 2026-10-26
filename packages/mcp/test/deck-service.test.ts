@@ -217,9 +217,9 @@ async function hangingHost(): Promise<HangingHost> {
 }
 
 /**
- * Serves a scripted /api/health response from a real HTTP server. Requests to
- * other routes stay unanswered, so a successful health check can be followed
- * by a request that never completes.
+ * Serves a scripted /api/health response and the editor shell from a real HTTP
+ * server. Other routes stay unanswered, so a successful liveness probe can be
+ * followed by a request that never completes.
  */
 async function stubHost(
   health: (response: ServerResponse) => void
@@ -227,6 +227,12 @@ async function stubHost(
   const server = createHttpServer((request, response) => {
     if (request.url === '/api/health') {
       health(response);
+      return;
+    }
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname === '/' || url.pathname.startsWith('/d/')) {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<div id="root">stub editor</div>');
     }
   });
   await new Promise<void>((resolve, reject) => {

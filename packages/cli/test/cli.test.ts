@@ -1051,10 +1051,10 @@ interface StubbornHost {
 }
 
 /**
- * A live host that answers the token-authenticated health check but ignores
- * SIGTERM, so `stop` reaches its five second timeout with the process still
- * running. Windows cannot ignore SIGTERM (the signal terminates the process),
- * so callers gate this helper on POSIX.
+ * A live host that answers the token-authenticated health check, serves the
+ * editor shell, but ignores SIGTERM, so `stop` reaches its five second timeout
+ * with the process still running. Windows cannot ignore SIGTERM (the signal
+ * terminates the process), so callers gate this helper on POSIX.
  */
 async function stubbornHost(): Promise<StubbornHost> {
   const script = `
@@ -1066,6 +1066,11 @@ async function stubbornHost(): Promise<StubbornHost> {
       ) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (request.url.startsWith('/') && !request.url.startsWith('/api/')) {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<div id="root">stub editor</div>');
         return;
       }
       response.writeHead(404);
