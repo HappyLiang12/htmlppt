@@ -65,6 +65,7 @@ import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { useI18n, type Translator } from './i18n';
 import { describeSelection, describeSlide } from './announcements';
+import { appearanceKindFor } from './appearance-kind';
 import {
   DeckAuthError,
   DeckOpenError,
@@ -3511,27 +3512,18 @@ export function App() {
     ? { ...objectActions, ...nestedActions }
     : objectActions;
   const styleState: InspectorStyleState | null = (() => {
-    if (
-      !activeSlide ||
-      !selection ||
-      selections.length !== 1 ||
-      selection.path.length > 1
-    ) {
+    if (!activeSlide || !selection || selections.length !== 1) {
       return null;
     }
     const element = elementAtPath(activeSlide.element, selection.path);
     if (!element) return null;
     const tag = element.tagName.toLowerCase();
-    const kind = tag === 'img' ? 'image' : tag === 'svg' || tag === 'div' ? 'shape' : null;
-    if (!kind) return null;
     return {
-      kind,
+      kind: appearanceKindFor(element),
       svg: tag === 'svg',
       appearance: readShapeAppearance(element),
       text:
-        kind === 'shape' && tag === 'svg'
-          ? element.querySelector('text')?.textContent ?? ''
-          : '',
+        tag === 'svg' ? element.querySelector('text')?.textContent ?? '' : '',
       alt: element.getAttribute('alt') ?? '',
       crop: imageCropOf(element) ?? { top: 0, right: 0, bottom: 0, left: 0 }
     };
