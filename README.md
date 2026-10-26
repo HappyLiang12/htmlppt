@@ -198,8 +198,10 @@ edit means the notice will not appear for that object later. Position, size,
 appearance, and text apply to the selected child at any depth: the appearance
 panel writes fill, border, radius, and opacity as inline styles on the element.
 Images keep their crop and alt controls, the outermost SVG keeps its attribute
-mapping, and SVG descendants are not individually styleable. Structural
-commands such as grouping, ordering, and slide operations stay top-level.
+mapping, and SVG descendants are not individually styleable. A locked, hidden,
+or grouped top-level wrapper keeps the appearance panel disabled for its
+nested children, consistent with geometry. Structural commands such as
+grouping, ordering, and slide operations stay top-level.
 
 ## Localization
 

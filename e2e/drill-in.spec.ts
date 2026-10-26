@@ -808,7 +808,14 @@ test('drags a grid child without changing the grid parent', { tag: '@feature:nes
 test('styles a nested paragraph through the appearance panel and persists it', { tag: '@feature:nested-appearance' }, async ({
   page
 }) => {
-  const editor = await openWrappedDeck(page);
+  // The panel's stroke fields edit a border colour and width; a paragraph with
+  // no authored border has neither, so the footer starts with a 1px border to
+  // prove both fields. Creating a border from an empty style stays uncovered.
+  const seeded = (await readFile(fixturePath, 'utf8')).replace(
+    '<p class="foot">Footer</p>',
+    '<p class="foot" style="border: 1px solid #000000">Footer</p>'
+  );
+  const editor = await openDeckHtml(page, seeded, 'wrapped.deck.html');
   try {
     await enterPad(page);
     const pad = editor.frame.locator('.pad');
@@ -832,16 +839,53 @@ test('styles a nested paragraph through the appearance panel and persists it', {
 
     await expect
       .poll(async () => (await foot.getAttribute('style')) ?? '')
-      .toContain('background-color');
+      .toContain('background-color: rgb(255, 238, 170)');
     await expect(foot).toHaveCSS('background-color', 'rgb(255, 238, 170)');
+
+    // Border: the panel exposes width and colour as separate fields, and the
+    // inline declaration must carry both parts of the stroke after each edit.
+    const strokeWidth = page.getByTestId('style-stroke-width');
+    await strokeWidth.fill('3');
+    await strokeWidth.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('border: 3px solid rgb(0, 0, 0)');
+    await expect(foot).toHaveCSS('border-top-width', '3px');
+
+    const stroke = page.getByTestId('style-stroke');
+    await stroke.fill('#334455');
+    await stroke.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('border: 3px solid rgb(51, 68, 85)');
+    await expect(foot).toHaveCSS('border-top-style', 'solid');
+    await expect(foot).toHaveCSS('border-top-color', 'rgb(51, 68, 85)');
+
+    const radius = page.getByTestId('style-radius');
+    await radius.fill('12');
+    await radius.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('border-radius: 12px');
+    await expect(foot).toHaveCSS('border-top-left-radius', '12px');
+
+    const opacity = page.getByTestId('style-opacity');
+    await opacity.fill('0.8');
+    await opacity.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('opacity: 0.8');
+    await expect(foot).toHaveCSS('opacity', '0.8');
+
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
-    // The edit lands on the selected child, not on its container.
+    // The edits land on the selected child, not on its container.
     expect(await pad.getAttribute('style')).toBeNull();
 
-    // The saved deck carries the style, not only a live iframe change.
+    // The saved deck carries every declaration on the same element, not only a
+    // live iframe change.
     const saved = await readFile(join(editor.directory, editor.file), 'utf8');
     expect(saved).toMatch(
-      /<p class="foot" style="[^"]*background-color: rgb\(255, 238, 170\)/
+      /<p class="foot" style="border: 3px solid rgb\(51, 68, 85\); background-color: rgb\(255, 238, 170\); border-radius: 12px; opacity: 0\.8;"/
     );
 
     await page.reload();
@@ -851,12 +895,17 @@ test('styles a nested paragraph through the appearance panel and persists it', {
     const reloadedFoot = reloadedFrame.locator('.pad .foot');
     await expect(reloadedFoot).toHaveAttribute(
       'style',
-      /background-color: rgb\(255, 238, 170\)/
+      /border: 3px solid rgb\(51, 68, 85\); background-color: rgb\(255, 238, 170\); border-radius: 12px; opacity: 0\.8;/
     );
     await expect(reloadedFoot).toHaveCSS(
       'background-color',
       'rgb(255, 238, 170)'
     );
+    await expect(reloadedFoot).toHaveCSS('border-top-width', '3px');
+    await expect(reloadedFoot).toHaveCSS('border-top-style', 'solid');
+    await expect(reloadedFoot).toHaveCSS('border-top-color', 'rgb(51, 68, 85)');
+    await expect(reloadedFoot).toHaveCSS('border-top-left-radius', '12px');
+    await expect(reloadedFoot).toHaveCSS('opacity', '0.8');
   } finally {
     await close(editor);
   }
