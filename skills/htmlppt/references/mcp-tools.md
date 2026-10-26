@@ -308,10 +308,14 @@ host restart. `open` (default false) controls whether a browser is launched.
 The host binds to 127.0.0.1 and permits only the opened deck, its export, and
 editor assets.
 
-Reuses an existing session only when its authenticated health endpoint answers;
-a live PID with a dead port is treated as stale. Fails with
-`editor-unavailable` when the CLI build is missing and `editor-timeout` when no
-healthy session appears within 5 seconds. On timeout the spawned host process
+Reuses an existing session only when two probes pass: the authenticated
+`/api/health` endpoint accepts the deck and the editor shell at
+`/d/<deck-name>` is the built editor. Health alone is not success; a
+`stale-build` host is stopped and replaced on the recorded port by the next
+open. Fails with `editor-unavailable` when the CLI build is missing,
+`editor-failed` when the spawned CLI exits before publishing a healthy session
+(the message names the child's exit code or signal), and `editor-timeout` when
+no healthy session appears within 5 seconds. On timeout the spawned host process
 is terminated instead of being left running.
 
 ### `export_deck`
@@ -383,5 +387,6 @@ relevant, `slideId`, `target`, `outputPath`, `currentRevision`, or `errors`.
 | `invalid-background` | Background must set exactly one non-empty color/gradient/image. |
 | `invalid-transition` | Transition must be none, fade, or slide. |
 | `editor-unavailable` | The built CLI was not found. Run `npm run build`. |
+| `editor-failed` | The spawned CLI exited before publishing a healthy session; the message names its exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
 | `editor-timeout` | No healthy editor session appeared within 5 seconds; the spawned host was terminated. Check the editor build and try `htmlppt open`. |
 | `internal` | Unexpected failure; the message carries the detail. |

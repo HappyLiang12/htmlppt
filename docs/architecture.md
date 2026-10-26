@@ -83,6 +83,27 @@ agent (MCP / CLI)                    human (browser)
    deck. Host exports serialize per process and re-check directory containment
    after creation. Outputs are staged and renamed into place.
 
+### Liveness and host replacement
+
+A registry entry is never trusted on its own. A reusable host must pass two
+probes: the authenticated `/api/health` response must accept the deck, and the
+editor shell at `/d/<deck-name>` must be the built editor (an HTML response
+containing `id="root"`). Health proves the process owns the deck; the shell
+proves it can serve what the printed URL hands to the browser.
+
+| Verdict | Meaning | Caller behavior |
+| --- | --- | --- |
+| `healthy` | Both probes passed. | Reuse the entry and print its URL. |
+| `stale-build` | Health accepted the deck, but the shell is missing, non-HTML, or not the editor. The process is reachable and owns the recorded port. | If the verdict persists after one retry, `open` stops that exact entry and starts a replacement on the recorded port with the rotated token. `stop` retires it directly. |
+| `unhealthy` | Health definitively rejected the deck (a non-5xx status, malformed payload, or different file path) or the connection is refused. | Prune the entry; never signal the pid. |
+| `unknown` | Health timed out or returned 5xx, or the transport failed. | Keep the entry and refuse to start a second host for the deck; retry or stop it explicitly. |
+
+The replacement path matters because a stale process still owns its recorded
+port: starting a second host without stopping it would fail to bind or orphan
+the old process, and printing the old URL would send the browser to a shell that
+is not the editor. Only a health-verified `stale-build` entry proves that the
+pid belongs to this deck, so only that verdict may be signalled.
+
 ## Revision and conflict model
 
 A revision is the SHA-256 hash of the exact file bytes. It is an opaque token,

@@ -40,12 +40,19 @@ it. `--size 1600x900` sets the canvas. `open` prints
 `--no-browser` prints the URL only.
 
 The printed URL carries the session token once. `open` reuses the token and
-port recorded for the deck, so that tokenized URL stays bookmarkable while the
-host runs; `htmlppt stop` rotates the token. The browser exchanges the token for
-an HttpOnly, `SameSite=Strict` session cookie with a 30-day `Max-Age` and lands
-on `http://127.0.0.1:<port>/d/<deck-file-name>`, so the browser stays signed in
-for that deck even after the token leaves the address bar. CLI and MCP output
-still print the tokenized bootstrap URL for automation.
+port recorded for the deck, so the deck URL stays bookmarkable while its host
+runs; after a crash or reboot, one `htmlppt open` brings the same URL back. The
+browser exchanges the token for an HttpOnly, `SameSite=Strict` session cookie
+with a 30-day `Max-Age` that successful page loads renew, so the browser stays
+signed in for that deck even after the token leaves the address bar. CLI and MCP
+output still print the tokenized bootstrap URL for automation.
+
+`htmlppt stop` rotates the token, so a bookmark whose cookie predates the stop
+needs one `htmlppt open` afterwards. The recorded port is kept; the next `open`
+starts the host with the rotated token, and a request carrying the stale cookie
+gets a 401 page that names the deck and the recovery command. An editor host
+that still answers health but no longer serves the editor shell (a stale build)
+is stopped and replaced by the next `open` instead of handing out a dead URL.
 
 Inside the editor, type a path into the path field and press Enter to switch
 this host to another HTML deck. Relative paths resolve against the host's

@@ -181,8 +181,11 @@ a file for `html`/`pdf` and a directory for `png`.
 host reuses the deck's recorded token and port, so the tokenized URL stays valid
 across a restart until `htmlppt stop` rotates the token; an explicit `--port`
 wins, and `--port 0` forces a fresh ephemeral port instead of the recorded one.
-If a recorded host is alive but not answering health checks, `open` refuses to
-start a second host and exits 1; retry or stop the recorded session first.
+A host counts as healthy only when its authenticated health endpoint answers and
+it serves the editor shell. A health-only host with a broken editor build is
+stopped and replaced by the next `open`. If a recorded host times out or fails
+health with a 5xx, `open` refuses to start a second host and exits 1; retry or
+stop the recorded session first.
 
 `stop --all` prunes registry entries whose recorded process has exited. When it
 cleans only stale entries it prints `Removed <n> stale editor session(s).` and

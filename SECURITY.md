@@ -71,8 +71,21 @@ back to an operating-system-assigned port; an explicit `--port` (including
   is created with mode `0700` and entries with `0600` where the platform
   supports it. Protect your home directory accordingly.
 
-`htmlppt open` reuses a session only when its authenticated health endpoint
-answers. A live PID with a dead port is treated as stale and is not reused.
+`htmlppt open` reuses a session only when two probes pass: the authenticated
+`/api/health` endpoint must accept the deck, and the editor shell at
+`/d/<deck-name>` must be the built editor (an HTML response containing its root
+element). Health alone is not trusted, because a host can own the deck while its
+editor build is missing or broken. A live PID with a dead port is treated as
+stale and is not reused.
+
+A host that answers health for the deck but fails the shell probe is a
+`stale-build`. Only that verified process may be signalled: `open` retries the
+probe once; if the verdict persists it stops the stale host and starts a
+replacement on the recorded port. The stop rotates the token, and the
+replacement reuses the rotated credential, so the next printed URL is the one a
+browser can actually reach. `stop` retires a stale-build host directly. A health
+timeout or 5xx never proves ownership, so `open` refuses to start a second host
+while the entry is registered; retry or stop it explicitly.
 
 ## Editor isolation
 

@@ -44,10 +44,12 @@ The server chooses a storage mode per deck:
 | **Host-attached** | A healthy editor host is registered for the deck. | Deck reads, most mutations, and PDF/PNG exports go through the authenticated loopback host. Host-routed writes are validated and broadcast to the editor as `revision` events with `source: "mcp"`. `create_deck` still creates the new file directly, and HTML export writes the cleaned file directly. |
 | **Direct** | No live host is found, or `HTMLPPT_MCP_MODE=direct` is set. | Reads and writes the file directly with the server process's permissions. Writes are atomic and revision-checked. |
 
-Host selection is automatic. A registry entry with a live PID but a dead or
-unauthenticated health endpoint is treated as stale and does not force host
-mode. `HTMLPPT_MCP_MODE=direct` is a universal override; any other value allows
-auto-selection.
+Host selection is automatic. A host is reusable only when its authenticated
+`/api/health` endpoint accepts the deck and it serves the built editor shell; a
+health-only host with a broken editor is not treated as host mode. A registry
+entry with a live PID but a dead or unauthenticated health endpoint is treated
+as stale. `HTMLPPT_MCP_MODE=direct` is a universal override; any other value
+allows auto-selection.
 
 ## Conventions
 
@@ -165,7 +167,7 @@ at least 160 px, height at least 120 px, then the SVG `viewBox`, then 640x360).
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `open_editor` | `path`, optional `port`, `open` (default `false`) | `{ path, url }` with a tokenized loopback URL such as `http://127.0.0.1:53211/?token=...`. Starts a detached host; reuses a healthy existing session. |
+| `open_editor` | `path`, optional `port`, `open` (default `false`) | `{ path, url }` with a tokenized loopback URL such as `http://127.0.0.1:53211/?token=...`. Starts a detached host; reuses a session only when health and the editor shell both pass, and may replace a stale-build host. |
 | `export_deck` | `path`, `format` (`html` default, `pdf`, `png`), optional `outDir` | HTML: `{ path, format: "html", outputPath }` and `<name>.export.html`. PDF: `{ path, format: "pdf", files }` with `<name>.pdf`. PNG: `{ path, format: "png", files }` with `<name>-sN.png` per slide. |
 
 `outDir` is resolved against the deck directory (not the server working
@@ -173,7 +175,13 @@ directory) and must stay inside it; an escaping path fails with
 `invalid-out-dir`. It defaults to the deck directory. The MCP server creates the
 output directory when needed.
 
-`open_editor` fails with `editor-unavailable` when the built CLI is missing and
+`open_editor` reuses an existing session only when both probes pass: the
+authenticated `/api/health` endpoint accepts the deck and the editor shell is the
+built editor. A health-only host is not success; the CLI replaces a `stale-build`
+host (stopping it and starting a fresh one on the recorded port) before the tool
+returns a URL. The tool fails with `editor-unavailable` when the built CLI is
+missing, `editor-failed` when the spawned CLI exits before publishing a healthy
+session (the message names the child's exit code or signal), and
 `editor-timeout` when no healthy session appears within 5 seconds; on timeout it
 terminates the spawned host. `export_deck` requires a system Chrome, Edge, or
 Chromium (or `HTMLPPT_CHROMIUM`) for PDF/PNG and fails with
@@ -237,6 +245,7 @@ Domain errors return `isError: true` with a JSON payload:
 | `renderer-unavailable` | No Chrome, Edge, or Chromium was found for PDF/PNG. |
 | `export-failed` | Rendering or the host export path failed. |
 | `editor-unavailable` | The built CLI was not found; run `npm run build`. |
+| `editor-failed` | The spawned CLI exited before publishing a healthy session; the message names the child's exit code or signal. Run `htmlppt open <file> --no-browser` and read its stderr. |
 | `editor-timeout` | No healthy editor session appeared within 5 seconds. |
 | `internal` | Unexpected failure; read `message`. |
 

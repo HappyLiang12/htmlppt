@@ -89,13 +89,20 @@ edits make this easier to diagnose.
 `create_deck` never overwrites. Choose a new path, or ask the user before
 replacing the existing deck.
 
-### `editor-unavailable` or `editor-timeout`
+### `editor-unavailable`, `editor-failed`, or `editor-timeout`
 
 `open_editor` starts the built CLI. If it reports `editor-unavailable`, run
 `npm run build` so `packages/editor/dist` and the CLI dist exist. If it reports
-`editor-timeout`, the CLI did not write a session within 5 seconds: run
-`htmlppt open <file> --no-browser` manually and read its stderr. A blocked
-session from a busy host is a common cause; stop it first.
+`editor-failed`, the spawned CLI exited before publishing a healthy session and
+the message carries its exit code: run `htmlppt open <file> --no-browser`
+manually and read its stderr. If it reports `editor-timeout`, the CLI did not
+publish a healthy session within 5 seconds: run the same command manually.
+
+A host that is alive but times out or answers health with a 5xx is `unknown`
+and blocks a second host for that deck; retry, or stop it explicitly. A host
+whose health passes but whose editor shell is broken (`stale-build`) is not a
+blocker: the next `open` stops it and replaces it automatically. Do not stop a
+broken editor by hand unless the automatic replacement itself fails.
 
 ### Unexpected host behavior
 
@@ -117,7 +124,7 @@ CLI failures print a message to stderr and exit 1.
 | `Invalid --slides. Use a positive integer up to 1000.` | Fix the `--slides` value. |
 | `Port <port> is already in use. Omit --port or choose another.` | Another process owns the port. Omit `--port` to let `open` retry the deck's recorded port and fall back to an ephemeral one, or choose another port. |
 | `Editor build not found. Run "npm run build" first.` | `packages/editor/dist` is missing. Build the workspace. |
-| `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but failed the health check (timeout/5xx). Do not start a second host; retry or stop the recorded one. |
+| `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but its health check timed out or returned a 5xx (`unknown`), so `open` cannot prove it owns the deck and refuses to start a second host. Retry, or stop the recorded one. An alive host whose health passes but whose editor shell is broken is `stale-build` instead: `open` replaces it automatically, and this message is not printed. |
 | `No live editor session for <file>. Start one with "htmlppt open <file>".` | `stop` found nothing to stop for that deck. |
 | `Specify a deck file to stop or pass --all.` | `stop` needs a target. |
 | `Pass either a deck file or --all, not both.` | Use one form. |
