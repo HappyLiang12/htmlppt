@@ -119,9 +119,10 @@ validation, normalization, MCP targets, and the outline describe. A nested
 wrapper that itself holds objects is also enterable in the editor: the OBJECTS
 list offers a chevron, and double-clicking the wrapper's own padding or
 background enters it, after which its direct children are the selectable
-objects. Drill-in is a view state only. It writes no attributes, creates no
-`data-ppt-el` ids, and adds nothing to the saved deck; text leaves inside a
-container still edit inline.
+objects. Drilling in is a view state: it writes no attributes, creates no
+`data-ppt-el` ids, and adds nothing to the saved deck. A nested geometry edit
+does write inline styles to the selected element, exactly like a top-level
+edit; text leaves inside a container still edit inline.
 
 Objects are styled with inline `style` attributes and CSS classes. The editor
 may add `position: relative` to a statically positioned slide root while

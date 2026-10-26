@@ -202,8 +202,15 @@ rows keep slide-rooted `data-object-path` values (`2.0`, not `0`). Escape pops
 one segment, a breadcrumb segment jumps to an ancestor, and a click on the slide
 area outside the active container leaves it; a click on the editor canvas
 outside the slide also clears it. A slide change, deck change, reload, or a
-deleted or no-longer-enterable container resets the path. Nested geometry and
-appearance stay read-only in this phase.
+deleted or no-longer-enterable container resets the path.
+
+A single nested selection is editable with the same geometry contract as a
+top-level object: drag, resize, rotate, and nudge write inline
+`position`/`left`/`top`/`width`/`height` and `transform` to the selected
+element. The first position or size edit pins a flow child to
+`position: absolute` and shows a one-time notice with Undo. Rotation also
+materializes the box, silently: the notice covers position and size edits
+only. Nested appearance stays read-only in this phase.
 
 `isEnterableContainer` in `packages/editor/src/selection.ts` is the single
 predicate behind every entry path: double-click entry, the inspector chevron,
@@ -212,8 +219,9 @@ is not a text leaf (double-clicking one edits text instead), is neither locked
 nor hidden, is not an atomic `data-ppt-group` wrapper, and is not a `div` whose
 only element children are `<br>` line breaks (that is a text box, so a
 double-click edits it). The context is editor-only state. It is never
-serialized, is not restored after a reload, and writes no deck attributes or
-ids.
+serialized, is not restored after a reload, and drilling in writes no deck
+attributes or ids. A nested geometry edit is not context state: it writes
+inline styles to the selected element exactly like a top-level edit.
 
 ## Presenter BroadcastChannel protocol
 

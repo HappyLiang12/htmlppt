@@ -92,7 +92,7 @@ async function enterPad(page: Page): Promise<void> {
   await expect(page.getByTestId('edit-context')).toContainText('.pad');
 }
 
-test('enters nested layout containers and pops one level per Escape', async ({
+test('enters nested layout containers and pops one level per Escape', { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -138,7 +138,7 @@ test('enters nested layout containers and pops one level per Escape', async ({
   }
 });
 
-test('a text leaf still edits inline inside a context', async ({ page }) => {
+test('a text leaf still edits inline inside a context', { tag: '@feature:drill-in-selection' }, async ({ page }) => {
   const editor = await openWrappedDeck(page);
   try {
     const context = page.getByTestId('edit-context');
@@ -163,7 +163,7 @@ test('a text leaf still edits inline inside a context', async ({ page }) => {
   }
 });
 
-test("enters from a container's own padding and leaves on an outside click", async ({
+test("enters from a container's own padding and leaves on an outside click", { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -205,7 +205,7 @@ test("enters from a container's own padding and leaves on an outside click", asy
   }
 });
 
-test('enters the selected container with Enter', async ({ page }) => {
+test('enters the selected container with Enter', { tag: '@feature:drill-in-selection' }, async ({ page }) => {
   const editor = await openWrappedDeck(page);
   try {
     const context = page.getByTestId('edit-context');
@@ -231,7 +231,7 @@ test('enters the selected container with Enter', async ({ page }) => {
   }
 });
 
-test('jumps to an ancestor from the breadcrumb', async ({ page }) => {
+test('jumps to an ancestor from the breadcrumb', { tag: '@feature:drill-in-selection' }, async ({ page }) => {
   const editor = await openWrappedDeck(page);
   try {
     const context = page.getByTestId('edit-context');
@@ -250,7 +250,7 @@ test('jumps to an ancestor from the breadcrumb', async ({ page }) => {
   }
 });
 
-test('pops one level when Escape is pressed inside the preview frame', async ({
+test('pops one level when Escape is pressed inside the preview frame', { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -275,7 +275,7 @@ test('pops one level when Escape is pressed inside the preview frame', async ({
   }
 });
 
-test('clears the context when the active slide is deleted', async ({ page }) => {
+test('clears the context when the active slide is deleted', { tag: '@feature:drill-in-selection' }, async ({ page }) => {
   const editor = await openWrappedDeck(page);
   try {
     const context = page.getByTestId('edit-context');
@@ -298,7 +298,7 @@ test('clears the context when the active slide is deleted', async ({ page }) => 
   }
 });
 
-test('locked containers offer no chevron and cannot be entered with Enter', async ({
+test('locked containers offer no chevron and cannot be entered with Enter', { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -337,7 +337,7 @@ test('locked containers offer no chevron and cannot be entered with Enter', asyn
   }
 });
 
-test('a locked wrapper keeps an alt-drilled child uneditable', async ({
+test('a locked wrapper keeps an alt-drilled child uneditable', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -433,7 +433,7 @@ test('a locked wrapper keeps an alt-drilled child uneditable', async ({
   }
 });
 
-test('a mixed selection cannot move a locked wrapper child', async ({
+test('a mixed selection cannot move a locked wrapper child', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -483,7 +483,7 @@ test('a mixed selection cannot move a locked wrapper child', async ({
   }
 });
 
-test('Enter during a drag does not enter the dragged container', async ({
+test('Enter during a drag does not enter the dragged container', { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -507,7 +507,7 @@ test('Enter during a drag does not enter the dragged container', async ({
   }
 });
 
-test('Escape during a drag cancels the drag, not the context', async ({
+test('Escape during a drag cancels the drag, not the context', { tag: '@feature:drill-in-selection' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -532,7 +532,7 @@ test('Escape during a drag cancels the drag, not the context', async ({
   }
 });
 
-test('drags a nested flow child, pins it, and the geometry survives reload', async ({
+test('drags a nested flow child, pins it, and the geometry survives reload', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -585,7 +585,7 @@ test('drags a nested flow child, pins it, and the geometry survives reload', asy
   }
 });
 
-test('Undo restores the pre-pin inline style and the notice stays gone', async ({
+test('Undo restores the pre-pin inline style and the notice stays gone', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -640,7 +640,7 @@ test('Undo restores the pre-pin inline style and the notice stays gone', async (
   }
 });
 
-test('rotating a flow child pins the box without showing the notice', async ({
+test('rotating a flow child pins the box without showing the notice', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -674,7 +674,7 @@ test('rotating a flow child pins the box without showing the notice', async ({
   }
 });
 
-test('a text edit dismisses the pin notice instead of undoing the text', async ({
+test('a text edit dismisses the pin notice instead of undoing the text', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -716,7 +716,7 @@ test('a text edit dismisses the pin notice instead of undoing the text', async (
   }
 });
 
-test('drags a grid child without changing the grid parent', async ({
+test('drags a grid child without changing the grid parent', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -755,7 +755,7 @@ test('drags a grid child without changing the grid parent', async ({
   }
 });
 
-test('Escape during a nested drag cancels the drag and keeps the context', async ({
+test('Escape during a nested drag cancels the drag and keeps the context', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
   const editor = await openWrappedDeck(page);
@@ -763,6 +763,7 @@ test('Escape during a nested drag cancels the drag and keeps the context', async
     await enterPad(page);
     const context = page.getByTestId('edit-context');
     const outline = page.getByTestId('selection-outline');
+    const rows = page.getByTestId('object-row');
     const foot = editor.frame.locator('.pad .foot');
     const box = await boxOf(foot, 'Footer');
     const start = { x: box.x + 12, y: box.y + box.height / 2 };
@@ -779,6 +780,9 @@ test('Escape during a nested drag cancels the drag and keeps the context', async
     await expect(outline).toHaveCount(0);
     // DE1 deferred this case: the drag owns Escape, not the breadcrumb.
     await expect(context).toContainText('.pad');
+    // The context stayed at .pad. A cancel that also entered .cover would
+    // show its name and its children's slide-rooted paths below.
+    await expect(context).not.toContainText('.cover');
     await page.mouse.up();
     await expect(page.getByTestId('pin-notice')).toHaveCount(0);
     await expect(page.getByTestId('save-status')).toHaveText('已同步');
@@ -786,7 +790,9 @@ test('Escape during a nested drag cancels the drag and keeps the context', async
     await expect(foot).toHaveCSS('position', 'static');
     expect(await foot.getAttribute('style')).toBeNull();
     await expect(context).toContainText('.pad');
-    await expect(page.getByTestId('object-row')).toHaveCount(2);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0');
+    await expect(rows.nth(1)).toHaveAttribute('data-object-path', '2.1');
   } finally {
     await close(editor);
   }

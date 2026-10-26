@@ -784,7 +784,13 @@ test(
 
 test(
   'nested single selection is editable while multi-selection stays read-only',
-  { tag: '@feature:editor-core' },
+  {
+    tag: [
+      '@feature:editor-core',
+      '@feature:drill-in-selection',
+      '@feature:nested-geometry'
+    ]
+  },
   async ({ page }) => {
     const editor = await openNestedGeometryDeck(page);
     try {
@@ -886,7 +892,7 @@ test(
 
 test(
   'nested locked and group-blocked targets keep inspector geometry disabled',
-  { tag: '@feature:editor-core' },
+  { tag: ['@feature:editor-core', '@feature:nested-geometry'] },
   async ({ page }) => {
     const editor = await openNestedGeometryDeck(page);
     try {
@@ -930,7 +936,13 @@ test(
 
 test(
   'nested single selection resizes and rotates from the overlay handles',
-  { tag: '@feature:editor-core' },
+  {
+    tag: [
+      '@feature:editor-core',
+      '@feature:drill-in-selection',
+      '@feature:nested-geometry'
+    ]
+  },
   async ({ page }) => {
     const editor = await openNestedGeometryDeck(page);
     try {

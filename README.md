@@ -192,8 +192,11 @@ straight to it). Inside a container, a click selects its direct children and a
 double-click on a text leaf still starts inline text editing. A single entered
 object can be moved, resized, rotated, and nudged; the first position or size
 edit pins a flow object to absolute positioning, and a one-time notice explains
-that change with Undo. Appearance and structural commands such as grouping,
-ordering, and slide operations stay top-level.
+that change with Undo. Rotating a flow object also pins it to absolute,
+silently: the notice covers position and size edits only, so a rotation-first
+edit means the notice will not appear for that object later. Appearance and
+structural commands such as grouping, ordering, and slide operations stay
+top-level.
 
 ## Localization
 
