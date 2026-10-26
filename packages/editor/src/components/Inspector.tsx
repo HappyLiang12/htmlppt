@@ -328,10 +328,10 @@ function numeric(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-// A border needs both a width and a colour. The two fields commit on their
-// own, so the half the user did not touch falls back to a visible default;
-// otherwise core's width-or-colour-empty rule clears the border the other
-// field just created. An emptied field stays an intentional clear.
+// An HTML border needs both a width and a colour. The two fields commit on
+// their own, so the half the user did not touch falls back to a visible
+// default; otherwise core's width-or-colour-empty rule clears the border the
+// other field just created. An emptied field stays an intentional clear.
 const DEFAULT_STROKE_COLOR = '#000000';
 const DEFAULT_STROKE_WIDTH = 1;
 
@@ -921,14 +921,21 @@ export function Inspector({
                     value={style.appearance.stroke}
                     disabled={styleDisabled}
                     placeholder="#000000"
-                    onCommit={(value) =>
-                      onSetAppearance({
-                        stroke: value.trim() || null,
+                    onCommit={(value) => {
+                      const stroke = value.trim() || null;
+                      // The SVG panel reads the width from the first paint
+                      // target only, while core maps one width onto every
+                      // target; re-sending it on a colour edit would collapse
+                      // per-target widths. The SVG branch keeps the width on a
+                      // colour-only patch, so only HTML needs the merged half.
+                      if (style.svg) return onSetAppearance({ stroke });
+                      return onSetAppearance({
+                        stroke,
                         strokeWidth: visibleStrokeWidth(
                           style.appearance.strokeWidth
                         )
-                      })
-                    }
+                      });
+                    }}
                   />
                   <StyleField
                     pendingActions={pendingActions}

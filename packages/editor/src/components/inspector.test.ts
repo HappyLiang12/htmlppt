@@ -651,6 +651,82 @@ describe('inspector object appearance', () => {
     expect(onSetAppearance).toHaveBeenLastCalledWith({ strokeWidth: 0 });
   });
 
+  it('sends only the colour for an SVG so per-target widths survive', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    const svgStyle = {
+      ...SHAPE_STYLE,
+      svg: true,
+      appearance: {
+        ...SHAPE_STYLE.appearance,
+        stroke: 'rgb(51, 68, 85)',
+        strokeWidth: '2px'
+      }
+    };
+    await render({ selection, style: svgStyle, onSetAppearance });
+
+    await act(async () => {
+      const stroke = inputByTestId('style-stroke');
+      stroke.focus();
+      setInputValue(stroke, '#334455');
+      stroke.blur();
+    });
+    // Core applies one width to every paint target; echoing the width the panel
+    // read from the first target would collapse per-target widths (2/5 -> 2/2).
+    expect(onSetAppearance).toHaveBeenLastCalledWith({ stroke: '#334455' });
+
+    await act(async () => {
+      const width = inputByTestId('style-stroke-width');
+      width.focus();
+      setInputValue(width, '3');
+      width.blur();
+    });
+    // A width edit is still a deliberate single width and keeps the colour.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({ strokeWidth: 3 });
+  });
+
+  it('clears an SVG border without pinning the first target width', async () => {
+    const onSetAppearance = vi.fn(() => true);
+    const svgBordered = {
+      ...SHAPE_STYLE,
+      svg: true,
+      appearance: {
+        ...SHAPE_STYLE.appearance,
+        stroke: 'rgb(51, 68, 85)',
+        strokeWidth: '2px'
+      }
+    };
+    await render({ selection, style: svgBordered, onSetAppearance });
+
+    await act(async () => {
+      const stroke = inputByTestId('style-stroke');
+      stroke.focus();
+      setInputValue(stroke, '');
+      stroke.blur();
+    });
+    // Removing the paint must not pin the width read from the first target.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({ stroke: null });
+
+    await render({
+      selection,
+      style: {
+        ...svgBordered,
+        appearance: { ...svgBordered.appearance, stroke: '' }
+      },
+      onSetAppearance
+    });
+    await act(async () => {
+      const width = inputByTestId('style-stroke-width');
+      width.focus();
+      setInputValue(width, '');
+      width.blur();
+    });
+    // Both halves gone: the clear carries no default colour.
+    expect(onSetAppearance).toHaveBeenLastCalledWith({
+      strokeWidth: 0,
+      stroke: null
+    });
+  });
+
   it('shows validation feedback when an appearance value is rejected', async () => {
     const onSetAppearance = vi.fn(() => false);
     await render({ selection, style: SHAPE_STYLE, onSetAppearance });
