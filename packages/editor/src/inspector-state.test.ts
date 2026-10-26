@@ -240,24 +240,51 @@ describe('inspector object summaries', () => {
     expect(summarizeObjects(slideOf(master))).toEqual([
       {
         path: [0],
+        index: 0,
         tag: 'div',
         elementId: 'box',
         text: 'Nudge me',
         locked: false,
         hidden: false,
         group: false,
-        canUnhide: false
+        canUnhide: false,
+        hasChildren: false
       },
       {
         path: [1],
+        index: 1,
         tag: 'h1',
         elementId: 'title',
         text: 'Slide title',
         locked: false,
         hidden: false,
         group: false,
-        canUnhide: false
+        canUnhide: false,
+        hasChildren: false
       }
+    ]);
+  });
+
+  it('summarizes the direct children of a container with index and hasChildren', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad"><h1>Title</h1><p>Body</p><div><span>nested</span></div></div>
+       </section>`,
+      'text/html'
+    );
+    const container = doc.querySelector('.pad') as Element;
+
+    const objects = summarizeObjects(container);
+
+    // The summary contract lowercases tags (see the exact-shape test above and
+    // the inspector's rendered tag chips), so the fixture's DOM tags arrive
+    // lowercase here instead of the brief's uppercase literals.
+    expect(objects.map((object) => object.tag)).toEqual(['h1', 'p', 'div']);
+    expect(objects.map((object) => object.index)).toEqual([0, 1, 2]);
+    expect(objects.map((object) => object.hasChildren)).toEqual([
+      false,
+      false,
+      true
     ]);
   });
 });

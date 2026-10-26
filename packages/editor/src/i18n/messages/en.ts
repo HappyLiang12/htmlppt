@@ -298,6 +298,7 @@ export const en = {
   'editor.noSlides': 'No slides found.',
   'editor.newSlideTitle': 'New slide',
   'editor.newTextBox': 'Text box',
+  'editor.context.enter': 'Enter {name}',
   'editor.pendingEditFailed': 'Could not apply the pending edit.',
   'editor.pendingEditInstruction': 'Apply or cancel the pending edit before overwriting.',
   'editor.reloadFailed': 'Could not reload the deck.',

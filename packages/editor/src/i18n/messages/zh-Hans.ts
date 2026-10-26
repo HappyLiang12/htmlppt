@@ -292,6 +292,7 @@ export const zhHans: Record<MessageKey, string> = {
   'editor.noSlides': '找不到幻灯片。',
   'editor.newSlideTitle': '新建幻灯片',
   'editor.newTextBox': '新文本框',
+  'editor.context.enter': '进入 {name}',
   'editor.pendingEditFailed': '无法应用编辑。',
   'editor.pendingEditInstruction': '请先应用或取消尚未完成的编辑，再覆盖。',
   'editor.reloadFailed': '无法重新加载演示文稿。',
