@@ -14,11 +14,50 @@ export interface SelectionFromEventOptions {
 
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
 
+// Mirrors the editor's TEXT_EDITABLE_SELECTOR text tags: these stand alone as
+// text edit targets even when they wrap inline element children.
+const TEXT_LEAF_TAGS = new Set([
+  'H1',
+  'H2',
+  'H3',
+  'P',
+  'LI',
+  'SPAN',
+  'TD',
+  'TH',
+  'BLOCKQUOTE',
+  'FIGCAPTION'
+]);
+
 function isObjectElement(element: Element): boolean {
   return (
     !NON_OBJECT_TAGS.has(element.tagName.toUpperCase()) &&
     !element.hasAttribute('data-ppt-notes')
   );
+}
+
+function hasObjectChild(element: Element): boolean {
+  return Array.from(element.children).some(isObjectElement);
+}
+
+/**
+ * True when the element can become an editing context: it holds at least one
+ * object child, is not a text leaf (the double-click text-edit target), and is
+ * not an atomic group wrapper.
+ */
+export function isEnterableContainer(element: Element): boolean {
+  if (element.hasAttribute('data-ppt-group')) return false;
+  if (!hasObjectChild(element)) return false;
+  const tag = element.tagName.toUpperCase();
+  if (TEXT_LEAF_TAGS.has(tag)) return false;
+  if (tag === 'DIV') {
+    // Mirrors the editor's isLeafTextElement: a DIV is a text box when its
+    // only element children are line breaks.
+    return !Array.from(element.children).every(
+      (child) => child.tagName === 'BR'
+    );
+  }
+  return true;
 }
 
 export function topLevelObjects(slide: Element): Element[] {
@@ -72,7 +111,7 @@ export function contextEntry(
   if (!container || !container.contains(target) || target === container) {
     return null;
   }
-  if (!isObjectElement(target) || target.children.length === 0) return null;
+  if (!isObjectElement(target) || !isEnterableContainer(target)) return null;
   const relative = pathTo(target, container);
   return relative ? [...containerPath, ...relative] : null;
 }

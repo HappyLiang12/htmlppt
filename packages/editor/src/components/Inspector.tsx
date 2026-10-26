@@ -13,7 +13,11 @@ import type {
 } from '@htmlppt/core';
 import type { ObjectCommand } from '../commands/objects';
 import { useI18n, type MessageKey } from '../i18n';
-import { elementAtPath, type SelectionTarget } from '../selection';
+import {
+  elementAtPath,
+  isEnterableContainer,
+  type SelectionTarget
+} from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
 import {
   backgroundOf,
@@ -393,10 +397,21 @@ export function Inspector({
     setBackgroundError('');
   }, [background?.kind, background?.value, slide?.id]);
 
-  const contextBase = contextPath ?? [];
-  const contextElement = slide
-    ? elementAtPath(slide.element, contextBase) ?? slide.element
-    : null;
+  // A non-empty path that no longer resolves to an enterable container is
+  // stale: list the slide and keep every row path slide-rooted instead of
+  // mixing slide-level rows with a dead prefix.
+  const requestedContext = contextPath ?? [];
+  const requestedElement =
+    slide && requestedContext.length > 0
+      ? elementAtPath(slide.element, requestedContext)
+      : null;
+  const contextActive =
+    requestedElement !== null && isEnterableContainer(requestedElement);
+  const contextBase = contextActive ? requestedContext : [];
+  const contextElement =
+    contextActive && requestedElement
+      ? requestedElement
+      : slide?.element ?? null;
   const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
   const readOnly = multi || (selection !== null && selection.path.length > 1);
@@ -541,7 +556,7 @@ export function Inspector({
                       type="button"
                       data-testid="object-row"
                       data-object-id={object.elementId ?? undefined}
-                      data-object-path={object.path.join('.')}
+                      data-object-path={objectPath.join('.')}
                       aria-current={selected ? 'true' : undefined}
                       onClick={() => onSelectObject(objectPath)}
                       className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs ${
@@ -581,14 +596,14 @@ export function Inspector({
                         </span>
                       )}
                     </button>
-                    {object.hasChildren ? (
+                    {object.hasChildren && onEnterContext ? (
                       <button
                         type="button"
                         aria-label={t('editor.context.enter', {
                           name: firstClass || object.tag
                         })}
                         onClick={() =>
-                          onEnterContext?.([...contextBase, object.index])
+                          onEnterContext([...contextBase, object.index])
                         }
                         className="shrink-0 px-2 text-[13px] leading-none text-muted transition-colors hover:text-ink"
                       >

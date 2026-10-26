@@ -8,6 +8,7 @@ import {
 import { normalizeAngle, type Point, type Rect } from './geometry';
 import {
   elementAtPath,
+  isEnterableContainer,
   topLevelObjects,
   type SelectionTarget
 } from './selection';
@@ -45,7 +46,7 @@ export interface ObjectSummary {
   group: boolean;
   /** A hide recovery can restore the authored display declaration. */
   canUnhide: boolean;
-  /** The element has element children and can become an editing context. */
+  /** The element can become an editing context (not a text leaf or a group). */
   hasChildren: boolean;
 }
 
@@ -212,7 +213,7 @@ export function summarizeObjects(container: Element): ObjectSummary[] {
       hidden: (element as HTMLElement).style?.display === 'none',
       group: element.hasAttribute('data-ppt-group'),
       canUnhide: element.hasAttribute('data-ppt-display'),
-      hasChildren: element.children.length > 0
+      hasChildren: isEnterableContainer(element)
     };
   });
 }

@@ -287,6 +287,59 @@ describe('inspector object summaries', () => {
       true
     ]);
   });
+
+  it('marks only real containers as enterable, not text leaves or groups', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad"><div class="cover"><p>Title</p></div><p>Foot</p></div>
+         <p>x <strong>y</strong></p>
+         <h1><span>Title</span></h1>
+         <div><br></div>
+         <div data-ppt-group="1"><p>a</p></div>
+       </section>`,
+      'text/html'
+    );
+    const slide = doc.querySelector('section') as Element;
+
+    const objects = summarizeObjects(slide);
+
+    expect(objects.map((object) => object.tag)).toEqual([
+      'div',
+      'p',
+      'h1',
+      'div',
+      'div'
+    ]);
+    expect(objects.map((object) => object.hasChildren)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false
+    ]);
+  });
+
+  it('keeps raw child indexes when an excluded sibling precedes the children', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad">
+           <script>void 0;</script>
+           <div class="cover" data-ppt-el="c1"><p>Title</p></div>
+           <aside data-ppt-notes="1"><p>notes</p></aside>
+           <p>Foot</p>
+         </div>
+       </section>`,
+      'text/html'
+    );
+    const container = doc.querySelector('.pad') as Element;
+
+    const objects = summarizeObjects(container);
+
+    expect(objects.map((object) => object.index)).toEqual([1, 3]);
+    expect(objects.map((object) => object.path)).toEqual([[1], [3]]);
+    expect(objects.map((object) => object.elementId)).toEqual(['c1', null]);
+    expect(objects.map((object) => object.hasChildren)).toEqual([true, false]);
+  });
 });
 
 describe('inspector slide settings', () => {

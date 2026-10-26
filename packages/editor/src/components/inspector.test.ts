@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseDeck } from '../slide-doc.js';
+import type { Locale } from '../i18n';
 import { withLocale } from '../i18n/test-utils.js';
 import { useDeckController } from '../use-deck-controller.js';
 import { Inspector, type InspectorProps } from './Inspector.js';
@@ -24,7 +25,25 @@ const DECK_HTML = `<!doctype html>
 </body>
 </html>`;
 
+const CONTEXT_DECK_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Context fixture</title></head>
+<body>
+<main data-ppt-deck>
+<section class="slide" data-slide-id="c1" data-width="1600" data-height="900">
+  <div class="pad" data-ppt-el="pad">
+    <div class="cover"><h1>Title</h1><p>Sub</p></div>
+    <p class="foot">x <strong>y</strong></p>
+    <div class="textbox"><br></div>
+    <div data-ppt-group="1"><p>a</p></div>
+  </div>
+</section>
+</main>
+</body>
+</html>`;
+
 const slides = detectSlides(parseDeck(DECK_HTML));
+const contextSlides = detectSlides(parseDeck(CONTEXT_DECK_HTML));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -90,12 +109,16 @@ function InspectorHarness(inputs: InspectorInputs) {
   return createElement(Inspector, { ...inputs, pendingActions: actions });
 }
 
-async function render(overrides: Partial<InspectorInputs> = {}): Promise<void> {
+async function render(
+  overrides: Partial<InspectorInputs> = {},
+  locale: Locale = 'zh-Hant'
+): Promise<void> {
   await act(async () => {
     const inputs = props(overrides);
     root.render(
       withLocale(
-        createElement(InspectorHarness, { ...inputs, key: inputs.slide?.id })
+        createElement(InspectorHarness, { ...inputs, key: inputs.slide?.id }),
+        locale
       )
     );
   });
@@ -149,6 +172,123 @@ async function click(button: HTMLButtonElement): Promise<void> {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
+
+function objectRows(): HTMLButtonElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-testid="object-row"]')
+  );
+}
+
+function objectRowAt(index: number): HTMLButtonElement {
+  const row = objectRows()[index];
+  if (!row) throw new Error(`Missing object row ${index}.`);
+  return row;
+}
+
+function chevronOf(row: HTMLButtonElement): HTMLButtonElement | null {
+  return (
+    row.parentElement?.querySelector<HTMLButtonElement>('button[aria-label]') ??
+    null
+  );
+}
+
+describe('inspector editing context', () => {
+  const contextSlide = contextSlides[0];
+
+  function contextSlideOrThrow(): NonNullable<typeof contextSlide> {
+    if (!contextSlide) throw new Error('Missing context fixture slide.');
+    return contextSlide;
+  }
+
+  it('lists container children with slide-rooted paths and enters by absolute path', async () => {
+    const onEnterContext = vi.fn();
+    const onSelectObject = vi.fn();
+    await render(
+      {
+        slide: contextSlideOrThrow(),
+        contextPath: [0],
+        onEnterContext,
+        onSelectObject
+      },
+      'en'
+    );
+
+    expect(objectRows().map((row) => row.dataset.objectPath)).toEqual([
+      '0.0',
+      '0.1',
+      '0.2',
+      '0.3'
+    ]);
+    expect(
+      objectRows().map(
+        (row) => chevronOf(row)?.getAttribute('aria-label') ?? null
+      )
+    ).toEqual(['Enter cover', null, null, null]);
+
+    const enter = chevronOf(objectRowAt(0));
+    if (!enter) throw new Error('Missing enter chevron.');
+    await click(enter);
+
+    expect(onEnterContext).toHaveBeenCalledTimes(1);
+    expect(onEnterContext).toHaveBeenCalledWith([0, 0]);
+
+    await click(objectRowAt(0));
+    expect(onSelectObject).toHaveBeenCalledWith([0, 0]);
+  });
+
+  it('omits the enter chevron when no handler is supplied', async () => {
+    await render({ slide: contextSlideOrThrow(), contextPath: [0] }, 'en');
+
+    expect(objectRows()).toHaveLength(4);
+    expect(objectRows().map((row) => chevronOf(row))).toEqual([
+      null,
+      null,
+      null,
+      null
+    ]);
+    expect(
+      container.querySelector('[data-testid="object-list"] button[aria-label]')
+    ).toBeNull();
+  });
+
+  it('falls back to slide-level rows when the context path is not enterable', async () => {
+    const onEnterContext = vi.fn();
+    const onSelectObject = vi.fn();
+    await render(
+      {
+        slide: contextSlideOrThrow(),
+        // Resolves to the <p> text leaf, which cannot be an editing context.
+        contextPath: [0, 1],
+        onEnterContext,
+        onSelectObject
+      },
+      'en'
+    );
+
+    expect(objectRows().map((row) => row.dataset.objectPath)).toEqual(['0']);
+    expect(objectRowAt(0).dataset.objectId).toBe('pad');
+
+    const enter = chevronOf(objectRowAt(0));
+    if (!enter) throw new Error('Missing enter chevron.');
+    expect(enter.getAttribute('aria-label')).toBe('Enter pad');
+
+    await click(enter);
+    expect(onEnterContext).toHaveBeenCalledWith([0]);
+
+    await click(objectRowAt(0));
+    expect(onSelectObject).toHaveBeenCalledWith([0]);
+  });
+
+  it('treats an unresolvable context path as slide level', async () => {
+    await render(
+      { slide: contextSlideOrThrow(), contextPath: [9] },
+      'en'
+    );
+
+    expect(objectRows().map((row) => row.dataset.objectPath)).toEqual(['0']);
+    expect(objectRowAt(0).dataset.objectId).toBe('pad');
+  });
+});
 
 describe('inspector numeric fields', () => {
   it('restores the formatted baseline when a valid edit cannot be applied', async () => {
