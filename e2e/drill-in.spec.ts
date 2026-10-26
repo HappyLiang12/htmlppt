@@ -6,6 +6,7 @@ import {
   expect,
   test,
   type FrameLocator,
+  type Locator,
   type Page,
   type Response
 } from '@playwright/test';
@@ -62,6 +63,33 @@ async function openWrappedDeck(page: Page): Promise<Harness> {
 async function close(harness: Harness): Promise<void> {
   await harness.host.stop();
   await rm(harness.directory, { recursive: true, force: true });
+}
+
+// Playwright mouse coordinates are screen pixels, so gestures start from the
+// element's rendered box in the parent page rather than its design rect.
+async function boxOf(
+  locator: Locator,
+  label: string
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error(`${label} has no bounding box.`);
+  return box;
+}
+
+async function dragFrom(
+  page: Page,
+  start: { x: number; y: number },
+  delta: { x: number; y: number }
+): Promise<void> {
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + delta.x, start.y + delta.y, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function enterPad(page: Page): Promise<void> {
+  await page.getByRole('button', { name: ENTER_PAD }).click();
+  await expect(page.getByTestId('edit-context')).toContainText('.pad');
 }
 
 test('enters nested layout containers and pops one level per Escape', async ({
@@ -499,6 +527,266 @@ test('Escape during a drag cancels the drag, not the context', async ({
     await expect(page.getByTestId('selection-outline')).toHaveCount(0);
     await expect(context).toBeHidden();
     await page.mouse.up();
+  } finally {
+    await close(editor);
+  }
+});
+
+test('drags a nested flow child, pins it, and the geometry survives reload', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      '2.1'
+    );
+
+    const box = await boxOf(foot, 'Footer');
+    const save = page.waitForResponse(isDeckSaveResponse);
+    await dragFrom(
+      page,
+      { x: box.x + 12, y: box.y + box.height / 2 },
+      { x: 60, y: 40 }
+    );
+
+    // The first position edit pins the flow child and explains the change.
+    await expect(page.getByTestId('pin-notice')).toBeVisible();
+    await expect(foot).toHaveCSS('position', 'absolute');
+    const pinned = (await foot.getAttribute('style')) ?? '';
+    expect(pinned).toContain('position: absolute');
+    expect(pinned).toMatch(/left: -?[\d.]+px/);
+    expect(pinned).toMatch(/top: -?[\d.]+px/);
+    expect((await save).ok()).toBeTruthy();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    const before = await foot.evaluate((element) => {
+      const styled = element as HTMLElement;
+      return { left: styled.style.left, top: styled.style.top };
+    });
+
+    await page.reload();
+    const reloadedFrame = page.frameLocator(FRAME_SELECTOR);
+    await expect(reloadedFrame.locator('[data-slide-id]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    const reloaded = reloadedFrame.locator('.pad .foot');
+    await expect(reloaded).toHaveCSS('position', 'absolute');
+    const after = await reloaded.evaluate((element) => {
+      const styled = element as HTMLElement;
+      return { left: styled.style.left, top: styled.style.top };
+    });
+    // The saved deck carries the pinned geometry, not only a reload render.
+    expect(after).toEqual(before);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('Undo restores the pre-pin inline style and the notice stays gone', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    const originalStyle = await foot.getAttribute('style');
+    expect(originalStyle).toBeNull();
+    await expect(foot).toHaveCSS('position', 'static');
+
+    const firstSave = page.waitForResponse(isDeckSaveResponse);
+    const box = await boxOf(foot, 'Footer');
+    await dragFrom(
+      page,
+      { x: box.x + 12, y: box.y + box.height / 2 },
+      { x: 60, y: 40 }
+    );
+    await expect(page.getByTestId('pin-notice')).toBeVisible();
+    await expect(foot).toHaveCSS('position', 'absolute');
+    expect((await firstSave).ok()).toBeTruthy();
+
+    const undoSave = page.waitForResponse(isDeckSaveResponse);
+    await page.getByTestId('pin-notice-undo').click();
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+    // Undo restores the whole history entry: the authored flow style is back.
+    await expect.poll(() => foot.getAttribute('style')).toBe(originalStyle);
+    await expect(foot).toHaveCSS('position', 'static');
+    expect((await undoSave).ok()).toBeTruthy();
+
+    // A second pin is still a pin, but the session already explained it.
+    // Escape is a no-op at the slide level, so it lands there either way.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await enterPad(page);
+    const again = editor.frame.locator('.pad .foot');
+    await again.click();
+    const secondSave = page.waitForResponse(isDeckSaveResponse);
+    const secondBox = await boxOf(again, 'Footer');
+    await dragFrom(
+      page,
+      { x: secondBox.x + 12, y: secondBox.y + secondBox.height / 2 },
+      { x: 50, y: 30 }
+    );
+    // Positive control: the second drag really pinned the flow child again.
+    await expect(again).toHaveCSS('position', 'absolute');
+    expect((await secondSave).ok()).toBeTruthy();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('rotating a flow child pins the box without showing the notice', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    await expect(foot).toHaveCSS('position', 'static');
+
+    const handle = page.getByTestId('rotate-handle');
+    await expect(handle).toBeVisible();
+    const box = await boxOf(handle, 'Rotate handle');
+    const save = page.waitForResponse(isDeckSaveResponse);
+    await dragFrom(
+      page,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+      { x: 70, y: 30 }
+    );
+
+    // Rotation materializes the box, but only a position or size edit is the
+    // pin the notice explains.
+    await expect(foot).toHaveCSS('position', 'absolute');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('transform: rotate(');
+    expect((await save).ok()).toBeTruthy();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('a text edit dismisses the pin notice instead of undoing the text', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+
+    // A nudge is a position edit: it pins the flow child and shows the notice.
+    const nudgeSave = page.waitForResponse(isDeckSaveResponse);
+    await page.keyboard.press('ArrowRight');
+    expect((await nudgeSave).ok()).toBeTruthy();
+    await expect(page.getByTestId('pin-notice')).toBeVisible();
+    await expect(foot).toHaveCSS('position', 'absolute');
+
+    const heading = editor.frame.locator('.pad .cover h1');
+    await heading.dblclick();
+    await expect(heading).toHaveAttribute('contenteditable', 'true');
+    // The notice's Undo would settle and revert the text edit, so the notice
+    // steps aside; its Undo is not available to touch the text.
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+    await expect(page.getByTestId('pin-notice-undo')).toHaveCount(0);
+
+    await page.keyboard.press('End');
+    await page.keyboard.type('ZZ-text-edit');
+    await expect(heading).toContainText('ZZ-text-edit');
+    const textSave = page.waitForResponse(isDeckSaveResponse);
+    await page.keyboard.press('Escape');
+    await expect(heading).not.toHaveAttribute('contenteditable', 'true');
+    expect((await textSave).ok()).toBeTruthy();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    // Ending the session commits the typed text; no undo reverted it.
+    await expect(heading).toContainText('ZZ-text-edit');
+    const saved = await readFile(join(editor.directory, editor.file), 'utf8');
+    expect(saved).toContain('ZZ-text-edit');
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('drags a grid child without changing the grid parent', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    await page.getByRole('button', { name: ENTER_COVER }).click();
+    await expect(page.getByTestId('edit-context')).toContainText('.cover');
+
+    const cover = editor.frame.locator('.pad .cover');
+    const title = cover.locator('h1');
+    await title.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      '2.0.0'
+    );
+    await expect(cover).toHaveCSS('display', 'grid');
+    expect(await cover.getAttribute('style')).toBeNull();
+
+    const box = await boxOf(title, 'Cover heading');
+    const save = page.waitForResponse(isDeckSaveResponse);
+    await dragFrom(
+      page,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+      { x: 40, y: 30 }
+    );
+    await expect(title).toHaveCSS('position', 'absolute');
+    expect((await save).ok()).toBeTruthy();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // The child is pinned; the grid container's own layout is untouched.
+    await expect(cover).toHaveCSS('display', 'grid');
+    expect(await cover.getAttribute('style')).toBeNull();
+    await expect(cover.locator('p')).toContainText('Body copy');
+  } finally {
+    await close(editor);
+  }
+});
+
+test('Escape during a nested drag cancels the drag and keeps the context', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const context = page.getByTestId('edit-context');
+    const outline = page.getByTestId('selection-outline');
+    const foot = editor.frame.locator('.pad .foot');
+    const box = await boxOf(foot, 'Footer');
+    const start = { x: box.x + 12, y: box.y + box.height / 2 };
+
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 40, start.y + 20, { steps: 5 });
+    // Positive control: the gesture reached the nested child and pinned it
+    // live, so the Escape below cancels a real transform.
+    await expect(outline).toHaveAttribute('data-selected-path', '2.1');
+    await expect(foot).toHaveCSS('position', 'absolute');
+
+    await page.keyboard.press('Escape');
+    await expect(outline).toHaveCount(0);
+    // DE1 deferred this case: the drag owns Escape, not the breadcrumb.
+    await expect(context).toContainText('.pad');
+    await page.mouse.up();
+    await expect(page.getByTestId('pin-notice')).toHaveCount(0);
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    // The cancelled gesture never reached the deck: the flow child is back.
+    await expect(foot).toHaveCSS('position', 'static');
+    expect(await foot.getAttribute('style')).toBeNull();
+    await expect(context).toContainText('.pad');
+    await expect(page.getByTestId('object-row')).toHaveCount(2);
   } finally {
     await close(editor);
   }
