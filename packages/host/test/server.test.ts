@@ -272,22 +272,26 @@ function rawGet(
 
 let context: Context | undefined;
 
-async function setup(): Promise<Context> {
+async function setup(
+  options: { withEditorHtml?: boolean } = {}
+): Promise<Context> {
   const dir = await makeTempDir('htmlppt-host-');
   let host: Awaited<ReturnType<typeof startHost>> | undefined;
   try {
     const editorDir = join(dir, 'editor');
     await mkdir(editorDir);
-    await writeFile(
-      join(editorDir, 'index.html'),
-      '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
-      'utf8'
-    );
-    await writeFile(
-      join(editorDir, 'app.js'),
-      'console.log("editor shell");',
-      'utf8'
-    );
+    if (options.withEditorHtml !== false) {
+      await writeFile(
+        join(editorDir, 'index.html'),
+        '<!doctype html><title>Editor</title><div id="root">editor-shell</div>',
+        'utf8'
+      );
+      await writeFile(
+        join(editorDir, 'app.js'),
+        'console.log("editor shell");',
+        'utf8'
+      );
+    }
     const deckPath = await copyFixture('basic.deck.html', dir);
     const deckHtml = await readFile(deckPath, 'utf8');
     const token = randomUUID();
@@ -318,11 +322,17 @@ async function setup(): Promise<Context> {
   }
 }
 
+function expectedSessionCookie(token: string): string {
+  return `htmlppt_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`;
+}
+
 async function bootstrapCookie(ctx: Context): Promise<string> {
   const response = await fetch(ctx.host.url, { redirect: 'manual' });
   expect(response.status).toBe(302);
-  const setCookie = response.headers.get('set-cookie') ?? '';
-  return setCookie.split(';')[0] ?? '';
+  const setCookies = response.headers.getSetCookie();
+  expect(setCookies).toHaveLength(1);
+  expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
+  return setCookies[0]?.split(';')[0] ?? '';
 }
 
 async function addDeck(
@@ -390,18 +400,12 @@ describe('host', () => {
     const page = await fetch(ctx.host.url, { redirect: 'manual' });
     expect(page.status).toBe(302);
     expect(page.headers.get('location')).toBe(friendlyPath);
-    const setCookie = page.headers.get('set-cookie') ?? '';
-    expect(setCookie).toContain(
-      `htmlppt_token=${encodeURIComponent(ctx.token)}`
-    );
-    expect(setCookie.toLowerCase()).toContain('httponly');
-    expect(setCookie).toContain('SameSite=Strict');
-    expect(setCookie).toContain('Path=/');
-    expect(setCookie.toLowerCase()).not.toContain('max-age');
-    expect(setCookie.toLowerCase()).not.toContain('expires');
+    const setCookies = page.headers.getSetCookie();
+    expect(setCookies).toHaveLength(1);
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
 
     const friendly = await fetch(`${ctx.base}${friendlyPath}`, {
-      headers: { cookie: setCookie.split(';')[0] ?? '' }
+      headers: { cookie: setCookies[0]?.split(';')[0] ?? '' }
     });
     expect(friendly.status).toBe(200);
     expect(await friendly.text()).toContain('editor-shell');
@@ -437,7 +441,10 @@ describe('host', () => {
   it('serves the page and assets with the session cookie', async () => {
     const ctx = await setup();
     const page = await fetch(ctx.host.url, { redirect: 'manual' });
-    const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const bootCookies = page.headers.getSetCookie();
+    expect(bootCookies).toHaveLength(1);
+    expect(bootCookies[0]).toBe(expectedSessionCookie(ctx.token));
+    const cookie = bootCookies[0]?.split(';')[0] ?? '';
     expect(cookie).toBe(`htmlppt_token=${encodeURIComponent(ctx.token)}`);
 
     const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
@@ -447,11 +454,17 @@ describe('host', () => {
     });
     expect(rootWithCookie.status).toBe(302);
     expect(rootWithCookie.headers.get('location')).toBe(friendlyPath);
+    const rootCookies = rootWithCookie.headers.getSetCookie();
+    expect(rootCookies).toHaveLength(1);
+    expect(rootCookies[0]).toBe(expectedSessionCookie(ctx.token));
 
     const withCookie = await fetch(`${ctx.base}${friendlyPath}`, {
       headers: { cookie }
     });
     expect(withCookie.status).toBe(200);
+    const pageCookies = withCookie.headers.getSetCookie();
+    expect(pageCookies).toHaveLength(1);
+    expect(pageCookies[0]).toBe(expectedSessionCookie(ctx.token));
     expect(await withCookie.text()).toContain('editor-shell');
 
     const asset = await fetch(`${ctx.base}/app.js`, {
@@ -464,6 +477,35 @@ describe('host', () => {
       `${ctx.base}/app.js?token=${encodeURIComponent(ctx.token)}`
     );
     expect(queryAsset.status).toBe(200);
+  });
+
+  it('does not renew the cookie for assets and 404 responses', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const token = encodeURIComponent(ctx.token);
+
+    const tokenizedAsset = await fetch(`${ctx.base}/app.js?token=${token}`);
+    expect(tokenizedAsset.status).toBe(200);
+    expect(tokenizedAsset.headers.get('set-cookie')).toBeNull();
+
+    const cookieAsset = await fetch(`${ctx.base}/app.js`, {
+      headers: { cookie }
+    });
+    expect(cookieAsset.status).toBe(200);
+    expect(cookieAsset.headers.get('set-cookie')).toBeNull();
+
+    const tokenizedMiss = await fetch(
+      `${ctx.base}/d/other.html?token=${token}`,
+      { redirect: 'manual' }
+    );
+    expect(tokenizedMiss.status).toBe(404);
+    expect(tokenizedMiss.headers.get('set-cookie')).toBeNull();
+
+    const bareDeckMiss = await fetch(`${ctx.base}/d?token=${token}`, {
+      redirect: 'manual'
+    });
+    expect(bareDeckMiss.status).toBe(404);
+    expect(bareDeckMiss.headers.get('set-cookie')).toBeNull();
   });
 
   it('requires auth for the friendly deck route', async () => {
@@ -515,7 +557,10 @@ describe('host', () => {
       expect(root.headers.get('location')).toBe(
         `/d/${encodeURIComponent(name)}`
       );
-      const cookie = (root.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+      const rootCookies = root.headers.getSetCookie();
+      expect(rootCookies).toHaveLength(1);
+      expect(rootCookies[0]).toBe(expectedSessionCookie(token));
+      const cookie = rootCookies[0]?.split(';')[0] ?? '';
       const page = await fetch(`${base}${root.headers.get('location')}`, {
         headers: { cookie }
       });
@@ -538,9 +583,67 @@ describe('host', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(path);
-    expect(response.headers.get('set-cookie')).toContain(
-      `htmlppt_token=${encodeURIComponent(ctx.token)}`
+    const setCookies = response.headers.getSetCookie();
+    expect(setCookies).toHaveLength(1);
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
+  });
+
+  it('renews the cookie on the root redirect with a cookie-only request', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const friendlyPath = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+
+    const root = await fetch(`${ctx.base}/`, {
+      headers: { cookie },
+      redirect: 'manual'
+    });
+
+    expect(root.status).toBe(302);
+    expect(root.headers.get('location')).toBe(friendlyPath);
+    const setCookies = root.headers.getSetCookie();
+    expect(setCookies).toHaveLength(1);
+    expect(setCookies[0]).toBe(expectedSessionCookie(ctx.token));
+  });
+
+  it('returns 500 without a cookie when the editor HTML cannot be read', async () => {
+    const ctx = await setup({ withEditorHtml: false });
+    const cookie = await bootstrapCookie(ctx);
+    const path = `/d/${encodeURIComponent(basename(ctx.deckPath))}`;
+
+    // Hono logs the expected ENOENT through console.error by default.
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await fetch(`${ctx.base}${path}`, {
+        headers: { cookie },
+        redirect: 'manual'
+      });
+
+      expect(response.status).toBe(500);
+      expect(response.headers.get('set-cookie')).toBeNull();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('renews the cookie on document navigations only', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+
+    const page = await fetch(
+      `${ctx.base}/d/${encodeURIComponent(basename(ctx.deckPath))}`,
+      {
+        headers: { cookie },
+        redirect: 'manual'
+      }
     );
+    expect(page.status).toBe(200);
+    const pageCookies = page.headers.getSetCookie();
+    expect(pageCookies).toHaveLength(1);
+    expect(pageCookies[0]).toBe(expectedSessionCookie(ctx.token));
+
+    const api = await fetch(`${ctx.base}/api/deck`, { headers: { cookie } });
+    expect(api.status).toBe(200);
+    expect(api.headers.get('set-cookie')).toBeNull();
   });
 
   it('preserves non-token query parameters when redirecting', async () => {

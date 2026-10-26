@@ -177,9 +177,12 @@ PDF and PNG export launch a system Chrome, Edge, or Chromium; set
 `HTMLPPT_CHROMIUM` to an executable path when auto-discovery fails. `--out` is
 a file for `html`/`pdf` and a directory for `png`.
 
-`open` reuses a live editor for the same deck and prints its URL again. If a
-recorded host is alive but not answering health checks, `open` refuses to start
-a second host and exits 1; retry or stop the recorded session first.
+`open` reuses a live editor for the same deck and prints its URL again. A new
+host reuses the deck's recorded token and port, so the tokenized URL stays valid
+across a restart until `htmlppt stop` rotates the token; an explicit `--port`
+wins, and `--port 0` forces a fresh ephemeral port instead of the recorded one.
+If a recorded host is alive but not answering health checks, `open` refuses to
+start a second host and exits 1; retry or stop the recorded session first.
 
 `stop --all` prunes registry entries whose recorded process has exited. When it
 cleans only stale entries it prints `Removed <n> stale editor session(s).` and

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { constants, type Dirent } from 'node:fs';
-import { access, mkdir, readFile, readdir, realpath } from 'node:fs/promises';
-import { join, parse, resolve } from 'node:path';
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  realpath
+} from 'node:fs/promises';
+import { isAbsolute, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createDeckHtml,
@@ -20,13 +26,18 @@ import {
   writeDeckFileAtomic
 } from '@htmlppt/core/node';
 import {
+  canonicalCredentialFile,
   canonicalDeckPath,
   listSessions,
+  readCredential,
+  removeCredential,
   removeSessionIfUnchanged,
+  rotateCredential,
   sameDeckPath,
   sessionKey,
   sessionsDirectory,
   startHost,
+  writeCredential,
   writeSession,
   type SessionEntry
 } from '@htmlppt/host';
@@ -210,6 +221,82 @@ async function waitForProcessExit(
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Rotates the credential of a deck whose host is gone. A capability token must
+ * not outlive the host it belongs to, so a failed rotation discards the stored
+ * credential instead of leaving a token nobody can use. The recorded port is
+ * kept only when the write succeeds; after a discard the next `open` starts on
+ * a new port with a new token.
+ */
+async function rotateStoppedCredential(
+  filePath: string,
+  port: number,
+  io: CliIO
+): Promise<void> {
+  try {
+    await rotateCredential(filePath, port);
+    return;
+  } catch (rotateError) {
+    try {
+      await removeCredential(filePath);
+    } catch (removeError) {
+      const target = await canonicalCredentialFile(filePath);
+      io.stderr(
+        `Could not rotate the credential for ${filePath}: ${errorMessage(rotateError)}. The stored credential could not be removed: ${errorMessage(removeError)}. Delete ${target} to discard the old token.`
+      );
+      return;
+    }
+    io.stderr(
+      `Could not rotate the credential for ${filePath}: ${errorMessage(rotateError)}. The stored token was discarded, so the next open will use a new port and token.`
+    );
+  }
+}
+
+interface ListedEntry {
+  path: string;
+  port: number;
+}
+
+/**
+ * Reads the registry files named by `registrySessionNames` before
+ * `listSessions` prunes stale entries, so `stop --all` can still rotate the
+ * credential of a dead session it cleans. Malformed entries are skipped: they
+ * carry no deck identity to rotate.
+ */
+async function readListedEntries(names: string[]): Promise<ListedEntry[]> {
+  const entries: ListedEntry[] = [];
+  for (const name of names) {
+    let value: unknown;
+    try {
+      value = JSON.parse(
+        await readFile(join(sessionsDirectory(), name), 'utf8')
+      );
+    } catch {
+      continue;
+    }
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    const { path: deckPath, port } = value as Record<string, unknown>;
+    if (
+      typeof deckPath !== 'string' ||
+      !isAbsolute(deckPath) ||
+      typeof port !== 'number' ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535
+    ) {
+      continue;
+    }
+    entries.push({ path: deckPath, port });
+  }
+  return entries;
+}
+
 async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   const sessionFile = join(
     sessionsDirectory(),
@@ -258,6 +345,10 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   }
 
   await removeSessionIfUnchanged(sessionFile, snapshot);
+  // The capability token must not outlive the host it belongs to, while the
+  // recorded port stays stable so the deck keeps its address. The host is
+  // already gone, so a failed write warns instead of failing the stop.
+  await rotateStoppedCredential(session.path, session.port, io);
   io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
   return true;
 }
@@ -511,10 +602,13 @@ export async function runCli(
   program
     .command('open <file>')
     .description('Open the visual editor for a deck')
-    .option('--port <port>', 'port to listen on', '0')
+    .option('--port <port>', 'port to listen on')
     .option('--no-browser', 'do not open a browser')
-    .action(async (file: string, options: { port: string; browser: boolean }) => {
-      if (!/^\d+$/.test(options.port) || Number(options.port) > 65_535) {
+    .action(async (file: string, options: { port?: string; browser: boolean }) => {
+      if (
+        options.port !== undefined &&
+        (!/^\d+$/.test(options.port) || Number(options.port) > 65_535)
+      ) {
         throw new Error(
           'Invalid --port. Use an integer between 0 and 65535.'
         );
@@ -528,6 +622,28 @@ export async function runCli(
       const existing = await findLiveSession(filePath);
       if (existing) {
         const url = sessionUrl(existing);
+        // Decks opened before the credential store existed still deserve a
+        // stable bookmark. A stale credential is worse than none: after a
+        // crash the stored identity would start a host the live one never
+        // served, so rewrite it to the host that is actually answering.
+        const stored = await readCredential(filePath);
+        if (
+          stored === null ||
+          stored.token !== existing.token ||
+          stored.port !== existing.port
+        ) {
+          const now = new Date().toISOString();
+          await writeCredential(filePath, {
+            token: existing.token,
+            port: existing.port,
+            createdAt: stored?.createdAt ?? now,
+            updatedAt: now
+          }).catch((error: unknown) => {
+            io.stderr(
+              `Could not record the deck credential: ${errorMessage(error)}. The editor still works; a later restart may reuse a stale URL.`
+            );
+          });
+        }
         io.stdout(`HTMLPPT_URL=${url}`);
         if (options.browser) {
           await openBrowser(url, io);
@@ -544,12 +660,22 @@ export async function runCli(
       }
 
       const directory = await editorDir();
-      const token = randomUUID();
+      const credential = await readCredential(filePath);
+      const token = credential?.token ?? randomUUID();
+      // Only an explicit --port overrides the recorded address; `--port 0`
+      // still asks the OS for a fresh ephemeral port.
+      const requestedPort =
+        options.port === undefined ? undefined : Number(options.port);
+      const stickyPort = requestedPort ?? credential?.port ?? 0;
+      let deckSwitched = false;
       const moveSession = async (event: {
         previousPath: string;
         path: string;
         revision: string;
       }): Promise<void> => {
+        deckSwitched = true;
+        const previousPath = entry.path;
+        const sameDeck = await sameDeckPath(previousPath, event.path);
         const nextEntry: SessionEntry = {
           ...entry,
           path: event.path,
@@ -571,22 +697,63 @@ export async function runCli(
         entry = nextEntry;
         sessionFile = nextFile;
         sessionSnapshot = nextSnapshot;
+        // The host keeps its token and port across a switch, so its credential
+        // follows the deck it now serves. The previous deck must not keep a
+        // token this host still accepts.
+        const now = new Date().toISOString();
+        const nextCredential = await readCredential(event.path);
+        await writeCredential(event.path, {
+          token: nextEntry.token,
+          port: nextEntry.port,
+          createdAt: nextCredential?.createdAt ?? now,
+          updatedAt: now
+        }).catch((error: unknown) => {
+          io.stderr(
+            `Could not record the deck credential: ${errorMessage(error)}. The editor still works; a later restart may print a new URL.`
+          );
+        });
+        if (!sameDeck) {
+          await removeCredential(previousPath).catch((error: unknown) => {
+            io.stderr(
+              `Could not discard the stored credential for ${previousPath}: ${errorMessage(error)}. That deck may reuse this host's token on its next open.`
+            );
+          });
+        }
         io.stdout(`HTMLPPT_URL=${sessionUrl(entry)}`);
       };
-      let host: Awaited<ReturnType<typeof startHost>>;
-      try {
-        host = await startHost({
+      const start = (port: number) =>
+        startHost({
           filePath,
           token,
           editorDir: directory,
-          port: Number(options.port),
+          port,
           onDeckOpened: moveSession
         });
+      let attemptedPort = stickyPort;
+      let host: Awaited<ReturnType<typeof startHost>>;
+      try {
+        try {
+          host = await start(stickyPort);
+        } catch (error) {
+          if (
+            requestedPort === undefined &&
+            credential !== null &&
+            (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
+          ) {
+            io.stderr(
+              `Port ${stickyPort} is in use; starting ${file} on a new port. Existing bookmarks for this deck will stop working.`
+            );
+            attemptedPort = 0;
+            host = await start(0);
+          } else {
+            throw error;
+          }
+        }
       } catch (error) {
         const message = formatHostStartError(
           error,
           filePath,
-          Number(options.port),
+          attemptedPort,
           file
         );
         if (message === null) {
@@ -617,6 +784,30 @@ export async function runCli(
         throw error;
       }
       let sessionSnapshot = `${JSON.stringify(entry, null, 2)}\n`;
+
+      // Record the binding before announcing it so the printed URL is always
+      // the one the next open will reuse. A switch during startup already
+      // moved the registry and wrote the new deck's credential, so an entry
+      // that no longer names `filePath` must not resurrect the old one.
+      if (!deckSwitched && entry.path === filePath) {
+        await writeCredential(filePath, {
+          token,
+          port: host.port,
+          createdAt: credential?.createdAt ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }).catch((error: unknown) => {
+          io.stderr(
+            `Could not record the deck credential: ${errorMessage(error)}. The editor still works; the next open will print a new URL.`
+          );
+        });
+        // The switch may have removed the old credential while this write was
+        // in flight; repeat the discard so the old deck cannot keep the token.
+        // A switch back to this same deck (under any spelling) already wrote
+        // the fresh credential, so only keep it when the entry still names it.
+        if (deckSwitched && !(await sameDeckPath(entry.path, filePath))) {
+          await removeCredential(filePath).catch(() => undefined);
+        }
+      }
 
       io.stdout(`HTMLPPT_URL=${host.url}`);
 
@@ -666,6 +857,7 @@ export async function runCli(
           exitCode = 1;
           return;
         }
+        const listedEntries = await readListedEntries(registrySnapshot);
         const sessions = await listSessions();
         if (sessions.length === 0) {
           if (registrySnapshot.length === 0) {
@@ -693,6 +885,11 @@ export async function runCli(
             exitCode = 1;
             return;
           }
+          // The prune only removed dead sessions. Their hosts are gone, so
+          // every listed credential gets the same rotation a normal stop does.
+          for (const entry of listedEntries) {
+            await rotateStoppedCredential(entry.path, entry.port, io);
+          }
           io.stdout(
             `Removed ${registrySnapshot.length} stale editor session(s).`
           );
@@ -707,7 +904,9 @@ export async function runCli(
             const entryState = await sessionFileState(session.path);
             if (entryState === 'missing') {
               // The health check definitively proved the entry stale and
-              // already removed it; there is no live host left to fail.
+              // already removed it; there is no live host left to fail. Its
+              // credential must not outlive that host either.
+              await rotateStoppedCredential(session.path, session.port, io);
               cleaned += 1;
               io.stdout(`Removed stale editor session for ${session.path}.`);
               continue;
@@ -730,6 +929,23 @@ export async function runCli(
           } else {
             failed += 1;
           }
+        }
+        // listSessions pruned dead-pid entries before the loop, so their
+        // credentials never reached stopSession. Rotate every snapshotted
+        // entry the loop did not already handle; entries that alias a live
+        // session were handled (or deliberately left) with that session.
+        for (const listed of listedEntries) {
+          let handled = false;
+          for (const session of sessions) {
+            if (await sameDeckPath(listed.path, session.path)) {
+              handled = true;
+              break;
+            }
+          }
+          if (handled) {
+            continue;
+          }
+          await rotateStoppedCredential(listed.path, listed.port, io);
         }
         if (stopped === 0 && cleaned === 0) {
           io.stderr('No live editor sessions were stopped.');

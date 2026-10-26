@@ -115,7 +115,7 @@ CLI failures print a message to stderr and exit 1.
 | `Refusing to overwrite <file>. Pass --force to replace it.` | `new` found an existing file. Choose another name or pass `--force`. |
 | `Invalid --size. Use positive WIDTHxHEIGHT, for example 1600x900.` | Fix the `--size` value. |
 | `Invalid --slides. Use a positive integer up to 1000.` | Fix the `--slides` value. |
-| `Port <port> is already in use. Omit --port or choose another.` | Another process owns the port. Omit `--port` for a random port. |
+| `Port <port> is already in use. Omit --port or choose another.` | Another process owns the port. Omit `--port` to let `open` retry the deck's recorded port and fall back to an ephemeral one, or choose another port. |
 | `Editor build not found. Run "npm run build" first.` | `packages/editor/dist` is missing. Build the workspace. |
 | `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but failed the health check (timeout/5xx). Do not start a second host; retry or stop the recorded one. |
 | `No live editor session for <file>. Start one with "htmlppt open <file>".` | `stop` found nothing to stop for that deck. |

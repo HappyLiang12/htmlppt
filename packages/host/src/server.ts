@@ -69,6 +69,7 @@ const WATCH_INTERVAL_MS = 50;
 const WATCH_DEBOUNCE_MS = 100;
 const HEARTBEAT_MS = 15_000;
 const TOKEN_COOKIE = 'htmlppt_token';
+const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const DECK_BODY_LIMIT = 16 * 1024 * 1024;
 const EXPORT_BODY_LIMIT = 64 * 1024;
 const encoder = new TextEncoder();
@@ -109,7 +110,7 @@ function readCookie(header: string | undefined, name: string): string | null {
 }
 
 function tokenCookie(token: string): string {
-  return `${TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`;
+  return `${TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_SECONDS}`;
 }
 
 function friendlyDeckPath(filePath: string): string {
@@ -912,14 +913,12 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
         401
       );
     }
-    if (queryToken === options.token) {
-      c.header('Set-Cookie', tokenCookie(options.token));
-    }
     await next();
   });
 
   app.get('/', (c) => {
     const url = new URL(c.req.url);
+    c.header('Set-Cookie', tokenCookie(options.token));
     return c.redirect(
       `${friendlyDeckPath(filePath)}${queryWithoutToken(url)}`,
       302
@@ -932,9 +931,12 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
       return c.notFound();
     }
     if (url.searchParams.has('token')) {
+      c.header('Set-Cookie', tokenCookie(options.token));
       return c.redirect(`${url.pathname}${queryWithoutToken(url)}`, 302);
     }
-    return c.html(await renderEditor());
+    const html = await renderEditor();
+    c.header('Set-Cookie', tokenCookie(options.token));
+    return c.html(html);
   });
 
   app.get('/d', (c) => c.notFound());

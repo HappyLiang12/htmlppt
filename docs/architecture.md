@@ -12,10 +12,10 @@ is the integration point: every package reads or writes the same
 | `@htmlppt/core` | Contract engine: slide detection, canvas and outline reads, validation, normalization, mutations (slides, objects, notes, transitions, backgrounds), tables, charts, images, rich-text helpers, insert helpers, template generation, and serialization. Runs in the browser and in Node; the `@htmlppt/core/node` subpath adds Linkedom parsing, hashing, and atomic file reads/writes. No HTTP or host code. |
 | `@htmlppt/runtime` | Dependency-free vanilla JavaScript presentation runtime exported as `RUNTIME_SOURCE`. Handles navigation, hash routing, fullscreen, transitions, print, and the standalone presenter window. |
 | `@htmlppt/editor` | React 19 + Vite browser app. Owns the inert master `Document`, the sandboxed preview iframe, selection/geometry, object and text commands, history, inspector, slide rail/sorter, autosave/live sync, IndexedDB crash drafts, the standalone upload/download fallback, play mode, presenter view, and the export menu. |
-| `@htmlppt/host` | Hono server bound to `127.0.0.1`. Authenticates the session, serves the editor, exposes deck read/write/SSE/export APIs, serializes saves and exports, enforces request-size limits, watches the file, and manages the session registry. |
+| `@htmlppt/host` | Hono server bound to `127.0.0.1`. Authenticates the session, serves the editor, exposes deck read/write/SSE/export APIs, serializes saves and exports, enforces request-size limits, watches the file, and manages the session registry and the per-deck credential store. |
 | `@htmlppt/renderer` | Headless system-Chromium rendering through `playwright-core`: PDF (one page per slide, exact page boxes) and PNG (one file per slide at 2× scale). Includes browser discovery and the renderer sandbox. |
 | `@htmlppt/mcp` | Stdio MCP server built on the official SDK and Zod. Registers 25 tools and 3 resources, resolves targets, maps domain errors, and chooses direct or host-attached storage per deck. |
-| `@htmlppt/cli` | Commander command surface: `new`, `validate`, `export`, `outline`, `open`, `stop`, `mcp`. Starts/reuses hosts, writes the session registry, resolves the packaged or workspace editor build, refuses export over the source path, and prints URLs and diagnostics. |
+| `@htmlppt/cli` | Commander command surface: `new`, `validate`, `export`, `outline`, `open`, `stop`, `mcp`. Starts/reuses hosts, prefers the stored port and token, writes the session registry and the credential store, resolves the packaged or workspace editor build, refuses export over the source path, and prints URLs and diagnostics. |
 | `htmlppt` | Publishable bundle. tsup bundles the CLI and MCP entrypoints plus workspace libraries, keeps `playwright-core` external, and copies the built editor and `skills/htmlppt` into `dist/`. Bins: `htmlppt` and `htmlppt-mcp`. |
 | `@htmlppt/test-utils` | Shared test helpers and fixtures. |
 
@@ -47,9 +47,19 @@ agent (MCP / CLI)                    human (browser)
    document, normalizes it, applies one mutation, validates the whole result,
    and serializes it; the calling host/CLI/MCP layer writes it atomically. The
    new file hash becomes the revision.
-2. **Open.** `htmlppt open` or MCP `open_editor` starts a host, generates a
-   session token, records `{ path, port, token, pid, startedAt, revision }` in
-   `~/.htmlppt/sessions/<sha256(path)>.json`, and prints an authenticated URL.
+2. **Open.** `htmlppt open` or MCP `open_editor` starts a host and records
+   `{ path, port, token, pid, startedAt, revision }` in
+   `~/.htmlppt/sessions/<sha256(path)>.json`, then prints an authenticated URL.
+   The host layer also keeps a per-deck credential at
+   `~/.htmlppt/decks/<sha256(canonical path)>.json` holding
+   `{ token, port, createdAt, updatedAt }` (directory `0700`, file `0600` best
+   effort). `open` prefers that stored port and token, so a tokenized URL
+   remains valid across a crash/restart; a deck switch moves the credential to
+   the new deck and discards the previous one. `stop` rotates the token and
+   keeps the port, discarding the credential when possible if the rotation
+   write fails. The first tokenized visit sets the HttpOnly,
+   `SameSite=Strict` session cookie with a 30-day `Max-Age`; successful page
+   responses renew it.
 3. **Edit.** The editor fetches `/api/deck`, parses an inert master document,
    and renders the active slide into a sandboxed iframe. Human edits update
    either the iframe (gestures, inline text) or the master (inspector, slide

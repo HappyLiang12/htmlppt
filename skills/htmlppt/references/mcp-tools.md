@@ -300,9 +300,13 @@ Arguments: `{ path, port?, open? }`.
 
 Starts a detached local editor host for an existing deck and returns
 `{ path, url }`. `url` is a tokenized loopback URL such as
-`http://127.0.0.1:53211/?token=...`. `port` defaults to a random port; `open`
-(default false) controls whether a browser is launched. The host binds to
-127.0.0.1 and permits only the opened deck, its export, and editor assets.
+`http://127.0.0.1:53211/?token=...`. `port` defaults to the port recorded for
+the deck, or an operating-system-assigned port when none is recorded; an
+explicit `port` wins. The token is recorded per deck and reused by later opens
+until `htmlppt stop` rotates it, so the tokenized URL keeps working across a
+host restart. `open` (default false) controls whether a browser is launched.
+The host binds to 127.0.0.1 and permits only the opened deck, its export, and
+editor assets.
 
 Reuses an existing session only when its authenticated health endpoint answers;
 a live PID with a dead port is treated as stale. Fails with

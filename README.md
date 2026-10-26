@@ -18,8 +18,8 @@ source of truth.
 - **One portable file.** Slides are ordinary DOM elements and styles are
   ordinary CSS. A deck opens in a browser, an editor, or any HTML tool without
   an import/export round trip.
-- **Local by design.** The editor host binds to `127.0.0.1`, requires a
-  per-session token, and has no cloud service, account, or telemetry.
+- **Local by design.** The editor host binds to `127.0.0.1`, requires a local
+  capability token, and has no cloud service, account, or telemetry.
 
 ## Quick start
 
@@ -39,17 +39,20 @@ it. `--size 1600x900` sets the canvas. `open` prints
 `HTMLPPT_URL=http://127.0.0.1:<port>/?token=...` and opens your browser;
 `--no-browser` prints the URL only.
 
-The printed URL carries the session token once. The browser exchanges it for an
-HttpOnly session cookie and lands on
-`http://127.0.0.1:<port>/d/<deck-file-name>`, which is safe to keep in history
-for that session. CLI and MCP output still print the tokenized bootstrap URL for
-automation.
+The printed URL carries the session token once. `open` reuses the token and
+port recorded for the deck, so that tokenized URL stays bookmarkable while the
+host runs; `htmlppt stop` rotates the token. The browser exchanges the token for
+an HttpOnly, `SameSite=Strict` session cookie with a 30-day `Max-Age` and lands
+on `http://127.0.0.1:<port>/d/<deck-file-name>`, so the browser stays signed in
+for that deck even after the token leaves the address bar. CLI and MCP output
+still print the tokenized bootstrap URL for automation.
 
 Inside the editor, type a path into the path field and press Enter to switch
 this host to another HTML deck. Relative paths resolve against the host's
 working directory, quoted paths (`"deck.html"`) and `~` home paths are accepted,
-and `file://` URLs work too. A successful switch keeps the host, its token, and
-its session; the address bar becomes `/d/<new-deck-name>` and saves go to the
+and `file://` URLs work too. A successful switch keeps the host and its token;
+the credential moves to the new deck and the previous deck's credential is
+discarded, the address bar becomes `/d/<new-deck-name>`, and saves go to the
 new file. Use the folder button to pick a file through the standalone editor
 instead, which writes through the File System Access handle.
 
@@ -209,11 +212,13 @@ the deck directory.
 
 ## Security model
 
-- The editor host binds to `127.0.0.1` only and uses a random per-session token.
-  The tokenized first visit sets an HttpOnly `SameSite=Strict` cookie; page and
-  API requests accept that cookie, while CLI, MCP, and tests may continue to use
-  `Authorization: Bearer`. When an `Origin` header is present it must be this
-  host's loopback origin.
+- The editor host binds to `127.0.0.1` only. A per-deck capability token is
+  recorded in a local credential store and reused by `open` until `htmlppt
+  stop` rotates it. The tokenized first visit sets an HttpOnly
+  `SameSite=Strict` cookie with a 30-day `Max-Age`; page and API requests accept
+  that cookie, while CLI, MCP, and tests may continue to use `Authorization:
+  Bearer`. When an `Origin` header is present it must be this host's loopback
+  origin.
 - Deck scripts never execute in the editor. The preview, thumbnails, sorter,
   and play view use `sandbox="allow-same-origin"` without `allow-scripts`.
 - The renderer disables JavaScript, blocks service workers and downloads, and

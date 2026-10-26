@@ -19,8 +19,13 @@ npx htmlppt export deck.html --format pdf
 npx htmlppt export deck.html --format png --out dist/png
 ```
 
-`htmlppt open` starts a local editor on `127.0.0.1` with a random port and a
-per-session token. Add `--no-browser` to only print the URL. The editor's
+`htmlppt open` starts a local editor on `127.0.0.1` with a capability token
+recorded for that deck. Later `open` calls for the same deck reuse the recorded
+port and token, so the printed tokenized URL keeps working across a host
+restart; `htmlppt stop` rotates the token. The first tokenized visit exchanges
+the token for an HttpOnly, `SameSite=Strict` session cookie with a 30-day
+`Max-Age`, so the browser stays signed in to that deck. Add `--no-browser` to
+only print the URL. The editor's
 Export menu writes HTML, PDF, or PNG next to the deck; unsaved edits are also
 mirrored to IndexedDB so a crash can offer recovery. Without a host, the editor
 falls back to upload/download mode. PDF and PNG export use a locally installed
