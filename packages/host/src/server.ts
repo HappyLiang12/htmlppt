@@ -117,7 +117,12 @@ function friendlyDeckPath(filePath: string): string {
   return `/d/${encodeURIComponent(path.basename(filePath))}`;
 }
 
-function escapeHtml(value: string): string {
+/**
+ * Escapes a deck name for the unauthorized HTML page so a file name cannot
+ * inject markup. The ampersand runs first, otherwise it would re-escape the
+ * entity references the later replacements introduce.
+ */
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
