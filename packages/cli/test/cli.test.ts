@@ -1106,6 +1106,62 @@ async function stubbornHost(): Promise<StubbornHost> {
   return { pid, port, kill: () => child.kill('SIGKILL') };
 }
 
+interface BrokenShellHost {
+  pid: number;
+  port: number;
+  kill: () => void;
+}
+
+/**
+ * A live host that answers the token-authenticated health check for its deck
+ * but answers the editor shell with a server error, like a host whose build
+ * was moved or deleted after it started. The process exits on SIGTERM, so
+ * `stop` can prove it reached the pid that health recorded.
+ */
+async function brokenShellHost(): Promise<BrokenShellHost> {
+  const script = `
+    const http = require('node:http');
+    const server = http.createServer((request, response) => {
+      if (
+        request.url === '/api/health' &&
+        request.headers.authorization === 'Bearer stale-token'
+      ) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      response.writeHead(500, { 'content-type': 'text/plain' });
+      response.end('editor build missing');
+    });
+    server.listen(0, '127.0.0.1', () => {
+      process.stdout.write('PORT=' + server.address().port + '\\n');
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', script], {
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('The broken-shell host did not expose a pid.');
+  }
+  child.stdout?.setEncoding('utf8');
+  const port = await new Promise<number>((resolve, reject) => {
+    let buffer = '';
+    child.stdout?.on('data', (chunk: string) => {
+      buffer += chunk;
+      const match = /PORT=(\d+)\r?\n/.exec(buffer);
+      if (match && match[1] !== undefined) {
+        resolve(Number(match[1]));
+      }
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      reject(new Error(`The broken-shell host exited early with code ${code}.`));
+    });
+  });
+  return { pid, port, kill: () => child.kill('SIGKILL') };
+}
+
 interface StaleSessionOptions {
   pid: number;
   port: number;
@@ -1948,6 +2004,100 @@ describe('htmlppt cli as a real process', () => {
       ).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       open.kill();
+    }
+  });
+
+  it('stops a live host whose editor shell is broken', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const host = await brokenShellHost();
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      // Positive control: the entry is only reachable because this pid is
+      // alive and answering health.
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stderr).not.toContain('No live editor session');
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      // A broken editor build does not make the process unreachable: the stop
+      // must signal the pid health proved and never leave a live host behind.
+      expect(() => process.kill(host.pid, 0)).toThrow();
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+        createdAt: string;
+      };
+      expect(rotated.port).toBe(host.port);
+      expect(rotated.token).not.toBe('stale-token');
+      expect(rotated.createdAt).toBe(persistedAt);
+    } finally {
+      host.kill();
+    }
+  });
+
+  it('stops every broken-shell host with --all and rotates its token', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const host = await brokenShellHost();
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+
+      const stop = await runCliProcess(['stop', '--all'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stderr).not.toContain('No live editor sessions were stopped.');
+      await expect(
+        readFile(sessionFilePath(workspace, deckPath), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => process.kill(host.pid, 0)).toThrow();
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+        createdAt: string;
+      };
+      expect(rotated.port).toBe(host.port);
+      expect(rotated.token).not.toBe('stale-token');
+      expect(rotated.createdAt).toBe(persistedAt);
+    } finally {
+      host.kill();
     }
   });
 

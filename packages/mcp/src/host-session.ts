@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  TOKEN_COOKIE,
   canonicalDeckPath,
   listSessions,
   readSession,
@@ -14,12 +15,11 @@ import { isAbortError } from './abort.js';
 
 export const HEALTH_TIMEOUT_MS = 1_000;
 
-// The host exchanges the tokenized bootstrap URL for this HttpOnly cookie on
-// the document redirect. fetch has no cookie jar, so the shell probe carries
-// the same capability secret in both forms to stay authorized across the 302.
-const TOKEN_COOKIE = 'htmlppt_token';
-
-export type HealthStatus = 'healthy' | 'unhealthy' | 'unknown';
+export type HealthStatus =
+  | 'healthy'
+  | 'stale-build'
+  | 'unhealthy'
+  | 'unknown';
 
 interface CheckedSession {
   entry: SessionEntry;
@@ -33,22 +33,24 @@ export interface RegisteredSessionCheck {
 }
 
 /**
- * Finds the host serving a deck, if any. Registry entries keep the spelling
- * the writer used: on Windows, short (8.3) and long paths name the same file
- * but produce different session keys. The caller's spelling is tried first;
- * otherwise the registry is scanned and entries are compared by realpath.
+ * Finds a host that can serve the editor for a deck, if any. Registry entries
+ * keep the spelling the writer used: on Windows, short (8.3) and long paths
+ * name the same file but produce different session keys. The caller's
+ * spelling is tried first; otherwise the registry is scanned and entries are
+ * compared by realpath.
  *
- * A registry entry is only trusted while the recorded process is alive, its
- * authenticated health endpoint answers within a bounded time, and it can
- * still serve the editor shell. Definitive failures (dead process, refused
- * connection, a non-5xx health response such as 401 or 404, a malformed
- * payload, a different deck path, or a shell response that is not the built
- * editor: any non-200 status, a wrong content type, or a missing marker)
- * remove the entry so later calls do not retry a dead host. A health 5xx or a
- * timeout means the host may be busy rather than stale: the entry is kept and
- * the scan continues, because another spelling of the same deck may name a
- * healthy host. Only after the scan finds no healthy entry does the caller
- * fall back to direct mode for this call.
+ * Only a `healthy` entry is returned. Definitive failures (dead process,
+ * refused connection, a non-5xx health response such as 401 or 404, a
+ * malformed payload, or a different deck path) remove the entry so later
+ * calls do not retry a dead host.
+ *
+ * A `stale-build` entry answered health for this deck but cannot serve the
+ * editor. It is kept instead of pruned: the process is reachable, so `stop`
+ * must still be able to retire it, while this function returns null so `open`
+ * starts a fresh host. A health 5xx or a timeout (`unknown`) also keeps the
+ * entry and the scan continues, because another spelling of the same deck may
+ * name a healthy host. Only after the scan finds no healthy entry does the
+ * caller fall back to direct mode for this call.
  *
  * Every removal is fenced by the exact bytes that were checked. A listed
  * entry can be stale by the time the health check finishes, so each candidate
@@ -79,7 +81,8 @@ export async function findLiveSession(
   if (direct?.health === 'unhealthy') {
     await removeSessionIfUnchanged(sessionFile, direct.snapshot);
   }
-  // Unknown health keeps the entry; keep scanning for a healthy alias.
+  // Stale-build and unknown verdicts keep the entry; keep scanning for a
+  // healthy alias.
 
   // The direct key is absent when the entry was written with another spelling
   // of the same deck, such as the long form of a Windows short path or a
@@ -115,7 +118,7 @@ export async function findLiveSession(
     if (health === 'healthy') {
       return current.entry;
     }
-    // Unknown health keeps the entry and keeps scanning for a healthy alias.
+    // Stale-build and unknown verdicts keep the entry and the scan continues.
   }
   return null;
 }
@@ -156,9 +159,11 @@ async function readCheckedSession(
 
 /**
  * Reads the registry entry for exactly this spelling of the deck and probes
- * its health. Unlike `findLiveSession` this never removes anything: callers
- * such as `open` need the entry and its checked snapshot to retire a
- * registered host that is alive but no longer serves the editor. An entry
+ * its health. This must not remove a structurally valid entry because of a
+ * health verdict: callers such as `open` need the entry and its checked
+ * snapshot to retire a registered host that is alive but no longer serves the
+ * editor, and `stop` needs them to reach a `stale-build` host. `readSession`
+ * still removes an entry that is malformed or whose pid is gone. An entry
  * whose key names this deck but whose path names another one is reported as
  * absent; removing it stays with `findLiveSession`.
  */
@@ -184,14 +189,24 @@ function sessionEntryFile(resolvedPath: string): string {
 
 /**
  * Probes a registered host. Health proves the process is the host recorded in
- * the registry; the editor shell proves that host can still serve what `open`
- * hands to the user. A build that was moved or replaced after the host
- * started answers health but no longer serves the shell, and reusing it would
- * send the user to a dead editor.
+ * the registry and still owns this deck; the editor shell proves that host
+ * can still serve what `open` hands to the user.
+ *
+ * - `healthy`: health accepted this deck and the shell is the built editor.
+ * - `stale-build`: health accepted this deck, but the shell is not the editor
+ *   (any non-200 status, a wrong content type, or a missing root marker). The
+ *   process is reachable and owns the deck, so callers must keep the entry for
+ *   `stop` rather than treat it like a dead host.
+ * - `unhealthy`: health definitively rejected this deck (a non-5xx status such
+ *   as 401/403/404/405/400, a malformed payload, a different filePath) or the
+ *   connection is refused. Ownership is not proven, so never signal a pid
+ *   from this verdict.
+ * - `unknown`: a health 5xx, an abort, or a timeout on either probe. The host
+ *   may be busy, so the entry is kept.
  *
  * Health keeps 5xx as `unknown` because that probe can sit behind the save
- * lock. The shell route only reads the built editor, so every shell failure
- * except a timeout is `unhealthy`.
+ * lock. The shell route only reads the built editor, so any answer other than
+ * the editor itself is a stale build.
  */
 export async function probeSessionHealth(
   entry: SessionEntry
@@ -244,17 +259,18 @@ export async function probeSessionHealth(
     );
     if (shell.status !== 200) {
       await shell.body?.cancel().catch(() => undefined);
-      // Health already proved the process is alive and this route only reads
-      // the built editor, so any shell status is definitive: a 5xx is a broken
-      // build (the zombie host's missing index answers 500), not a busy host.
-      return 'unhealthy';
+      // Health already proved the process owns this deck and this route only
+      // reads the built editor, so any shell status means the build is broken
+      // (the zombie host's missing index answers 500), not that the host is a
+      // stranger. Keep the entry so `stop` can still retire the process.
+      return 'stale-build';
     }
     if (!(shell.headers.get('content-type') ?? '').includes('text/html')) {
       await shell.body?.cancel().catch(() => undefined);
-      return 'unhealthy';
+      return 'stale-build';
     }
     const body = await shell.text();
-    return body.includes('id="root"') ? 'healthy' : 'unhealthy';
+    return body.includes('id="root"') ? 'healthy' : 'stale-build';
   } catch (error) {
     // Timeouts say nothing definitive: a health probe can be busy behind the
     // save lock and a slow shell may still be fine, so keep the entry.
