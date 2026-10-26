@@ -42,11 +42,16 @@ function hasObjectChild(element: Element): boolean {
 
 /**
  * True when the element can become an editing context: it holds at least one
- * object child, is not a text leaf (the double-click text-edit target), and is
- * not an atomic group wrapper.
+ * object child, is not a text leaf (the double-click text-edit target), is not
+ * an atomic group wrapper, and is neither locked nor hidden. Locked and hidden
+ * objects stay inert, so the chevron, Enter, double-click entry, and the App's
+ * stale-context check all read the same answer from here.
  */
 export function isEnterableContainer(element: Element): boolean {
   if (element.hasAttribute('data-ppt-group')) return false;
+  // Mirrors the editor's isLockedElement / isHiddenElement predicates.
+  if (element.getAttribute('data-ppt-locked') === 'true') return false;
+  if ((element as HTMLElement).style?.display === 'none') return false;
   if (!hasObjectChild(element)) return false;
   const tag = element.tagName.toUpperCase();
   if (TEXT_LEAF_TAGS.has(tag)) return false;

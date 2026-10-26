@@ -559,16 +559,23 @@ export function App() {
   const [exportSignal, setExportSignal] = useState(0);
 
   // A container path only means something within one slide of one deck:
-  // navigating or reloading starts again from the slide level.
+  // navigating or reloading starts again from the slide level. Deleting the
+  // active slide keeps the index and mutates the master in place, so the
+  // slide's identity, not just its position, has to gate the reset.
   useEffect(() => {
     setContainerPath((path) => (path.length === 0 ? path : []));
-  }, [activeIndex, master]);
+  }, [activeIndex, activeSlide?.id, master]);
 
-  // A commit can delete the entered container; a dead path would leave the
-  // breadcrumb naming an element that no longer exists.
+  // A commit can delete or lock the entered container; a dead path would leave
+  // the breadcrumb naming an element that can no longer be entered. The
+  // inspector resolves its context with the same predicate, so the breadcrumb
+  // and the object list cannot disagree.
   useEffect(() => {
     if (containerPath.length === 0) return;
-    if (!activeSlide || !elementAtPath(activeSlide.element, containerPath)) {
+    const container = activeSlide
+      ? elementAtPath(activeSlide.element, containerPath)
+      : null;
+    if (!container || !isEnterableContainer(container)) {
       setContainerPath([]);
     }
   }, [activeSlide, containerPath]);
@@ -715,10 +722,18 @@ export function App() {
 
   /**
    * Moves the drill-in context and drops the selection, which belonged to the
-   * level being left behind.
+   * level being left behind. A non-empty path must still resolve to a
+   * container the shared predicate accepts, so a stale chevron cannot enter a
+   * deleted, locked, or hidden wrapper.
    */
   const changeContext = useCallback(
     (path: number[]) => {
+      if (path.length > 0) {
+        const current = stateRef.current;
+        const slide = current.slides[current.activeIndex]?.element;
+        const container = slide ? elementAtPath(slide, path) : null;
+        if (!container || !isEnterableContainer(container)) return;
+      }
       setContainerPath(path);
       actionsRef.current.clearSelection();
       clearOverlay();
@@ -2468,6 +2483,9 @@ export function App() {
   const handleContextKeyDown = useCallback(
     (event: KeyboardEvent, activeDocument: Document | null) => {
       if (event.defaultPrevented) return;
+      // A pointer gesture owns the transform until pointerup: Escape cancels
+      // the drag in the shortcut layer and Enter must not drill in mid-drag.
+      if (sessionRef.current) return;
       if (playingRef.current) return;
       // Dialogs and an in-place text edit own every key while they are open.
       if (shortcutsOpen || chartEditor || editingElementRef.current) return;
@@ -3720,6 +3738,9 @@ export function App() {
             data-testid="canvas-preview"
             onPointerDown={(event) => {
               if (event.target !== event.currentTarget) return;
+              // The canvas background is outside the slide, so it leaves every
+              // drill-in level as well as dropping the selection.
+              setContainerPath((path) => (path.length === 0 ? path : []));
               actions.clearSelection();
               clearOverlay();
             }}
