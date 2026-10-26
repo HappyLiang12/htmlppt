@@ -2112,7 +2112,6 @@ export function App() {
       if (
         !selected ||
         current.selections.length !== 1 ||
-        selected.path.length !== 1 ||
         !slideInfo ||
         !slide
       ) {
@@ -2156,7 +2155,6 @@ export function App() {
       if (
         !selected ||
         current.selections.length !== 1 ||
-        selected.path.length !== 1 ||
         !slide
       ) {
         return;
@@ -2201,9 +2199,7 @@ export function App() {
       const slide = frameSlideNow();
       if (!slideInfo || !slide) return false;
       const targets = current.selections.filter(
-        (target) =>
-          target.slideIndex === current.activeIndex &&
-          target.path.length === 1
+        (target) => target.slideIndex === current.activeIndex
       );
       if (targets.length === 0) return false;
 
@@ -2772,10 +2768,6 @@ export function App() {
         case 'nudge': {
           if (current.selections.length > 0) {
             event.preventDefault();
-            // Nested selections are read-only: no nudge and no slide change.
-            if (current.selections.some((target) => target.path.length !== 1)) {
-              return;
-            }
             nudgeSelection(action.dx, action.dy);
             return;
           }
@@ -2852,8 +2844,8 @@ export function App() {
         sameSelection(candidate, selected)
       );
       if (!existing) actionsRef.current.select(selected);
-      // Drilled nested selections show read-only geometry for now.
-      if (selected.path.length !== 1) return;
+      // A nested path resolves to the child object itself, so a single
+      // nested selection drags like a top-level one.
       const clickedTop = elementAtPath(frameSlide, selected.path);
       if (
         !clickedTop ||
@@ -2868,11 +2860,7 @@ export function App() {
 
       const dragSelections = existing ? current.selections : [selected];
       const items = dragSelections
-        .filter(
-          (candidate) =>
-            candidate.slideIndex === current.activeIndex &&
-            candidate.path.length === 1
-        )
+        .filter((candidate) => candidate.slideIndex === current.activeIndex)
         .map((candidate) => ({
           selection: candidate,
           element: elementAtPath(frameSlide, candidate.path)
@@ -3773,10 +3761,7 @@ export function App() {
                   boxes={selectionBoxes}
                   guides={guides}
                   scale={scale}
-                  readOnly={
-                    selectionBoxes.length > 1 ||
-                    (selection !== null && selection.path.length > 1)
-                  }
+                  readOnly={selectionBoxes.length > 1}
                   handles={overlayHandles}
                   onResizeStart={beginResizeSession}
                   onRotateStart={beginRotateSession}

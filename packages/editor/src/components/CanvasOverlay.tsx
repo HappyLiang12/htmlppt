@@ -20,8 +20,8 @@ export interface CanvasOverlayProps {
   guides: Guide[];
   scale: number;
   /**
-   * Nested and multi selections expose outlines only; resize, rotate, and
-   * numeric geometry stay single-object operations.
+   * Multi selections expose outlines only; resize, rotate, and numeric
+   * geometry stay single-object operations.
    */
   readOnly: boolean;
   /** Groups keep rotation but cannot be resized; locked objects disable both. */

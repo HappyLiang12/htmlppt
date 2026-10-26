@@ -414,7 +414,7 @@ export function Inspector({
       : slide?.element ?? null;
   const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
-  const readOnly = multi || (selection !== null && selection.path.length > 1);
+  const readOnly = multi;
   const selectedTopPath = selection?.path.slice(contextBase.length)[0];
   const geometryLocked = readOnly || objectActions.locked || objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;
