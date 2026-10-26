@@ -88,6 +88,11 @@ test('enters nested layout containers and pops one level per Escape', async ({
     await expect(context).toContainText('.pad');
     await expect(context).not.toContainText('.cover');
     await expect(rows).toHaveCount(2);
+    // The rows are .pad's direct children again, not the level just popped.
+    await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0');
+    await expect(rows.nth(1)).toHaveAttribute('data-object-path', '2.1');
+    await expect(rows.nth(0)).toContainText('Wrapped title Body copy');
+    await expect(rows.nth(1)).toContainText('Footer');
 
     await page.keyboard.press('Escape');
     await expect(context).toBeHidden();
@@ -141,7 +146,12 @@ test("enters from a container's own padding and leaves on an outside click", asy
     // (100, 100) design px is inside .pad's 48px padding, not on a child.
     await slide.dblclick({ position: at(100, 100) });
     await expect(context).toContainText('.pad');
+    // .cover is also enterable and holds two rows, so the context and the
+    // slide-rooted paths are what distinguish the two levels.
+    await expect(context).not.toContainText('.cover');
     await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute('data-object-path', '2.0');
+    await expect(rows.nth(1)).toHaveAttribute('data-object-path', '2.1');
 
     // (1450, 820) design px is outside .pad and inside the decorative .halo.
     await slide.click({ position: at(1450, 820) });
@@ -276,6 +286,9 @@ test('locked containers offer no chevron and cannot be entered with Enter', asyn
     );
 
     await lockedRow.click();
+    // Positive control: the locked row really is the selection, so a silent
+    // no-selection below cannot make the Enter assertion vacuous.
+    await expect(lockedRow).toHaveAttribute('aria-current', 'true');
     await page.evaluate(() => {
       const active = document.activeElement;
       if (active instanceof HTMLElement) active.blur();

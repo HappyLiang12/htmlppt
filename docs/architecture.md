@@ -199,15 +199,19 @@ holds other objects can be entered. The editor tracks the entered level in
 slide level. While it is non-empty, click resolution selects the container's
 direct children, the overlay and inspector describe that level, and inspector
 rows keep slide-rooted `data-object-path` values (`2.0`, not `0`). Escape pops
-one segment, a breadcrumb segment jumps to an ancestor, a click outside the
-active container leaves it, and a slide change, deck change, reload, or deleted
-container resets the path.
+one segment, a breadcrumb segment jumps to an ancestor, and a click on the slide
+area outside the active container leaves it; a click on the editor canvas
+outside the slide also clears it. A slide change, deck change, reload, or a
+deleted or no-longer-enterable container resets the path. Nested geometry and
+appearance stay read-only in this phase.
 
 `isEnterableContainer` in `packages/editor/src/selection.ts` is the single
 predicate behind every entry path: double-click entry, the inspector chevron,
 and the Enter key. A target qualifies when it holds at least one object child,
-is not a text leaf (double-clicking one edits text instead), and is not an
-atomic `data-ppt-group` wrapper. The context is editor-only state. It is never
+is not a text leaf (double-clicking one edits text instead), is neither locked
+nor hidden, is not an atomic `data-ppt-group` wrapper, and is not a `div` whose
+only element children are `<br>` line breaks (that is a text box, so a
+double-click edits it). The context is editor-only state. It is never
 serialized, is not restored after a reload, and writes no deck attributes or
 ids.
 
