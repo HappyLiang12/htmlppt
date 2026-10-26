@@ -150,6 +150,7 @@ import {
   snapAngle,
   type TransformTarget
 } from './transform';
+import { willPinToAbsolute } from './geometry-guards';
 import {
   applyBackground,
   applyGeometryEdit,
@@ -574,6 +575,8 @@ export function App() {
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
   const [exportSignal, setExportSignal] = useState(0);
+  const [pinNotice, setPinNotice] = useState(false);
+  const pinNoticeShownRef = useRef(false);
 
   // A container path only means something within one slide of one deck:
   // navigating or reloading starts again from the slide level. Deleting the
@@ -1000,8 +1003,9 @@ export function App() {
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
+      const pinned = field !== 'rotation' && willPinToAbsolute(element);
       const snapshot = snapshotGeometry(element, slide);
-      return applyInspectorEdit(
+      const committed = applyInspectorEdit(
         current.master,
         (master) => {
           const applied = applyGeometryEdit(
@@ -1028,6 +1032,13 @@ export function App() {
         },
         () => void commitMasterDocument()
       );
+      if (committed && pinned && !pinNoticeShownRef.current) {
+        // The first position or size edit pins a flow object; explain the
+        // conversion once per session instead of applying it silently.
+        pinNoticeShownRef.current = true;
+        setPinNotice(true);
+      }
+      return committed;
     },
     [commitMasterDocument]
   );
@@ -3627,6 +3638,36 @@ export function App() {
             onClick={() => setExportMessage('')}
           >
             {t('common.close')}
+          </button>
+        </div>
+      )}
+
+      {pinNotice && (
+        <div
+          data-testid="pin-notice"
+          role="status"
+          className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2 text-xs text-muted"
+        >
+          <span className="min-w-0 flex-1">{t('editor.notice.pinned')}</span>
+          <button
+            type="button"
+            data-testid="pin-notice-undo"
+            className="rounded border border-line px-2 py-0.5 text-ink transition-colors hover:bg-hover"
+            onClick={() => {
+              actionsRef.current.undo();
+              setPinNotice(false);
+            }}
+          >
+            {t('editor.notice.undo')}
+          </button>
+          <button
+            type="button"
+            data-testid="pin-notice-dismiss"
+            aria-label={t('editor.notice.dismiss')}
+            className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
+            onClick={() => setPinNotice(false)}
+          >
+            ×
           </button>
         </div>
       )}

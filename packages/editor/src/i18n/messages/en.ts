@@ -305,6 +305,10 @@ export const en = {
   'editor.pendingEditFailed': 'Could not apply the pending edit.',
   'editor.pendingEditInstruction': 'Apply or cancel the pending edit before overwriting.',
   'editor.reloadFailed': 'Could not reload the deck.',
+  'editor.notice.pinned':
+    'This element was positioned by its container; it is now absolutely positioned.',
+  'editor.notice.undo': 'Undo',
+  'editor.notice.dismiss': 'Dismiss',
   'standalone.title': 'Standalone editor',
   'standalone.description': 'No local host is connected. Open or drop an HTML deck to edit it. Browsers with File System Access write back to the original file; others can download the exported HTML.',
   'standalone.open': 'Open HTML…',
