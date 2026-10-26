@@ -47,13 +47,12 @@ export interface RegisteredSessionCheck {
  * A `stale-build` entry answered health for this deck but cannot serve the
  * editor. It is kept instead of pruned: the process is reachable, so `stop`
  * must still be able to retire it, while this function returns null so callers
- * do not hand out a broken editor. `open` does not start a second host while
- * the kept entry's pid is alive; it reports that the host is not responding
- * and directs the user to `stop`, which is the recovery path. A health 5xx or
- * a timeout (`unknown`) also keeps the entry and the scan continues, because
- * another spelling of the same deck may name a healthy host. Only after the
- * scan finds no healthy entry does the caller fall back to direct mode for
- * this call.
+ * do not hand out a broken editor. `open` retries that entry once and replaces
+ * the host when the verdict persists, so the entry does not keep blocking the
+ * deck. A health 5xx or a timeout (`unknown`) also keeps the entry and the scan
+ * continues, because another spelling of the same deck may name a healthy
+ * host. Only after the scan finds no healthy entry does the caller fall back
+ * to direct mode for this call.
  *
  * Every removal is fenced by the exact bytes that were checked. A listed
  * entry can be stale by the time the health check finishes, so each candidate
@@ -127,11 +126,16 @@ export async function findLiveSession(
 }
 
 /**
- * Finds a registered host that `stop` can retire even when it cannot serve the
- * editor. `lookupRegisteredSession` only judges the caller's spelling, but a
- * live host may be registered under another spelling of the same deck, such as
- * the long form of a Windows short path or a symlinked/junction parent. The
- * registry is scanned by canonical path: a `healthy` entry wins, and the first
+ * Finds a registered host that a caller can retire even when it cannot serve
+ * the editor. It serves both `stop` and `open`: `stop` may signal either
+ * verdict, and `open` uses the `stale-build` fallback to reach a host
+ * registered under another spelling of the same deck and replaces it once a
+ * retry confirms the verdict.
+ *
+ * `lookupRegisteredSession` only judges the caller's spelling, but a live host
+ * may be registered under another spelling of the same deck, such as the long
+ * form of a Windows short path or a symlinked/junction parent. The registry is
+ * scanned by canonical path: a `healthy` entry wins, and the first
  * `stale-build` entry is kept as a fallback. Both are returned with the exact
  * bytes that were checked so the caller can signal only the probed process.
  *

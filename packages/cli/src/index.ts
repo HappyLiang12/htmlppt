@@ -145,11 +145,12 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
 }
 
 /**
- * A health timeout, a 5xx, or a broken editor shell (`stale-build`) keeps the
- * registry entry even though no healthy session can be confirmed. Starting
- * another host would overwrite that entry and orphan the process that may
- * still own the socket, so a recorded live pid blocks the new host until the
- * user retries or stops it.
+ * A health timeout or a 5xx keeps the registry entry even though no healthy
+ * session can be confirmed. Starting another host would overwrite that entry
+ * and orphan the process that may still own the socket, so a recorded live pid
+ * blocks the new host until the user retries or stops it. A broken editor
+ * shell (`stale-build`) is handled by `open` itself: it retries the probe once
+ * and replaces the host when the verdict persists.
  *
  * Registry keys keep the spelling their writer used, so the caller-spelling key
  * can be absent after an open moved the entry to the host's canonical path.
@@ -303,11 +304,16 @@ async function readListedEntries(names: string[]): Promise<ListedEntry[]> {
  * checked the entry passes the exact snapshot it verified; the file must still
  * hold those bytes, so a registry that changed after the probe can never make
  * this signal a pid the probe did not vouch for.
+ *
+ * `announce` controls the stdout confirmation. `stop` reports the session it
+ * retired, while `open` suppresses the line because its stdout carries only
+ * the `HTMLPPT_URL` contract and warns about the replacement on stderr.
  */
 async function stopSession(
   session: SessionEntry,
   io: CliIO,
-  snapshotOverride?: string
+  snapshotOverride?: string,
+  options: { announce?: boolean } = {}
 ): Promise<boolean> {
   const sessionFile = join(
     sessionsDirectory(),
@@ -361,7 +367,9 @@ async function stopSession(
   // recorded port stays stable so the deck keeps its address. The host is
   // already gone, so a failed write warns instead of failing the stop.
   await rotateStoppedCredential(session.path, session.port, io);
-  io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
+  if (options.announce !== false) {
+    io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
+  }
   return true;
 }
 
@@ -636,23 +644,23 @@ export async function runCli(
         lookupRegisteredSession,
         probeSessionHealth
       } = await import('@htmlppt/mcp');
-      const existing = await findLiveSession(filePath);
-      if (existing) {
-        const url = sessionUrl(existing);
-        // Decks opened before the credential store existed still deserve a
-        // stable bookmark. A stale credential is worse than none: after a
-        // crash the stored identity would start a host the live one never
-        // served, so rewrite it to the host that is actually answering.
+      // A host that already serves the editor is handed out as-is. Decks
+      // opened before the credential store existed still deserve a stable
+      // bookmark, and a stale credential is worse than none: after a crash the
+      // stored identity would start a host the live one never served, so
+      // rewrite it to the host that is actually answering.
+      const reuseSession = async (session: SessionEntry): Promise<void> => {
+        const url = sessionUrl(session);
         const stored = await readCredential(filePath);
         if (
           stored === null ||
-          stored.token !== existing.token ||
-          stored.port !== existing.port
+          stored.token !== session.token ||
+          stored.port !== session.port
         ) {
           const now = new Date().toISOString();
           await writeCredential(filePath, {
-            token: existing.token,
-            port: existing.port,
+            token: session.token,
+            port: session.port,
             createdAt: stored?.createdAt ?? now,
             updatedAt: now
           }).catch((error: unknown) => {
@@ -665,20 +673,30 @@ export async function runCli(
         if (options.browser) {
           await openBrowser(url, io);
         }
+      };
+
+      const existing = await findLiveSession(filePath);
+      if (existing) {
+        await reuseSession(existing);
         return;
       }
 
       // A host that answered health for this deck but no longer serves the
-      // editor (`stale-build`) is alive and owns the recorded port. Replace it
-      // instead of handing out its dead URL. Only that verdict may be signalled:
-      // `unhealthy` and `unknown` never prove the pid belongs to this deck.
+      // editor (`stale-build`) is alive and owns the recorded port. Retry it
+      // once, then replace it instead of handing out its dead URL. Only that
+      // verdict may be signalled: `unhealthy` and `unknown` never prove the pid
+      // belongs to this deck.
       //
       // Registry keys keep the spelling their writer used, and the caller's
       // spelling may have no entry at all, so a stale host registered under an
       // alias is reached through the canonical-path scan.
       const direct = await lookupRegisteredSession(filePath);
       let staleBuild = direct?.health === 'stale-build' ? direct : null;
-      if (staleBuild === null) {
+      if (direct === null) {
+        // A direct entry that survived `findLiveSession` is either the
+        // candidate above or a busy host that the refusal below already
+        // blocks, so only a missing entry can hide a stale host behind another
+        // spelling. Scanning the registry would probe that same host again.
         const alias = await findStoppableSession(filePath);
         staleBuild = alias?.health === 'stale-build' ? alias : null;
       }
@@ -686,14 +704,24 @@ export async function runCli(
         // One quick retry absorbs a transient shell failure, such as a build
         // being copied into place, before the host is replaced.
         await delay(150);
-        if ((await probeSessionHealth(staleBuild.entry)) === 'stale-build') {
+        const retry = await probeSessionHealth(staleBuild.entry);
+        if (retry === 'healthy') {
+          // The host recovered and serves the editor again, so reuse it
+          // instead of replacing a process that just proved itself.
+          await reuseSession(staleBuild.entry);
+          return;
+        }
+        if (retry === 'stale-build') {
           io.stderr(
             `The editor registered for ${file} is running but does not serve the editor (stale build). Stopping it and starting a fresh one.`
           );
           // Evict before reading the credential: the stop rotates the token,
           // so the new host starts with the rotated token and the store and
-          // the process agree.
-          await stopSession(staleBuild.entry, io, staleBuild.snapshot);
+          // the process agree. `open` keeps stdout to the URL contract, so the
+          // stop does not announce itself here.
+          await stopSession(staleBuild.entry, io, staleBuild.snapshot, {
+            announce: false
+          });
         }
       }
 
