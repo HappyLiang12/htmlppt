@@ -8,6 +8,8 @@ export interface SelectionFromEventOptions {
   slideIndex?: number;
   /** Alt-click drills into the deepest element instead of its top-level object. */
   altKey?: boolean;
+  /** Entered container path; clicks select that container's direct children. */
+  containerPath?: readonly number[];
 }
 
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
@@ -47,20 +49,44 @@ function elementIdOf(element: Element): string | null {
   return value ? value : null;
 }
 
-function topLevelAncestor(element: Element, slide: Element): Element | null {
+function ancestorWithin(element: Element, container: Element): Element | null {
   let current: Element = element;
   let parent = current.parentElement;
-  while (parent && parent !== slide) {
+  while (parent && parent !== container) {
     current = parent;
     parent = current.parentElement;
   }
-  return parent === slide ? current : null;
+  return parent === container ? current : null;
 }
 
-function pathTo(element: Element, slide: Element): number[] | null {
+/**
+ * Returns the context path entered by a double-click on a container inside the
+ * current context, or null when the target is a leaf or not enterable.
+ */
+export function contextEntry(
+  slide: Element,
+  target: Element,
+  containerPath: readonly number[]
+): number[] | null {
+  const container = elementAtPath(slide, containerPath);
+  if (!container || !container.contains(target) || target === container) {
+    return null;
+  }
+  if (!isObjectElement(target) || target.children.length === 0) return null;
+  const relative = pathTo(target, container);
+  return relative ? [...containerPath, ...relative] : null;
+}
+
+/** Names a breadcrumb segment by its first class, then by its tag. */
+export function describeContextSegment(element: Element): string {
+  const firstClass = element.getAttribute('class')?.trim().split(/\s+/)[0];
+  return firstClass ? `.${firstClass}` : element.tagName.toLowerCase();
+}
+
+function pathTo(element: Element, root: Element): number[] | null {
   const path: number[] = [];
   let current: Element = element;
-  while (current !== slide) {
+  while (current !== root) {
     const parent = current.parentElement;
     if (!parent) return null;
     path.unshift(Array.from(parent.children).indexOf(current));
@@ -79,20 +105,33 @@ export function selectionFromEvent(
   if (!element || element === slide || !slide.contains(element)) return null;
 
   const slideIndex = options.slideIndex ?? 0;
-  const top = topLevelAncestor(element, slide);
-  if (!top || !isObjectElement(top)) return null;
+  const containerPath = options.containerPath ?? [];
+  const container = elementAtPath(slide, containerPath);
+  if (!container || !container.contains(element) || element === container) {
+    return null;
+  }
 
   // Paths are always raw child indices from the slide. Excluded siblings
   // (notes, scripts) still occupy an index, so filtered object indices would
   // disagree with pathTo. See the plan interface note.
-  const topIndex = Array.from(slide.children).indexOf(top);
-  if (topIndex === -1) return null;
+  const contextChild = ancestorWithin(element, container);
+  if (!contextChild || !isObjectElement(contextChild)) return null;
+  const index = Array.from(container.children).indexOf(contextChild);
+  if (index === -1) return null;
 
   if (options.altKey) {
-    const path = pathTo(element, slide);
-    if (!path || path[0] !== topIndex) return null;
-    return { slideIndex, path, elementId: elementIdOf(element) };
+    const relative = pathTo(element, container);
+    if (!relative) return null;
+    return {
+      slideIndex,
+      path: [...containerPath, ...relative],
+      elementId: elementIdOf(element)
+    };
   }
 
-  return { slideIndex, path: [topIndex], elementId: elementIdOf(top) };
+  return {
+    slideIndex,
+    path: [...containerPath, index],
+    elementId: elementIdOf(contextChild)
+  };
 }

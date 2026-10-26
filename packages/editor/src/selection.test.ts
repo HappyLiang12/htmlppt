@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { selectionFromEvent, topLevelObjects } from './selection.js';
+import {
+  contextEntry,
+  describeContextSegment,
+  selectionFromEvent,
+  topLevelObjects
+} from './selection.js';
 
 function makeSlide(): Element {
   const slide = document.createElement('section');
@@ -204,5 +209,82 @@ describe('selectionFromEvent', () => {
       path: [0, 0],
       elementId: null
     });
+  });
+});
+
+function build(): Element {
+  const doc = new DOMParser().parseFromString(
+    `<section data-slide-id="s1">
+       <div class="halo"></div>
+       <div class="pad">
+         <div class="cover"><h1>Title</h1><p>Sub</p></div>
+         <p class="foot">Footer</p>
+       </div>
+     </section>`,
+    'text/html'
+  );
+  return doc.querySelector('section') as Element;
+}
+
+describe('editing context', () => {
+  it('selects the context container child, not the slide-level wrapper', () => {
+    const slide = build();
+    const h1 = slide.querySelector('h1') as Element;
+
+    const selected = selectionFromEvent(h1, slide, { containerPath: [1] });
+
+    expect(selected?.path).toEqual([1, 0]);
+  });
+
+  it('keeps absolute paths for alt-click inside a context', () => {
+    const slide = build();
+    const h1 = slide.querySelector('h1') as Element;
+
+    const selected = selectionFromEvent(h1, slide, {
+      containerPath: [1],
+      altKey: true
+    });
+
+    expect(selected?.path).toEqual([1, 0, 0]);
+  });
+
+  it('enters the nearest container with children', () => {
+    const slide = build();
+    const cover = slide.querySelector('.cover') as Element;
+
+    expect(contextEntry(slide, cover, [])).toEqual([1, 0]);
+  });
+
+  it('does not enter a leaf element', () => {
+    const slide = build();
+    const foot = slide.querySelector('.foot') as Element;
+
+    expect(contextEntry(slide, foot, [1])).toBeNull();
+  });
+
+  it('returns null for the current container and targets outside it', () => {
+    const slide = build();
+    const pad = slide.querySelector('.pad') as Element;
+    const halo = slide.querySelector('.halo') as Element;
+
+    expect(contextEntry(slide, pad, [1])).toBeNull();
+    expect(contextEntry(slide, halo, [1])).toBeNull();
+  });
+
+  it('does not enter excluded elements such as speaker notes', () => {
+    const slide = document.createElement('section');
+    const notes = document.createElement('aside');
+    notes.setAttribute('data-ppt-notes', '1');
+    notes.innerHTML = '<p>Speaker notes</p>';
+    slide.appendChild(notes);
+
+    expect(contextEntry(slide, notes, [])).toBeNull();
+  });
+
+  it('describes a context segment by class, then tag', () => {
+    const slide = build();
+
+    expect(describeContextSegment(slide.querySelector('.pad') as Element)).toBe('.pad');
+    expect(describeContextSegment(slide.querySelector('h1') as Element)).toBe('h1');
   });
 });
