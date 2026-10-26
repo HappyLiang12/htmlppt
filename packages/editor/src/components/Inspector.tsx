@@ -70,6 +70,11 @@ export interface InspectorProps {
   selection: SelectionTarget | null;
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
+  /**
+   * A nested target whose top-level ancestor is locked, hidden, or a group.
+   * The ancestor owns the subtree, so every geometry field stays disabled.
+   */
+  blockedByAncestor?: boolean;
   /** Entered container path; absent means the slide is listed. */
   contextPath?: readonly number[];
   onEnterContext?: (path: number[]) => void;
@@ -328,6 +333,7 @@ export function Inspector({
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
+  blockedByAncestor = false,
   contextPath,
   onEnterContext,
   geometry,
@@ -416,7 +422,11 @@ export function Inspector({
   const multi = selectionCount > 1;
   const readOnly = multi;
   const selectedTopPath = selection?.path.slice(contextBase.length)[0];
-  const geometryLocked = readOnly || objectActions.locked || objectActions.hidden;
+  const geometryLocked =
+    readOnly ||
+    blockedByAncestor ||
+    objectActions.locked ||
+    objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;
 
   const selectTab = (next: InspectorTab, focus: boolean) => {

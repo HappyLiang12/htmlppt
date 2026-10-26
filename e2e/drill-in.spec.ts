@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -400,6 +400,56 @@ test('a locked wrapper keeps an alt-drilled child uneditable', async ({
     await expect
       .poll(() => unlockedHeading.getAttribute('style'))
       .not.toBe(beforeControlDrag);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('a mixed selection cannot move a locked wrapper child', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    const outline = page.getByTestId('selection-outline');
+    const lockedChild = editor.frame
+      .locator('[data-slide-id="s2"] .locked p')
+      .first();
+    const padHeading = editor.frame.locator('[data-slide-id="s2"] .pad h1');
+
+    // Base: a nested selection inside the locked top-level wrapper.
+    await lockedChild.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '3.0');
+    await expect(outline).toHaveAttribute('data-readonly', 'true');
+
+    // Shift-clicking the top-level pad used to append it to the nested base,
+    // and dragging that mixed selection moved the locked wrapper's child.
+    await padHeading.click({ modifiers: ['Shift'] });
+
+    const box = await padHeading.boundingBox();
+    if (!box) throw new Error('Pad heading has no bounding box.');
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    const save = page.waitForResponse(isDeckSaveResponse);
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+    await page.mouse.up();
+    expect((await save).ok()).toBe(true);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // The locked child stays inert; the top-level pad is the object that moved.
+    expect(await lockedChild.getAttribute('style')).toBeNull();
+    const saved = await readFile(join(editor.directory, editor.file), 'utf8');
+    expect(saved).toContain('<p>Locked heading</p>');
+
+    // The new multi-select contract: a nested base collapses to the incoming
+    // top-level target instead of forming a mixed selection.
+    await expect(outline).toHaveCount(1);
+    await expect(outline).toHaveAttribute('data-selected-path', '2');
   } finally {
     await close(editor);
   }

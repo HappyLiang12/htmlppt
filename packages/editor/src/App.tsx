@@ -404,6 +404,31 @@ function objectActionStateFor(
   };
 }
 
+/**
+ * A nested selection keeps every structural command off, but the Inspector
+ * still needs the element's own lock/hidden/group state. Without it the
+ * numeric geometry fields stay enabled and a commit is rejected or, worse,
+ * applied to a locked child.
+ */
+function nestedElementState(
+  slide: SlideInfo | undefined,
+  selections: readonly SelectionTarget[],
+  activeIndex: number
+): Pick<ObjectActionState, 'locked' | 'hidden' | 'group'> | null {
+  if (!slide || selections.length !== 1) return null;
+  const target = selections[0];
+  if (!target || target.slideIndex !== activeIndex || target.path.length < 2) {
+    return null;
+  }
+  const element = elementAtPath(slide.element, target.path);
+  if (!element) return null;
+  return {
+    locked: isLockedElement(element),
+    hidden: isHiddenElement(element),
+    group: isGroupElement(element)
+  };
+}
+
 /** The bootstrap URL carries the session token; never echo it to the user. */
 function bootstrapOrigin(url: string | undefined): string {
   if (!url) return '';
@@ -2914,7 +2939,8 @@ export function App() {
           (item): item is { element: Element; selection: SelectionTarget } =>
             item.element !== null &&
             !isLockedElement(item.element) &&
-            !isHiddenElement(item.element)
+            !isHiddenElement(item.element) &&
+            blockedTopLevelAncestor(frameSlide, item.selection.path) === null
         )
         .sort((a, b) => {
           if (sameSelection(a.selection, selected)) return -1;
@@ -3413,6 +3439,10 @@ export function App() {
   }, [activeIndex, activeSlide?.id, slides.length, t]);
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
+  const nestedActions = nestedElementState(activeSlide, selections, activeIndex);
+  const inspectorObjectActions = nestedActions
+    ? { ...objectActions, ...nestedActions }
+    : objectActions;
   const styleState: InspectorStyleState | null = (() => {
     if (
       !activeSlide ||
@@ -3475,6 +3505,8 @@ export function App() {
     activeSlide && selection
       ? blockedTopLevelAncestor(activeSlide.element, selection.path)
       : null;
+  const blockedByAncestor =
+    selection !== null && selection.path.length > 1 && blockedAncestor !== null;
   const overlayHandles =
     blockedAncestor !== null ||
     (primaryObject && isLockedElement(primaryObject))
@@ -3875,13 +3907,16 @@ export function App() {
             slide={activeSlide}
             selection={selection}
             selectionCount={selections.length}
+            blockedByAncestor={blockedByAncestor}
             contextPath={containerPath}
             onEnterContext={changeContext}
             geometry={selectionGeometry}
             style={styleState}
             chart={chartState}
-            styleDisabled={objectActions.locked || objectActions.hidden}
-            objectActions={objectActions}
+            styleDisabled={
+              inspectorObjectActions.locked || inspectorObjectActions.hidden
+            }
+            objectActions={inspectorObjectActions}
             onSelectObject={handleSelectObject}
             onObjectCommand={handleObjectCommand}
             onObjectRecovery={handleObjectRecovery}

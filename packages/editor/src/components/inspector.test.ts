@@ -325,6 +325,44 @@ describe('inspector numeric fields', () => {
   });
 });
 
+describe('inspector geometry locks', () => {
+  const geometry = { x: 120, y: 160, width: 240, height: 120, rotation: 0 };
+  const nestedSelection = { slideIndex: 0, path: [0, 0], elementId: null };
+  const fields = [
+    'field-x',
+    'field-y',
+    'field-width',
+    'field-height',
+    'field-rotation'
+  ];
+
+  it('disables every field for a nested target blocked by its top-level ancestor', async () => {
+    await render(
+      { selection: nestedSelection, geometry, blockedByAncestor: true },
+      'en'
+    );
+
+    for (const field of fields) {
+      expect(inputByTestId(field).disabled).toBe(true);
+    }
+  });
+
+  it('disables every field for a nested element that carries its own lock', async () => {
+    await render(
+      {
+        selection: nestedSelection,
+        geometry,
+        objectActions: { ...props().objectActions, locked: true }
+      },
+      'en'
+    );
+
+    for (const field of fields) {
+      expect(inputByTestId(field).disabled).toBe(true);
+    }
+  });
+});
+
 describe('inspector notes draft', () => {
   it('drops a draft on an approved replacement without committing it to the next slide', async () => {
     const onSetNotes = vi.fn();
