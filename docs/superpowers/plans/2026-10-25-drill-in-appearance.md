@@ -84,6 +84,13 @@ describe('appearanceKindFor', () => {
     const math = element('<math><mi>x</mi></math>');
     Object.defineProperty(math, 'style', { configurable: true, value: undefined });
     expect(appearanceKindFor(math)).toBeNull();
+
+    const bare = {
+      namespaceURI: 'http://www.w3.org/1998/Math/MathML',
+      tagName: 'math',
+      parentElement: null
+    } as unknown as Element;
+    expect(appearanceKindFor(bare)).toBeNull();
   });
 
   it('returns no kind for a foreign namespace that has a style object', () => {
