@@ -150,7 +150,11 @@ import {
   snapAngle,
   type TransformTarget
 } from './transform';
-import { willPinToAbsolute } from './geometry-guards';
+import {
+  shouldNotifyPin,
+  willAnyPinToAbsolute,
+  willPinToAbsolute
+} from './geometry-guards';
 import {
   applyBackground,
   applyGeometryEdit,
@@ -234,6 +238,8 @@ interface GestureBase {
   start: Point;
   moved: boolean;
   altKey: boolean;
+  /** The gesture's first geometry write pinned a flow target. */
+  pinned: boolean;
   /** The iframe-rendered slide, used for containing-block geometry. */
   slide: Element;
 }
@@ -602,6 +608,36 @@ export function App() {
   const [exportSignal, setExportSignal] = useState(0);
   const [pinNotice, setPinNotice] = useState(false);
   const pinNoticeShownRef = useRef(false);
+  const pinNoticeContextRef = useRef<{
+    master: Document | null;
+    slides: SlideInfo[];
+  } | null>(null);
+
+  const showPinNotice = useCallback((pinned: boolean): void => {
+    if (!shouldNotifyPin(pinned, pinNoticeShownRef.current)) return;
+    pinNoticeShownRef.current = true;
+    setPinNotice(true);
+  }, []);
+
+  // Every commit and history restore re-detects the slide list, and deck loads
+  // replace the master. The notice belongs to the history entry its Undo would
+  // revert, so it must not survive any of those transitions. The first render
+  // after showing it records the baseline; a later identity change dismisses.
+  useEffect(() => {
+    if (!pinNotice) {
+      pinNoticeContextRef.current = null;
+      return;
+    }
+    const context = pinNoticeContextRef.current;
+    if (!context) {
+      pinNoticeContextRef.current = { master, slides };
+      return;
+    }
+    if (context.master !== master || context.slides !== slides) {
+      pinNoticeContextRef.current = null;
+      setPinNotice(false);
+    }
+  }, [master, pinNotice, slides]);
 
   // A container path only means something within one slide of one deck:
   // navigating or reloading starts again from the slide level. Deleting the
@@ -1057,15 +1093,10 @@ export function App() {
         },
         () => void commitMasterDocument()
       );
-      if (committed && pinned && !pinNoticeShownRef.current) {
-        // The first position or size edit pins a flow object; explain the
-        // conversion once per session instead of applying it silently.
-        pinNoticeShownRef.current = true;
-        setPinNotice(true);
-      }
+      if (committed) showPinNotice(pinned);
       return committed;
     },
-    [commitMasterDocument]
+    [commitMasterDocument, showPinNotice]
   );
 
   const handleTransitionChange = useCallback(
@@ -1815,15 +1846,17 @@ export function App() {
     []
   );
 
-  const commitFrame = useCallback(async () => {
+  const commitFrame = useCallback(async (): Promise<boolean> => {
     const frameDocument = frame.current?.contentDocument;
-    if (!frameDocument) return;
+    if (!frameDocument) return false;
     try {
       await actionsRef.current.commit((master, slide) =>
         commitSlide(master, slide.index, frameDocument)
       );
+      return true;
     } catch {
       // The controller already surfaced the status and message.
+      return false;
     }
   }, []);
 
@@ -1929,10 +1962,20 @@ export function App() {
       if (distance < threshold) return;
       session.moved = true;
       if (session.kind === 'drag') {
+        // Detect before the first write: this is the inline position the pin
+        // is about to replace.
+        session.pinned = willAnyPinToAbsolute(
+          session.targets.map((target) => target.element)
+        );
         session.targets.forEach((target) =>
           pinToAbsolute(target.element, target.start, session.slide)
         );
       } else {
+        // Rotation also materializes the box, but the one-time notice covers
+        // position and size gestures only.
+        if (session.kind === 'resize') {
+          session.pinned = willPinToAbsolute(session.target.element);
+        }
         pinToAbsolute(
           session.target.element,
           session.target.start,
@@ -2063,8 +2106,10 @@ export function App() {
       return;
     }
     if (session.kind === 'resize') refreshCharts(session.slide);
-    void commitFrame();
-  }, [commitFrame, refreshOverlay]);
+    void commitFrame().then((committed) => {
+      if (committed) showPinNotice(session.pinned);
+    });
+  }, [commitFrame, refreshOverlay, showPinNotice]);
   finishSessionRef.current = applySession;
 
   const finishSession = useCallback(() => {
@@ -2135,6 +2180,7 @@ export function App() {
         start,
         altKey,
         moved: false,
+        pinned: false,
         slide,
         slideOffset: slideOffsetOf(slide),
         targets: items.map((item) => ({
@@ -2190,6 +2236,7 @@ export function App() {
         start: outerDesignPoint(event.clientX, event.clientY, slide),
         altKey: event.altKey,
         moved: false,
+        pinned: false,
         slide,
         slideOffset: slideOffsetOf(slide),
         target: { element, start: rectOf(element, slide) },
@@ -2242,6 +2289,7 @@ export function App() {
         start: startPoint,
         altKey: event.altKey,
         moved: false,
+        pinned: false,
         slide,
         target: { element, start: startRect },
         path: selected.path,
@@ -2269,6 +2317,7 @@ export function App() {
       const offset = slideOffsetOf(slide);
       const boxes: SelectionBox[] = [];
       let changed = false;
+      let pinned = false;
       for (const target of targets) {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
@@ -2304,6 +2353,7 @@ export function App() {
           });
           continue;
         }
+        if (willPinToAbsolute(element)) pinned = true;
         pinToAbsolute(element, next, slide);
         changed = true;
         boxes.push({
@@ -2316,10 +2366,12 @@ export function App() {
       if (!changed) return false;
       setSelectionBoxes(boxes);
       setGuides([]);
-      void commitFrame();
+      void commitFrame().then((committed) => {
+        if (committed) showPinNotice(pinned);
+      });
       return true;
     },
-    [commitFrame, frameSlideNow]
+    [commitFrame, frameSlideNow, showPinNotice]
   );
 
   const beginTextEditing = useCallback((editable: HTMLElement) => {
@@ -3674,36 +3726,6 @@ export function App() {
         </div>
       )}
 
-      {pinNotice && (
-        <div
-          data-testid="pin-notice"
-          role="status"
-          className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2 text-xs text-muted"
-        >
-          <span className="min-w-0 flex-1">{t('editor.notice.pinned')}</span>
-          <button
-            type="button"
-            data-testid="pin-notice-undo"
-            className="rounded border border-line px-2 py-0.5 text-ink transition-colors hover:bg-hover"
-            onClick={() => {
-              actionsRef.current.undo();
-              setPinNotice(false);
-            }}
-          >
-            {t('editor.notice.undo')}
-          </button>
-          <button
-            type="button"
-            data-testid="pin-notice-dismiss"
-            aria-label={t('editor.notice.dismiss')}
-            className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
-            onClick={() => setPinNotice(false)}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       {recoveryDraft && (
         <div
           data-testid="recovery-banner"
@@ -3898,6 +3920,38 @@ export function App() {
               <p className="text-sm text-muted">{t('common.loading')}</p>
             ) : (
               <p className="text-sm text-muted">{t('editor.noSlides')}</p>
+            )}
+            {pinNotice && (
+              <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+                <div
+                  data-testid="pin-notice"
+                  className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
+                >
+                  <span role="status" className="min-w-0 flex-1">
+                    {t('editor.notice.pinned')}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="pin-notice-undo"
+                    className="rounded border border-line px-2 py-0.5 text-ink transition-colors hover:bg-hover"
+                    onClick={() => {
+                      actionsRef.current.undo();
+                      setPinNotice(false);
+                    }}
+                  >
+                    {t('editor.notice.undo')}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="pin-notice-dismiss"
+                    aria-label={t('editor.notice.dismiss')}
+                    className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
+                    onClick={() => setPinNotice(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
             )}
           </main>
 
