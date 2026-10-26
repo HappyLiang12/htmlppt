@@ -183,6 +183,15 @@ export guarantees in full.
   upload/download mode: File System Access writes the original file when
   available, otherwise Ctrl+S or Export downloads it.
 
+Layout wrappers are enterable. The OBJECTS list shows a chevron on a container
+that holds other objects; click it, or double-click the container's own padding
+or background on the slide, to drill into that level. The breadcrumb names the
+context, the inspector lists the container's direct children, and Escape leaves
+one level (a breadcrumb segment jumps straight to it). Selecting, moving,
+resizing, and restyling work inside a container as they do at slide level, and a
+double-click on a text leaf still starts inline text editing. Structural
+commands such as grouping, ordering, and slide operations stay top-level.
+
 ## Localization
 
 The editor, play mode, presenter, and runtime controls support English,
