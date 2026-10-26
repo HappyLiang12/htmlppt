@@ -438,6 +438,39 @@ describe('host', () => {
     expect(wrongCookie.status).toBe(401);
   });
 
+  it('explains how to recover from a missing session', async () => {
+    const ctx = await setup();
+
+    const page = await fetch(
+      `${ctx.base}/d/${encodeURIComponent(basename(ctx.deckPath))}`
+    );
+
+    expect(page.status).toBe(401);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    const body = await page.text();
+    expect(body).toContain('<title>htmlppt</title>');
+    expect(body).toContain(basename(ctx.deckPath));
+    expect(body).toContain('htmlppt open');
+    expect(body).not.toContain(ctx.token);
+  });
+
+  it('escapes the deck name in the unauthorized page', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const deckName = 'review & notes.deck.html';
+    const target = await addDeck(ctx, deckName, 'Review notes');
+    const opened = await openDeck(ctx, cookie, target);
+    expect(opened.status).toBe(200);
+
+    const page = await fetch(`${ctx.base}/d/${encodeURIComponent(deckName)}`);
+
+    expect(page.status).toBe(401);
+    const body = await page.text();
+    expect(body).toContain('review &amp; notes.deck.html');
+    expect(body).not.toContain(deckName);
+    expect(body).not.toContain(ctx.token);
+  });
+
   it('serves the page and assets with the session cookie', async () => {
     const ctx = await setup();
     const page = await fetch(ctx.host.url, { redirect: 'manual' });
