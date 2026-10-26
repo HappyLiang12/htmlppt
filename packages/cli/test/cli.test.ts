@@ -2431,38 +2431,188 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
-  it('refuses a second host while a stale-build host is registered', async () => {
+  it('replaces a live host that no longer serves the editor', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);
     const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
     const host = await brokenShellHost();
+    const sessionFile = sessionFilePath(workspace, deckPath);
     let open: CliProcess | undefined;
 
     try {
-      const raw = await writeStaleSession(workspace, deckPath, {
+      await writeStaleSession(workspace, deckPath, {
         pid: host.pid,
         port: host.port
       });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      // Positive control: the registered host is alive and answers health for
+      // this deck, so only the broken editor shell separates it from a reuse.
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+
       open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
         cwd: workspace.cwd,
         env: cliEnvironment(workspace)
       });
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
 
-      const code = await open.waitForExit(10_000);
-
-      expect(code).toBe(1);
-      expect(open.stderr).toContain(
-        'appears to be running but is not responding'
+      await vi.waitFor(
+        () =>
+          expect(open?.stderr).toContain(
+            'does not serve the editor (stale build)'
+          ),
+        { timeout: 10_000 }
       );
-      expect(open.stderr).toContain('htmlppt stop');
-      expect(open.stdout).not.toContain('HTMLPPT_URL=');
-      // Keeping the reachable pid is deliberate: its entry is the handle the
-      // printed `stop` command needs, and a second host must not overwrite it.
-      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
-        raw
-      );
+      // The replacement keeps the deck's sticky address but starts a new host
+      // with the credential the stop rotated.
+      expect(url.port).toBe(String(host.port));
+      expect(url.searchParams.get('token')).not.toBe('stale-token');
+      expect(() => process.kill(host.pid, 0)).toThrow();
       expect(await sessionCount(workspace)).toBe(1);
+      const entry = JSON.parse(await readFile(sessionFile, 'utf8')) as {
+        path: string;
+        pid: number;
+        port: number;
+        token: string;
+      };
+      expect(entry).toMatchObject({
+        path: deckPath,
+        pid: open.child.pid,
+        port: host.port,
+        token: url.searchParams.get('token')
+      });
+      // The new process and the store agree on the rotated identity; evicting
+      // before reading the credential is what makes that true.
+      expect(
+        JSON.parse(await readFile(credentialPath, 'utf8'))
+      ).toMatchObject({
+        token: url.searchParams.get('token'),
+        port: host.port,
+        createdAt: persistedAt
+      });
+
+      const page = await fetch(
+        `http://127.0.0.1:${host.port}/d/basic.deck.html`,
+        {
+          headers: {
+            cookie: `htmlppt_token=${url.searchParams.get('token')}`
+          }
+        }
+      );
+      expect(page.status).toBe(200);
+      await page.body?.cancel().catch(() => undefined);
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      await open.waitForExit(10_000);
+      await expect(readFile(sessionFile, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+        createdAt: string;
+      };
+      expect(rotated.port).toBe(host.port);
+      expect(rotated.token).not.toBe(url.searchParams.get('token'));
+      expect(rotated.createdAt).toBe(persistedAt);
+    } finally {
+      open?.kill();
+      host.kill();
+    }
+  });
+
+  it('replaces a stale-build host registered under an alias spelling', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const aliasDir = join(workspace.cwd, 'alias-decks');
+    await symlink(
+      workspace.cwd,
+      aliasDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDir, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const host = await brokenShellHost();
+    let open: CliProcess | undefined;
+
+    try {
+      // The stale host is keyed by the alias spelling, exactly where an earlier
+      // `open` could have recorded it.
+      await writeStaleSession(workspace, aliasDeck, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
       expect(() => process.kill(host.pid, 0)).not.toThrow();
+
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+
+      await vi.waitFor(
+        () =>
+          expect(open?.stderr).toContain(
+            'does not serve the editor (stale build)'
+          ),
+        { timeout: 10_000 }
+      );
+      expect(url.port).toBe(String(host.port));
+      expect(url.searchParams.get('token')).not.toBe('stale-token');
+      expect(() => process.kill(host.pid, 0)).toThrow();
+      // The alias entry is replaced, not left behind next to the new one.
+      await expect(
+        readFile(sessionFilePath(workspace, aliasDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(
+        JSON.parse(
+          await readFile(sessionFilePath(workspace, deckPath), 'utf8')
+        )
+      ).toMatchObject({
+        path: deckPath,
+        pid: open.child.pid,
+        port: host.port,
+        token: url.searchParams.get('token')
+      });
+      expect(JSON.parse(await readFile(credentialPath, 'utf8'))).toMatchObject({
+        token: url.searchParams.get('token'),
+        port: host.port,
+        createdAt: persistedAt
+      });
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      await open.waitForExit(10_000);
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+      };
+      expect(rotated.port).toBe(host.port);
+      expect(rotated.token).not.toBe(url.searchParams.get('token'));
     } finally {
       open?.kill();
       host.kill();

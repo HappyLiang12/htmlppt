@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -775,35 +774,60 @@ async function closedPort(): Promise<number> {
   return address.port;
 }
 
-interface FakeHost {
+interface FakeHostProcess {
+  pid: number;
   port: number;
-  close: () => Promise<void>;
+  kill: () => void;
 }
 
 /**
- * Answers the token-authenticated health check for any deck but fails the
- * editor shell, like a host whose build disappeared after it started.
+ * A live host process that answers health for its deck but serves the editor
+ * shell with a server error. The pid owns the port, so the replacement path
+ * can signal the process a real broken host would be.
  */
-async function brokenShellHost(): Promise<FakeHost> {
-  const server = createHttpServer((request, response) => {
-    if ((request.url ?? '/').startsWith('/api/health')) {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true }));
-      return;
-    }
-    response.writeHead(500, { 'content-type': 'text/plain' });
-    response.end('editor build missing');
+async function brokenShellProcess(): Promise<FakeHostProcess> {
+  const script = `
+    const http = require('node:http');
+    const server = http.createServer((request, response) => {
+      if (request.url === '/api/health') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      response.writeHead(500, { 'content-type': 'text/plain' });
+      response.end('editor build missing');
+    });
+    server.listen(0, '127.0.0.1', () => {
+      process.stdout.write('PORT=' + server.address().port + '\\n');
+    });
+  `;
+  const child = spawn(process.execPath, ['-e', script], {
+    stdio: ['ignore', 'pipe', 'ignore']
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('The fake host did not expose a TCP port.');
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('The broken-shell host did not expose a pid.');
   }
+  child.stdout?.setEncoding('utf8');
+  const port = await new Promise<number>((resolve, reject) => {
+    let buffer = '';
+    child.stdout?.on('data', (chunk: string) => {
+      buffer += chunk;
+      const match = /PORT=(\d+)\r?\n/.exec(buffer);
+      if (match && match[1] !== undefined) {
+        resolve(Number(match[1]));
+      }
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      reject(new Error(`The broken-shell host exited early with code ${code}.`));
+    });
+  });
   return {
-    port: address.port,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+    pid,
+    port,
+    kill: () => {
+      child.kill('SIGKILL');
     }
   };
 }
@@ -2103,7 +2127,7 @@ describe('htmlppt MCP stdio server', () => {
     }
   });
 
-  it('fails open_editor instead of trusting a live host whose editor shell is broken', async () => {
+  it('replaces a live host whose editor shell is broken instead of trusting it', async () => {
     const brokenDir = join(dir, 'broken-open');
     await mkdir(brokenDir, { recursive: true });
     const deckPath = await copyFixture('basic.deck.html', brokenDir);
@@ -2112,37 +2136,73 @@ describe('htmlppt MCP stdio server', () => {
       sessionsDirectory(),
       `${sessionKey(deckPath)}.json`
     );
-    const fakeHost = await brokenShellHost();
+    const fakeHost = await brokenShellProcess();
+    let pid: number | undefined;
+
     try {
       const entry = {
         path: deckPath,
         port: fakeHost.port,
         token: 'stale-token',
-        pid: process.pid,
+        pid: fakeHost.pid,
         startedAt: new Date().toISOString(),
         revision: 'a'.repeat(64)
       };
       await writeSession(entry);
+      // Positive control: the registered host is alive and answers health for
+      // this deck, so only the broken editor shell separates it from a reuse.
+      expect(() => process.kill(fakeHost.pid, 0)).not.toThrow();
 
       const opened = await callTool('open_editor', {
         path: relativePath,
         open: false
       });
 
-      // The CLI refuses to start a second host because the kept entry still
-      // has a live pid. Health answering is not proof the URL opens an editor.
-      expect(opened.result.isError).toBe(true);
-      expect(opened.payload).toMatchObject({
-        code: 'editor-failed',
-        path: deckPath
+      // The stale host is replaced instead of being handed out as the editor.
+      expect(opened.result.isError).toBeFalsy();
+      const url = new URL(String(opened.payload.url));
+      expect(Number(url.port)).toBe(fakeHost.port);
+      const token = url.searchParams.get('token');
+      if (!token) {
+        throw new Error('open_editor returned a URL without a token.');
+      }
+      expect(() => process.kill(fakeHost.pid, 0)).toThrow();
+      const health = await fetch(`${url.origin}/api/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000)
       });
-      expect(String(opened.payload.message)).toContain('code 1');
-      expect(opened.payload.url).toBeUndefined();
-      // The kept entry is the recovery handle for `stop`.
-      expect(await readSession(sessionFilePath)).toEqual(entry);
-      expect(() => process.kill(process.pid, 0)).not.toThrow();
+      expect(health.status).toBe(200);
+
+      const session = await readSession(sessionFilePath);
+      if (!session) {
+        throw new Error('open_editor did not write the replacement session.');
+      }
+      expect(session).toMatchObject({
+        path: deckPath,
+        port: fakeHost.port,
+        token
+      });
+      expect(session.pid).not.toBe(process.pid);
+      expect(session.pid).not.toBe(fakeHost.pid);
+      pid = session.pid;
     } finally {
-      await fakeHost.close();
+      if (pid === undefined) {
+        pid = (await readSession(sessionFilePath))?.pid;
+      }
+      // A broken implementation can leave the old entry behind; it points at
+      // the fake host, never at this test process.
+      if (
+        pid !== undefined &&
+        pid !== process.pid &&
+        pid !== fakeHost.pid
+      ) {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          // The host already stopped.
+        }
+      }
+      fakeHost.kill();
     }
   });
 

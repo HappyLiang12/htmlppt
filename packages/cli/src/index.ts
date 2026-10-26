@@ -630,7 +630,12 @@ export async function runCli(
       // so canonicalizing here would hide entries written by another process.
       const filePath = resolve(io.cwd, file);
 
-      const { findLiveSession } = await import('@htmlppt/mcp');
+      const {
+        findLiveSession,
+        findStoppableSession,
+        lookupRegisteredSession,
+        probeSessionHealth
+      } = await import('@htmlppt/mcp');
       const existing = await findLiveSession(filePath);
       if (existing) {
         const url = sessionUrl(existing);
@@ -661,6 +666,35 @@ export async function runCli(
           await openBrowser(url, io);
         }
         return;
+      }
+
+      // A host that answered health for this deck but no longer serves the
+      // editor (`stale-build`) is alive and owns the recorded port. Replace it
+      // instead of handing out its dead URL. Only that verdict may be signalled:
+      // `unhealthy` and `unknown` never prove the pid belongs to this deck.
+      //
+      // Registry keys keep the spelling their writer used, and the caller's
+      // spelling may have no entry at all, so a stale host registered under an
+      // alias is reached through the canonical-path scan.
+      const direct = await lookupRegisteredSession(filePath);
+      let staleBuild = direct?.health === 'stale-build' ? direct : null;
+      if (staleBuild === null) {
+        const alias = await findStoppableSession(filePath);
+        staleBuild = alias?.health === 'stale-build' ? alias : null;
+      }
+      if (staleBuild !== null) {
+        // One quick retry absorbs a transient shell failure, such as a build
+        // being copied into place, before the host is replaced.
+        await delay(150);
+        if ((await probeSessionHealth(staleBuild.entry)) === 'stale-build') {
+          io.stderr(
+            `The editor registered for ${file} is running but does not serve the editor (stale build). Stopping it and starting a fresh one.`
+          );
+          // Evict before reading the credential: the stop rotates the token,
+          // so the new host starts with the rotated token and the store and
+          // the process agree.
+          await stopSession(staleBuild.entry, io, staleBuild.snapshot);
+        }
       }
 
       if (await hasUnresponsiveRegisteredHost(filePath)) {
