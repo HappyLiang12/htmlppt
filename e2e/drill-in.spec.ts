@@ -6,7 +6,8 @@ import {
   expect,
   test,
   type FrameLocator,
-  type Page
+  type Page,
+  type Response
 } from '@playwright/test';
 import { startCliHost } from './helpers';
 
@@ -14,6 +15,13 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliPath = join(repoRoot, 'packages/cli/dist/bin.js');
 const fixturePath = join(repoRoot, 'test-utils', 'fixtures', 'wrapped.deck.html');
 const FRAME_SELECTOR = 'iframe[title="投影片預覽"]';
+
+function isDeckSaveResponse(response: Response): boolean {
+  return (
+    response.request().method() === 'PUT' &&
+    new URL(response.url()).pathname === '/api/deck'
+  );
+}
 
 // The enter affordance is a chevron whose accessible name is class-first
 // ("Enter pad"), falling back to the lowercase tag when a row has no class.
@@ -296,6 +304,102 @@ test('locked containers offer no chevron and cannot be entered with Enter', asyn
     await page.keyboard.press('Enter');
     await expect(context).toBeHidden();
     await expect(rows).toHaveCount(4);
+  } finally {
+    await close(editor);
+  }
+});
+
+test('a locked wrapper keeps an alt-drilled child uneditable', async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    const outline = page.getByTestId('selection-outline');
+    const lockedChild = editor.frame
+      .locator('[data-slide-id="s2"] .locked p')
+      .first();
+
+    // Positive control: the same Alt-click on an unlocked subtree produces a
+    // nested selection with handles, so the absence below is the wrapper lock.
+    await editor.frame
+      .locator('[data-slide-id="s2"] .pad h1')
+      .click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '2.0.0');
+    await expect(outline).not.toHaveAttribute('data-readonly', 'true');
+    await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(8);
+
+    // Alt-click drills through the locked top-level wrapper to its first
+    // paragraph: the selection lands, but the wrapper keeps the subtree inert.
+    await lockedChild.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveCount(1);
+    await expect(outline).toHaveAttribute('data-selected-path', '3.0');
+    await expect(outline).toHaveAttribute('data-readonly', 'true');
+    await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
+    await expect(page.getByTestId('rotate-handle')).toHaveCount(0);
+
+    // ArrowRight must not nudge the child; a nudge pins it to absolute.
+    expect(await lockedChild.getAttribute('style')).toBeNull();
+    await page.keyboard.press('ArrowRight');
+    expect(await lockedChild.getAttribute('style')).toBeNull();
+    await expect(outline).toHaveAttribute('data-selected-path', '3.0');
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    // Alt-dragging keeps the drilled selection and must not start a transform
+    // session or save the deck.
+    const box = await lockedChild.boundingBox();
+    if (!box) throw new Error('Locked child has no bounding box.');
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    await page.keyboard.down('Alt');
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+    await page.mouse.up();
+    await page.keyboard.up('Alt');
+    expect(await lockedChild.getAttribute('style')).toBeNull();
+    await expect(outline).toHaveAttribute('data-selected-path', '3.0');
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    // Positive control: the same key and pointer gestures reach nested
+    // geometry when the top-level wrapper is unlocked, so the checks above
+    // are not asserting a dead handler.
+    const unlockedHeading = editor.frame.locator(
+      '[data-slide-id="s2"] .pad h1'
+    );
+    await unlockedHeading.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '2.0.0');
+    const nudgeSave = page.waitForResponse(isDeckSaveResponse);
+    await page.keyboard.press('ArrowRight');
+    expect((await nudgeSave).ok()).toBe(true);
+    await expect
+      .poll(() => unlockedHeading.getAttribute('style'))
+      .toContain('position: absolute');
+
+    const controlBox = await unlockedHeading.boundingBox();
+    if (!controlBox) throw new Error('Unlocked heading has no bounding box.');
+    const beforeControlDrag = await unlockedHeading.getAttribute('style');
+    const controlSave = page.waitForResponse(isDeckSaveResponse);
+    await page.keyboard.down('Alt');
+    await page.mouse.move(
+      controlBox.x + controlBox.width / 2,
+      controlBox.y + controlBox.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      controlBox.x + controlBox.width / 2 + 100,
+      controlBox.y + controlBox.height / 2 + 50,
+      { steps: 5 }
+    );
+    await page.mouse.up();
+    await page.keyboard.up('Alt');
+    expect((await controlSave).ok()).toBe(true);
+    await expect
+      .poll(() => unlockedHeading.getAttribute('style'))
+      .not.toBe(beforeControlDrag);
   } finally {
     await close(editor);
   }

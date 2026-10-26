@@ -357,6 +357,23 @@ function selectionElements(
   return elements;
 }
 
+/**
+ * A locked, hidden, or group top-level wrapper owns its whole subtree, so an
+ * Alt-drilled child inside one must stay inert. Top-level paths return null:
+ * they keep their own per-element checks, including group rotation.
+ */
+function blockedTopLevelAncestor(
+  slide: Element,
+  path: readonly number[]
+): Element | null {
+  if (path.length < 2) return null;
+  const top = elementAtPath(slide, [path[0] ?? -1]);
+  if (!top) return null;
+  return isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
+    ? top
+    : null;
+}
+
 function objectActionStateFor(
   slide: SlideInfo | undefined,
   selections: readonly SelectionTarget[],
@@ -2118,7 +2135,12 @@ export function App() {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element || isLockedElement(element) || isGroupElement(element)) {
+      if (
+        !element ||
+        isLockedElement(element) ||
+        isGroupElement(element) ||
+        blockedTopLevelAncestor(slide, selected.path) !== null
+      ) {
         return;
       }
       event.preventDefault();
@@ -2160,7 +2182,12 @@ export function App() {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element || isLockedElement(element) || isHiddenElement(element)) {
+      if (
+        !element ||
+        isLockedElement(element) ||
+        isHiddenElement(element) ||
+        blockedTopLevelAncestor(slide, selected.path) !== null
+      ) {
         return;
       }
       event.preventDefault();
@@ -2210,8 +2237,13 @@ export function App() {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
         const rect = rectOf(element, slide);
-        if (isLockedElement(element) || isHiddenElement(element)) {
-          if (!isHiddenElement(element)) {
+        const blockedAncestor = blockedTopLevelAncestor(slide, target.path);
+        if (
+          isLockedElement(element) ||
+          isHiddenElement(element) ||
+          blockedAncestor !== null
+        ) {
+          if (!isHiddenElement(element) && !isHiddenElement(blockedAncestor)) {
             boxes.push({
               rect: frameRectOf(rect, offset),
               rotation: rotationOf(element),
@@ -2850,10 +2882,12 @@ export function App() {
       if (
         !clickedTop ||
         isLockedElement(clickedTop) ||
-        isHiddenElement(clickedTop)
+        isHiddenElement(clickedTop) ||
+        blockedTopLevelAncestor(frameSlide, selected.path) !== null
       ) {
         // Locked objects stay selectable but inert: no native text selection
-        // drag, and no editor transform session.
+        // drag, and no editor transform session. The same holds for a child
+        // of a locked, hidden, or group top-level wrapper.
         if (clickedTop) event.preventDefault();
         return;
       }
@@ -3426,8 +3460,13 @@ export function App() {
       return { type: 'invalid', title: t('app.invalidData') };
     }
   })();
+  const blockedAncestor =
+    activeSlide && selection
+      ? blockedTopLevelAncestor(activeSlide.element, selection.path)
+      : null;
   const overlayHandles =
-    primaryObject && isLockedElement(primaryObject)
+    blockedAncestor !== null ||
+    (primaryObject && isLockedElement(primaryObject))
       ? 'none'
       : primaryObject && isGroupElement(primaryObject)
         ? 'rotate'
@@ -3761,7 +3800,9 @@ export function App() {
                   boxes={selectionBoxes}
                   guides={guides}
                   scale={scale}
-                  readOnly={selectionBoxes.length > 1}
+                  readOnly={
+                    selectionBoxes.length > 1 || blockedAncestor !== null
+                  }
                   handles={overlayHandles}
                   onResizeStart={beginResizeSession}
                   onRotateStart={beginRotateSession}
