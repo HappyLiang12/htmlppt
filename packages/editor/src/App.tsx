@@ -3517,9 +3517,11 @@ export function App() {
     }
     const element = elementAtPath(activeSlide.element, selection.path);
     if (!element) return null;
+    const kind = appearanceKindFor(element);
+    if (!kind) return null;
     const tag = element.tagName.toLowerCase();
     return {
-      kind: appearanceKindFor(element),
+      kind,
       svg: tag === 'svg',
       appearance: readShapeAppearance(element),
       text:
