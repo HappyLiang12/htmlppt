@@ -1,4 +1,5 @@
 import type { Translator } from './i18n';
+import { describeContextSegment } from './selection';
 
 const MAX_TEXT_LENGTH = 40;
 
@@ -33,4 +34,17 @@ export function describeSlide(
   t: Translator
 ): string {
   return t('a11y.slide', { index: index + 1, total });
+}
+
+/**
+ * Names the drill-in level that the editor just entered or left. The class-
+ * first segment matches the breadcrumb, so the live region and the visible
+ * trail agree; a null container means the slide root.
+ */
+export function describeContextLevel(
+  container: Element | null,
+  t: Translator
+): string {
+  if (!container) return t('a11y.contextSlide');
+  return t('a11y.contextLevel', { name: describeContextSegment(container) });
 }

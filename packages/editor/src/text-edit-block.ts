@@ -1,4 +1,44 @@
+import {
+  isGroupElement,
+  isHiddenElement,
+  isLockedElement
+} from './commands/objects';
+import type { MessageKey } from './i18n';
+
 export type TextEditBlock = 'not-text' | 'has-children' | 'empty';
+
+/** Every reason the rejected-gesture hint can name. */
+export type EditHintReason = TextEditBlock | 'locked' | 'hidden' | 'group';
+
+/** The reasons that come from the top-level guard, not the text contract. */
+export type TopLevelBlock = Exclude<EditHintReason, TextEditBlock>;
+
+/**
+ * One catalog key per reason, typed so a new reason cannot ship without
+ * localized copy in every dictionary.
+ */
+export const EDIT_HINT_KEYS: Record<EditHintReason, MessageKey> = {
+  'not-text': 'editor.hint.not-text',
+  'has-children': 'editor.hint.has-children',
+  empty: 'editor.hint.empty',
+  locked: 'editor.hint.locked',
+  hidden: 'editor.hint.hidden',
+  group: 'editor.hint.group'
+};
+
+/**
+ * The top-level guard refuses both an in-place text edit and container entry,
+ * so neither edit path can explain itself. Locked wins over hidden, hidden
+ * over group, matching the double-click handler's historical order. Null means
+ * the guard does not block the gesture.
+ */
+export function topLevelBlockFor(top: Element | null): TopLevelBlock | null {
+  if (!top) return null;
+  if (isLockedElement(top)) return 'locked';
+  if (isHiddenElement(top)) return 'hidden';
+  if (isGroupElement(top)) return 'group';
+  return null;
+}
 
 /**
  * The tags that accept an in-place text edit. App.tsx resolves double-click

@@ -63,8 +63,12 @@ import { TextToolbar } from './components/TextToolbar';
 import { TableToolbar } from './components/TableToolbar';
 import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
-import { useI18n, type MessageKey, type Translator } from './i18n';
-import { describeSelection, describeSlide } from './announcements';
+import { useI18n, type Translator } from './i18n';
+import {
+  describeContextLevel,
+  describeSelection,
+  describeSlide
+} from './announcements';
 import { appearanceKindFor } from './appearance-kind';
 import {
   DeckAuthError,
@@ -97,9 +101,11 @@ import {
 } from './standalone';
 import { StandaloneLauncher } from './components/StandaloneLauncher';
 import {
+  EDIT_HINT_KEYS,
   textEditBlockFor,
   TEXT_EDITABLE_SELECTOR,
-  type TextEditBlock
+  topLevelBlockFor,
+  type EditHintReason
 } from './text-edit-block';
 import {
   planConflictResolution,
@@ -214,15 +220,14 @@ import {
   type DeckControllerState
 } from './use-deck-controller';
 
-// One key per rejection reason, typed so a new block reason cannot ship
-// without localized copy in every catalog.
-const EDIT_HINT_KEYS: Record<TextEditBlock, MessageKey> = {
-  'not-text': 'editor.hint.not-text',
-  'has-children': 'editor.hint.has-children',
-  empty: 'editor.hint.empty'
-};
-
 const EDIT_HINT_TIMEOUT_MS = 6_000;
+
+interface EditHintState {
+  reason: EditHintReason;
+  // A new gesture mints a new state object, so repeating the same failure
+  // restarts the dismissal timer instead of leaving the old one running.
+  gesture: number;
+}
 
 // Div shapes and text boxes are leaf objects; a layout div with element
 // children keeps its original semantic text target rather than becoming the
@@ -605,11 +610,19 @@ export function App() {
   } | null>(null);
   const transitionPreviewSequence = useRef(0);
   const [containerPath, setContainerPath] = useState<number[]>([]);
+  const containerPathKey = containerPath.join('.');
   // The preview frame's dblclick and keydown listeners register once per frame
   // load and would otherwise close over the path from that render, so the
   // handlers read the current value through this mirror.
   const containerPathRef = useRef(containerPath);
   containerPathRef.current = containerPath;
+  // Last announced context level. A slide switch resets the path from an
+  // effect, and that reset must not talk over the slide announcement.
+  const previousContextRef = useRef({
+    key: containerPathKey,
+    slideId: activeSlide?.id,
+    resetBySlide: false
+  });
   const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
@@ -645,7 +658,12 @@ export function App() {
   // A rejected double-click names its reason here; a started text edit or a
   // container entry never sets it. The hint is advisory, so it takes no focus
   // and no canvas space.
-  const [editHint, setEditHint] = useState<TextEditBlock | null>(null);
+  const [editHint, setEditHint] = useState<EditHintState | null>(null);
+  const editHintGestureRef = useRef(0);
+  const showEditHint = useCallback((reason: EditHintReason): void => {
+    editHintGestureRef.current += 1;
+    setEditHint({ reason, gesture: editHintGestureRef.current });
+  }, []);
 
   const showPinNotice = useCallback((pinned: boolean): void => {
     if (!shouldNotifyPin(pinned, pinNoticeShownRef.current)) return;
@@ -2420,6 +2438,9 @@ export function App() {
   );
 
   const beginTextEditing = useCallback((editable: HTMLElement) => {
+    // A started text edit is the success path for a previously rejected
+    // gesture, so the advisory hint leaves at once.
+    setEditHint(null);
     const document = editable.ownerDocument;
     const range = currentTextRange(document);
     editingElementRef.current = editable;
@@ -3131,11 +3152,12 @@ export function App() {
       while (top.parentElement && top.parentElement !== slideRoot) {
         top = top.parentElement;
       }
-      if (
-        isLockedElement(top) ||
-        isHiddenElement(top) ||
-        isGroupElement(top)
-      ) {
+      // The guard refuses both edit paths. It is checked before container
+      // entry, so a locked container names the lock instead of silently
+      // ignoring the gesture or entering anyway.
+      const topBlock = topLevelBlockFor(top);
+      if (topBlock) {
+        showEditHint(topBlock);
         return;
       }
       // Text leaves stay first: when the double-click can start an in-place
@@ -3171,7 +3193,7 @@ export function App() {
       if (!frameSlide) return;
       const next = contextEntry(frameSlide, target, containerPathRef.current);
       if (!next) {
-        setEditHint(block);
+        showEditHint(block);
         return;
       }
       event.preventDefault();
@@ -3309,7 +3331,14 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
-  }, [beginTextEditing, clearOverlay, commit, endTextEditing, finishTextEditing]);
+  }, [
+    beginTextEditing,
+    clearOverlay,
+    commit,
+    endTextEditing,
+    finishTextEditing,
+    showEditHint
+  ]);
 
   const applyTextToolbarCommand = useCallback(
     (command: TextCommand) => {
@@ -3550,6 +3579,38 @@ export function App() {
     if (slides.length === 0) return;
     setAnnouncement(describeSlide(activeIndex, slides.length, t));
   }, [activeIndex, activeSlide?.id, slides.length, t]);
+
+  // Entering, leaving, and jumping between contexts changes the level the
+  // canvas shows, so it announces through the existing polite region rather
+  // than adding a second one. A slide switch resets the path from an effect;
+  // the slide announcement owns that transition, so the reset is silent.
+  useEffect(() => {
+    const previous = previousContextRef.current;
+    const slideChanged = previous.slideId !== activeSlide?.id;
+    previous.slideId = activeSlide?.id;
+    if (slideChanged) {
+      previous.resetBySlide = containerPath.length > 0;
+      setEditHint(null);
+    }
+    if (previous.key === containerPathKey) return;
+    previous.key = containerPathKey;
+    if (slideChanged) {
+      previous.resetBySlide = false;
+      return;
+    }
+    if (previous.resetBySlide) {
+      previous.resetBySlide = false;
+      if (containerPathKey === '') return;
+    }
+    // A successful entry or leave ends a rejected-gesture hint; the hint
+    // itself never takes focus, and neither does this announcement.
+    setEditHint(null);
+    const container =
+      containerPath.length > 0 && activeSlide
+        ? elementAtPath(activeSlide.element, containerPath)
+        : null;
+    setAnnouncement(describeContextLevel(container, t));
+  }, [activeSlide, containerPath, containerPathKey, t]);
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
   const nestedActions = nestedElementState(activeSlide, selections, activeIndex);
@@ -3863,7 +3924,8 @@ export function App() {
         >
           <button
             type="button"
-            className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+            aria-label={t('editor.context.slide')}
+            className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onClick={() => changeContext([])}
           >
             {t('editor.context.slide')}
@@ -3871,17 +3933,19 @@ export function App() {
           {containerPath.map((_, depth) => {
             const path = containerPath.slice(0, depth + 1);
             const element = elementAtPath(activeSlide.element, path);
+            const label = element
+              ? describeContextSegment(element)
+              : t('editor.context.unknown');
             return (
               <Fragment key={path.join('.')}>
                 <span aria-hidden="true">›</span>
                 <button
                   type="button"
-                  className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+                  aria-label={t('editor.context.goTo', { name: label })}
+                  className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                   onClick={() => changeContext(path)}
                 >
-                  {element
-                    ? describeContextSegment(element)
-                    : t('editor.context.unknown')}
+                  {label}
                 </button>
               </Fragment>
             );
@@ -4032,7 +4096,7 @@ export function App() {
                   className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
                 >
                   <span className="min-w-0 flex-1">
-                    {t(EDIT_HINT_KEYS[editHint])}
+                    {t(EDIT_HINT_KEYS[editHint.reason])}
                   </span>
                   <button
                     type="button"

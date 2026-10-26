@@ -363,6 +363,32 @@ describe('inspector geometry locks', () => {
   });
 });
 
+describe('inspector nested structural hint', () => {
+  const geometry = { x: 120, y: 160, width: 240, height: 120, rotation: 0 };
+  const nestedSelection = { slideIndex: 0, path: [0, 0], elementId: null };
+  const COPY =
+    'Position, size, appearance, and text apply to this object. Duplicate, delete, and reorder act on top-level objects only.';
+
+  it('explains which edits a nested selection still supports', async () => {
+    await render({ selection: nestedSelection, geometry }, 'en');
+
+    expect(container.textContent).toContain(COPY);
+    expect(container.textContent).not.toContain('read-only');
+  });
+
+  it('does not show the structural hint for a top-level selection', async () => {
+    await render(
+      {
+        selection: { slideIndex: 0, path: [0], elementId: 'e1' },
+        geometry
+      },
+      'en'
+    );
+
+    expect(container.textContent).not.toContain(COPY);
+  });
+});
+
 describe('inspector notes draft', () => {
   it('drops a draft on an approved replacement without committing it to the next slide', async () => {
     const onSetNotes = vi.fn();

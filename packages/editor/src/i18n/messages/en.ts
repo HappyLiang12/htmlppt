@@ -130,8 +130,8 @@ export const en = {
     'Selected {count} objects; align, distribute, group, or drag to move.',
   'inspector.groupHint':
     'Groups can only be moved and rotated; ungroup to resize.',
-  'inspector.nestedHint':
-    'Nested selections are read-only. Select the top-level object first.',
+  'inspector.nestedStructuralHint':
+    'Position, size, appearance, and text apply to this object. Duplicate, delete, and reorder act on top-level objects only.',
   'inspector.appearance': 'Appearance',
   'inspector.objectAppearance': 'Object appearance',
   'inspector.image': 'Image',
@@ -299,6 +299,7 @@ export const en = {
   'editor.newSlideTitle': 'New slide',
   'editor.newTextBox': 'Text box',
   'editor.context.enter': 'Enter {name}',
+  'editor.context.goTo': 'Go to {name}',
   'editor.context.label': 'Editing context',
   'editor.context.slide': 'Slide',
   'editor.context.unknown': 'Unknown',
@@ -315,6 +316,12 @@ export const en = {
     'This element has children. Enter the container, then edit its text.',
   'editor.hint.empty':
     'This element has no text yet. Add text through the Text tools first.',
+  'editor.hint.locked':
+    'This object is locked. Unlock it before editing its content.',
+  'editor.hint.hidden':
+    'This object is hidden. Unhide it before editing its content.',
+  'editor.hint.group':
+    'Groups edit as one object. Ungroup it to edit the parts.',
   'standalone.title': 'Standalone editor',
   'standalone.description': 'No local host is connected. Open or drop an HTML deck to edit it. Browsers with File System Access write back to the original file; others can download the exported HTML.',
   'standalone.open': 'Open HTML…',
@@ -326,6 +333,8 @@ export const en = {
   'a11y.selectedTag': 'Selected {tag}',
   'a11y.selectedSummary': 'Selected {tag}: {summary}',
   'a11y.slide': 'Slide {index} of {total}',
+  'a11y.contextLevel': 'Editing inside {name}',
+  'a11y.contextSlide': 'Editing the slide',
   'locale.label': 'Language',
   'theme.label': 'Theme',
   'theme.light': 'Light',

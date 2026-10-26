@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Translator } from './i18n';
 import { en } from './i18n/messages/en';
 import { zhHant } from './i18n/messages/zh-Hant';
-import { describeSelection, describeSlide } from './announcements.js';
+import {
+  describeContextLevel,
+  describeSelection,
+  describeSlide
+} from './announcements.js';
 
 function element(html: string): Element {
   const container = document.createElement('div');
@@ -65,5 +69,28 @@ describe('describeSlide', () => {
 
   it('localizes the slide announcement', () => {
     expect(describeSlide(0, 5, translator(en))).toBe('Slide 1 of 5');
+  });
+});
+
+describe('describeContextLevel', () => {
+  it('names the entered container by its class-first segment', () => {
+    expect(describeContextLevel(element('<div class="pad cover"></div>'), t)).toBe(
+      '正在編輯 .pad'
+    );
+  });
+
+  it('falls back to the tag and announces the slide level', () => {
+    expect(describeContextLevel(element('<section></section>'), t)).toBe(
+      '正在編輯 section'
+    );
+    expect(describeContextLevel(null, t)).toBe('正在編輯投影片');
+  });
+
+  it('localizes in English', () => {
+    const english = translator(en);
+    expect(
+      describeContextLevel(element('<div class="pad"></div>'), english)
+    ).toBe('Editing inside .pad');
+    expect(describeContextLevel(null, english)).toBe('Editing the slide');
   });
 });
