@@ -755,6 +755,65 @@ test('drags a grid child without changing the grid parent', { tag: '@feature:nes
   }
 });
 
+// The wrapped fixture has no SVG descendant, so the "no panel for an SVG
+// child" case lives in the appearance-kind unit tests instead of this spec.
+test('styles a nested paragraph through the appearance panel and persists it', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const pad = editor.frame.locator('.pad');
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      '2.1'
+    );
+
+    // Positive control: a paragraph two levels down gets the shape panel, not
+    // the read-only hint that nested selections showed before DE3.
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('image-alt')).toHaveCount(0);
+
+    const fill = page.getByTestId('style-fill');
+    // The suite runs under the zh-TW pin, so this is the real field label.
+    await expect(fill).toHaveAttribute('aria-label', '填色');
+    await fill.fill('#ffeeaa');
+    await fill.press('Enter');
+
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('background-color');
+    await expect(foot).toHaveCSS('background-color', 'rgb(255, 238, 170)');
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    // The edit lands on the selected child, not on its container.
+    expect(await pad.getAttribute('style')).toBeNull();
+
+    // The saved deck carries the style, not only a live iframe change.
+    const saved = await readFile(join(editor.directory, editor.file), 'utf8');
+    expect(saved).toMatch(
+      /<p class="foot" style="[^"]*background-color: rgb\(255, 238, 170\)/
+    );
+
+    await page.reload();
+    const reloadedFrame = page.frameLocator(FRAME_SELECTOR);
+    await expect(reloadedFrame.locator('[data-slide-id]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    const reloadedFoot = reloadedFrame.locator('.pad .foot');
+    await expect(reloadedFoot).toHaveAttribute(
+      'style',
+      /background-color: rgb\(255, 238, 170\)/
+    );
+    await expect(reloadedFoot).toHaveCSS(
+      'background-color',
+      'rgb(255, 238, 170)'
+    );
+  } finally {
+    await close(editor);
+  }
+});
+
 test('Escape during a nested drag cancels the drag and keeps the context', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
