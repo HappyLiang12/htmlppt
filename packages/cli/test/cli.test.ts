@@ -2101,6 +2101,107 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('stops a broken-shell host registered under an alias spelling', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const aliasDir = join(workspace.cwd, 'alias-decks');
+    await symlink(
+      workspace.cwd,
+      aliasDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDir, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const host = await brokenShellHost();
+
+    try {
+      // The live host is registered under a different spelling of the deck,
+      // exactly where `open` tells the user to run `stop` for it.
+      await writeStaleSession(workspace, aliasDeck, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      expect(stop.code).toBe(0);
+      expect(stop.stdout).toContain('Stopped editor');
+      expect(stop.stderr).not.toContain('No live editor session');
+      await expect(
+        readFile(sessionFilePath(workspace, aliasDeck), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => process.kill(host.pid, 0)).toThrow();
+      const rotated = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        token: string;
+        port: number;
+        createdAt: string;
+      };
+      expect(rotated.port).toBe(host.port);
+      expect(rotated.token).not.toBe('stale-token');
+      expect(rotated.createdAt).toBe(persistedAt);
+    } finally {
+      host.kill();
+    }
+  });
+
+  it('leaves an unknown session and its credential untouched', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    const silent = await silentHost();
+    const keepalive = await spawnKeepalive();
+    const pid = keepalive.pid;
+    if (pid === undefined) {
+      throw new Error('The keepalive process did not expose a pid.');
+    }
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid,
+        port: silent.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: silent.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      const credentialBefore = await readFile(credentialPath, 'utf8');
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      // A host that may merely be busy must not be signalled or rotated.
+      expect(stop.code).toBe(1);
+      expect(stop.stderr).toContain('Could not verify');
+      expect(stop.stderr).not.toContain('Stopped editor');
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await readFile(credentialPath, 'utf8')).toBe(credentialBefore);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      await silent.close();
+      if (keepalive.exitCode === null && keepalive.signalCode === null) {
+        keepalive.kill('SIGKILL');
+      }
+    }
+  });
+
   it('stops every live editor with --all', async () => {
     const workspace = await createCliWorkspace();
     const directories = ['one', 'two'];
@@ -2327,6 +2428,44 @@ describe('htmlppt cli as a real process', () => {
       if (keepalive.exitCode === null && keepalive.signalCode === null) {
         keepalive.kill('SIGKILL');
       }
+    }
+  });
+
+  it('refuses a second host while a stale-build host is registered', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const host = await brokenShellHost();
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid: host.pid,
+        port: host.port
+      });
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stderr).toContain('htmlppt stop');
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      // Keeping the reachable pid is deliberate: its entry is the handle the
+      // printed `stop` command needs, and a second host must not overwrite it.
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await sessionCount(workspace)).toBe(1);
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+    } finally {
+      open?.kill();
+      host.kill();
     }
   });
 

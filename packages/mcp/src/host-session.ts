@@ -46,11 +46,14 @@ export interface RegisteredSessionCheck {
  *
  * A `stale-build` entry answered health for this deck but cannot serve the
  * editor. It is kept instead of pruned: the process is reachable, so `stop`
- * must still be able to retire it, while this function returns null so `open`
- * starts a fresh host. A health 5xx or a timeout (`unknown`) also keeps the
- * entry and the scan continues, because another spelling of the same deck may
- * name a healthy host. Only after the scan finds no healthy entry does the
- * caller fall back to direct mode for this call.
+ * must still be able to retire it, while this function returns null so callers
+ * do not hand out a broken editor. `open` does not start a second host while
+ * the kept entry's pid is alive; it reports that the host is not responding
+ * and directs the user to `stop`, which is the recovery path. A health 5xx or
+ * a timeout (`unknown`) also keeps the entry and the scan continues, because
+ * another spelling of the same deck may name a healthy host. Only after the
+ * scan finds no healthy entry does the caller fall back to direct mode for
+ * this call.
  *
  * Every removal is fenced by the exact bytes that were checked. A listed
  * entry can be stale by the time the health check finishes, so each candidate
@@ -124,6 +127,51 @@ export async function findLiveSession(
 }
 
 /**
+ * Finds a registered host that `stop` can retire even when it cannot serve the
+ * editor. `lookupRegisteredSession` only judges the caller's spelling, but a
+ * live host may be registered under another spelling of the same deck, such as
+ * the long form of a Windows short path or a symlinked/junction parent. The
+ * registry is scanned by canonical path: a `healthy` entry wins, and the first
+ * `stale-build` entry is kept as a fallback. Both are returned with the exact
+ * bytes that were checked so the caller can signal only the probed process.
+ *
+ * `unknown` entries are skipped because the host may be busy, and `unhealthy`
+ * entries are neither returned nor removed here; `findLiveSession` owns their
+ * pruning.
+ */
+export async function findStoppableSession(
+  filePath: string
+): Promise<RegisteredSessionCheck | null> {
+  const resolved = path.resolve(filePath);
+  const canonical = await canonicalDeckPath(resolved);
+  let staleBuild: RegisteredSessionCheck | null = null;
+  for (const listed of await listSessions()) {
+    if (!(await sameDeckPath(listed.path, canonical))) {
+      continue;
+    }
+    const entryFile = path.join(
+      sessionsDirectory(),
+      `${sessionKey(listed.path)}.json`
+    );
+    const current = await readCheckedSession(entryFile);
+    if (!current) {
+      continue;
+    }
+    if (!(await sameDeckPath(current.entry.path, canonical))) {
+      continue;
+    }
+    const health = await probeSessionHealth(current.entry);
+    if (health === 'healthy') {
+      return { ...current, health };
+    }
+    if (health === 'stale-build' && staleBuild === null) {
+      staleBuild = { ...current, health };
+    }
+  }
+  return staleBuild;
+}
+
+/**
  * Reads and validates a session, then returns the exact content that was
  * checked. `readSession` re-validates pid liveness and shape; the follow-up
  * read proves the file still held that same entry. Hand-formatted but
@@ -194,57 +242,71 @@ function sessionEntryFile(resolvedPath: string): string {
  *
  * - `healthy`: health accepted this deck and the shell is the built editor.
  * - `stale-build`: health accepted this deck, but the shell is not the editor
- *   (any non-200 status, a wrong content type, or a missing root marker). The
- *   process is reachable and owns the deck, so callers must keep the entry for
- *   `stop` rather than treat it like a dead host.
+ *   (any non-200 status, a wrong content type, a missing root marker, or a
+ *   transport failure while reading it). The process is reachable and owns the
+ *   deck, so callers must keep the entry for `stop` rather than treat it like a
+ *   dead host.
  * - `unhealthy`: health definitively rejected this deck (a non-5xx status such
  *   as 401/403/404/405/400, a malformed payload, a different filePath) or the
  *   connection is refused. Ownership is not proven, so never signal a pid
  *   from this verdict.
- * - `unknown`: a health 5xx, an abort, or a timeout on either probe. The host
- *   may be busy, so the entry is kept.
+ * - `unknown`: a health 5xx, an abort, a timeout, or another health transport
+ *   failure. The host may be busy, so the entry is kept.
  *
  * Health keeps 5xx as `unknown` because that probe can sit behind the save
  * lock. The shell route only reads the built editor, so any answer other than
- * the editor itself is a stale build.
+ * the editor itself is a stale build; once health proved ownership, a shell
+ * transport failure cannot turn the entry into a stranger.
  */
 export async function probeSessionHealth(
   entry: SessionEntry
 ): Promise<HealthStatus> {
+  let response: Response;
   try {
-    const response = await fetch(`http://127.0.0.1:${entry.port}/api/health`, {
+    response = await fetch(`http://127.0.0.1:${entry.port}/api/health`, {
       headers: { authorization: `Bearer ${entry.token}` },
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
     });
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      // A 5xx can mean a busy host, so keep its entry. Every other status,
-      // including 401/403 and 404/400/405, is a definitive rejection or a
-      // different service on the recorded port.
-      return response.status >= 500 ? 'unknown' : 'unhealthy';
+  } catch (error) {
+    // A refused connection proves no host owns the recorded port. A timeout or
+    // another transport failure may be a busy host, so keep the entry.
+    return isConnectionRefused(error) ? 'unhealthy' : 'unknown';
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    // A 5xx can mean a busy host, so keep its entry. Every other status,
+    // including 401/403 and 404/400/405, is a definitive rejection or a
+    // different service on the recorded port.
+    return response.status >= 500 ? 'unknown' : 'unhealthy';
+  }
+  let payload: { ok?: unknown; filePath?: unknown } | null;
+  try {
+    payload = (await response.json()) as {
+      ok?: unknown;
+      filePath?: unknown;
+    } | null;
+  } catch (error) {
+    // The signal also bounds reading the body. A malformed payload proves the
+    // response is not this host's health document; a transport failure while
+    // reading it says nothing definitive.
+    if (isAbortError(error)) {
+      return 'unknown';
     }
-    let payload: { ok?: unknown; filePath?: unknown } | null;
-    try {
-      payload = (await response.json()) as {
-        ok?: unknown;
-        filePath?: unknown;
-      } | null;
-    } catch (error) {
-      // The signal also bounds reading the body.
-      return isAbortError(error) ? 'unknown' : 'unhealthy';
-    }
-    if (payload?.ok !== true) {
-      return 'unhealthy';
-    }
-    // A host that switched decks under the recorded port is not serving this
-    // entry. Older payloads omit filePath, which stays compatible.
-    if (
-      payload.filePath !== undefined &&
-      payload.filePath !== entry.path
-    ) {
-      return 'unhealthy';
-    }
+    return error instanceof SyntaxError ? 'unhealthy' : 'unknown';
+  }
+  if (payload?.ok !== true) {
+    return 'unhealthy';
+  }
+  // A host that switched decks under the recorded port is not serving this
+  // entry. Older payloads omit filePath, which stays compatible.
+  if (payload.filePath !== undefined && payload.filePath !== entry.path) {
+    return 'unhealthy';
+  }
 
+  // Past this point health proved this process owns the deck, so shell-phase
+  // failures must stay `stale-build` or `unknown`; only `unhealthy` forbids
+  // signalling the pid.
+  try {
     // The tokenized root redirects to the deck document without the query
     // token, so the probe also presents the host's session cookie to stay
     // authorized on the redirected request.
@@ -272,8 +334,17 @@ export async function probeSessionHealth(
     const body = await shell.text();
     return body.includes('id="root"') ? 'healthy' : 'stale-build';
   } catch (error) {
-    // Timeouts say nothing definitive: a health probe can be busy behind the
-    // save lock and a slow shell may still be fine, so keep the entry.
-    return isAbortError(error) ? 'unknown' : 'unhealthy';
+    // The host answered health for this deck but could not deliver the shell.
+    // A timeout says nothing definitive about the build, so keep the entry as
+    // unknown; any other transport failure is a broken shell, never a
+    // stranger, because ownership is already proven.
+    return isAbortError(error) ? 'unknown' : 'stale-build';
   }
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  const cause = (error as { cause?: unknown }).cause;
+  return (
+    (cause as NodeJS.ErrnoException | undefined)?.code === 'ECONNREFUSED'
+  );
 }

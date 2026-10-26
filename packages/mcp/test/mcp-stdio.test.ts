@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -772,6 +773,39 @@ async function closedPort(): Promise<number> {
     server.close((error) => (error ? reject(error) : resolve()));
   });
   return address.port;
+}
+
+interface FakeHost {
+  port: number;
+  close: () => Promise<void>;
+}
+
+/**
+ * Answers the token-authenticated health check for any deck but fails the
+ * editor shell, like a host whose build disappeared after it started.
+ */
+async function brokenShellHost(): Promise<FakeHost> {
+  const server = createHttpServer((request, response) => {
+    if ((request.url ?? '/').startsWith('/api/health')) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    response.writeHead(500, { 'content-type': 'text/plain' });
+    response.end('editor build missing');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The fake host did not expose a TCP port.');
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
 }
 
 /**
@@ -2066,6 +2100,49 @@ describe('htmlppt MCP stdio server', () => {
           // The stop command already terminated the host.
         }
       }
+    }
+  });
+
+  it('fails open_editor instead of trusting a live host whose editor shell is broken', async () => {
+    const brokenDir = join(dir, 'broken-open');
+    await mkdir(brokenDir, { recursive: true });
+    const deckPath = await copyFixture('basic.deck.html', brokenDir);
+    const relativePath = join('broken-open', 'basic.deck.html');
+    const sessionFilePath = join(
+      sessionsDirectory(),
+      `${sessionKey(deckPath)}.json`
+    );
+    const fakeHost = await brokenShellHost();
+    try {
+      const entry = {
+        path: deckPath,
+        port: fakeHost.port,
+        token: 'stale-token',
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        revision: 'a'.repeat(64)
+      };
+      await writeSession(entry);
+
+      const opened = await callTool('open_editor', {
+        path: relativePath,
+        open: false
+      });
+
+      // The CLI refuses to start a second host because the kept entry still
+      // has a live pid. Health answering is not proof the URL opens an editor.
+      expect(opened.result.isError).toBe(true);
+      expect(opened.payload).toMatchObject({
+        code: 'editor-failed',
+        path: deckPath
+      });
+      expect(String(opened.payload.message)).toContain('code 1');
+      expect(opened.payload.url).toBeUndefined();
+      // The kept entry is the recovery handle for `stop`.
+      expect(await readSession(sessionFilePath)).toEqual(entry);
+      expect(() => process.kill(process.pid, 0)).not.toThrow();
+    } finally {
+      await fakeHost.close();
     }
   });
 

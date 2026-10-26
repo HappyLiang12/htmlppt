@@ -996,7 +996,7 @@ export function registerTools(
 
         let session: Awaited<ReturnType<typeof waitForSession>>;
         try {
-          session = await waitForSession(filePath);
+          session = await waitForSession(filePath, child);
         } catch (error) {
           await terminateChild(child);
           if (error instanceof ToolError && error.code === 'editor-timeout') {

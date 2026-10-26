@@ -15,6 +15,7 @@ export type {
 } from './deck-service.js';
 export {
   findLiveSession,
+  findStoppableSession,
   lookupRegisteredSession,
   probeSessionHealth
 } from './host-session.js';

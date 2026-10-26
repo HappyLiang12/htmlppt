@@ -229,6 +229,33 @@ describe('probeSessionHealth', () => {
     }
   });
 
+  it('reports a stale build when the shell connection drops after health', async () => {
+    // Health answered for this deck, so the process is not a stranger. A
+    // transport failure while fetching the shell cannot make the entry
+    // `unhealthy`; the reachable host stays stoppable instead.
+    const server = createServer((request, response) => {
+      if ((request.url ?? '/').startsWith('/api/health')) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(healthPayload());
+        return;
+      }
+      request.socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('no port');
+    try {
+      expect(await probeSessionHealth(demoEntry(address.port))).toBe(
+        'stale-build'
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it('is unhealthy when health rejects the token', async () => {
     const host = await fakeHost(() => ({
       status: 401,

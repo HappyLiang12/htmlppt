@@ -849,9 +849,11 @@ export async function runCli(
     .description('Stop a running editor session')
     .option('--all', 'stop every live editor session')
     .action(async (file: string | undefined, options: { all?: boolean }) => {
-      const { findLiveSession, lookupRegisteredSession } = await import(
-        '@htmlppt/mcp'
-      );
+      const {
+        findLiveSession,
+        findStoppableSession,
+        lookupRegisteredSession
+      } = await import('@htmlppt/mcp');
       if (options.all) {
         if (file !== undefined) {
           io.stderr('Pass either a deck file or --all, not both.');
@@ -1013,6 +1015,22 @@ export async function runCli(
           exitCode = 1;
         }
         return;
+      }
+      // A host that cannot serve the editor (`stale-build`) is alive and must
+      // be stopped, but `findLiveSession` only reports healthy hosts. When the
+      // caller's spelling has no entry at all, scan the registry by canonical
+      // path for a same-deck host that `stop` can safely retire with its
+      // checked snapshot. A healthy entry still wins inside that scan, so the
+      // pre-existing reuse path below only handles a race that appeared after
+      // the scan.
+      if (registered === null) {
+        const stoppable = await findStoppableSession(filePath);
+        if (stoppable) {
+          if (!(await stopSession(stoppable.entry, io, stoppable.snapshot))) {
+            exitCode = 1;
+          }
+          return;
+        }
       }
       // A healthy host may still be registered under another spelling.
       const live = await findLiveSession(filePath);

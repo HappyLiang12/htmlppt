@@ -43,6 +43,7 @@ import {
   HostDeckService,
   createDeckService
 } from '../src/deck-service.js';
+import { waitForSession } from '../src/deck-access.js';
 import {
   HEALTH_TIMEOUT_MS,
   findLiveSession
@@ -222,7 +223,11 @@ async function hangingHost(): Promise<HangingHost> {
  * followed by a request that never completes.
  */
 async function stubHost(
-  health: (response: ServerResponse) => void
+  health: (response: ServerResponse) => void,
+  shell: (response: ServerResponse) => void = (response) => {
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<div id="root">stub editor</div>');
+  }
 ): Promise<StubHost> {
   const server = createHttpServer((request, response) => {
     if (request.url === '/api/health') {
@@ -231,8 +236,7 @@ async function stubHost(
     }
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (url.pathname === '/' || url.pathname.startsWith('/d/')) {
-      response.writeHead(200, { 'content-type': 'text/html' });
-      response.end('<div id="root">stub editor</div>');
+      shell(response);
     }
   });
   await new Promise<void>((resolve, reject) => {
@@ -945,6 +949,48 @@ describe('findLiveSession', () => {
       await staleHost.close();
       await healthy.close();
     }
+  });
+});
+
+describe('waitForSession', () => {
+  it('rejects a live host whose editor shell is broken and keeps its entry', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+    const broken = await stubHost(
+      (response) => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+      },
+      (response) => {
+        response.writeHead(500, { 'content-type': 'text/plain' });
+        response.end('editor build missing');
+      }
+    );
+    try {
+      const entry = staleEntry({ port: broken.port });
+      await writeSession(entry);
+
+      // Health alone answers for this deck; only the shell proves the URL
+      // would open an editor. The host must not be reported as a success.
+      await expect(waitForSession(deckPath)).rejects.toMatchObject({
+        code: 'editor-timeout'
+      });
+
+      // The process is alive and owns the deck, so `stop` must still reach it.
+      expect(await readSession(sessionFilePath(deckPath))).toEqual(entry);
+    } finally {
+      await broken.close();
+    }
+  });
+
+  it('reports the spawned CLI exit code instead of waiting for a session', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+
+    await expect(
+      waitForSession(deckPath, { exitCode: 1, signalCode: null })
+    ).rejects.toMatchObject({
+      code: 'editor-failed',
+      message: expect.stringContaining('code 1')
+    });
   });
 });
 
