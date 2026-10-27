@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Wrapped deck</title>
+  <style>
+    .slide { width: 1600px; height: 900px; position: relative; overflow: hidden; background: #fff; }
+    .pad { position: absolute; left: 80px; top: 80px; width: 1200px; padding: 48px; box-sizing: border-box; }
+    .cover { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    h1 { font-size: 72px; margin: 0; }
+    p { font-size: 28px; margin: 0; }
+    .foot { margin-top: 32px; }
+    .locked { position: absolute; left: 80px; top: 560px; width: 600px; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="s1" data-width="1600" data-height="900">
+      <div class="halo" data-ppt-el="e1" style="position:absolute;inset:0;background:#eef"></div>
+      <div class="staff" data-ppt-el="e2" style="position:absolute;right:40px;top:40px;width:120px;height:4px;background:#345"></div>
+      <div class="pad" data-ppt-el="e3">
+        <div class="cover">
+          <h1>Wrapped title</h1>
+          <p>Body copy</p>
+        </div>
+        <p class="foot">Footer</p>
+      </div>
+    </section>
+    <section class="slide" data-slide-id="s2" data-width="1600" data-height="900">
+      <div class="halo" data-ppt-el="e4" style="position:absolute;inset:0;background:#eef"></div>
+      <div class="staff" data-ppt-el="e5" style="position:absolute;right:40px;top:40px;width:120px;height:4px;background:#345"></div>
+      <div class="pad" data-ppt-el="e6">
+        <div class="cover">
+          <h1>Second title</h1>
+          <p>Second body</p>
+        </div>
+        <p class="foot">Second footer</p>
+      </div>
+      <div class="locked" data-ppt-el="e7" data-ppt-locked="true">
+        <p>Locked heading</p>
+        <p>Locked body</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

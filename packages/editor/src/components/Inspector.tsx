@@ -13,7 +13,11 @@ import type {
 } from '@htmlppt/core';
 import type { ObjectCommand } from '../commands/objects';
 import { useI18n, type MessageKey } from '../i18n';
-import type { SelectionTarget } from '../selection';
+import {
+  elementAtPath,
+  isEnterableContainer,
+  type SelectionTarget
+} from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
 import {
   backgroundOf,
@@ -66,6 +70,9 @@ export interface InspectorProps {
   selection: SelectionTarget | null;
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
+  /** Entered container path; absent means the slide is listed. */
+  contextPath?: readonly number[];
+  onEnterContext?: (path: number[]) => void;
   geometry: GeometryValues | null;
   style?: InspectorStyleState | null;
   chart?: InspectorChartState | null;
@@ -321,6 +328,8 @@ export function Inspector({
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
+  contextPath,
+  onEnterContext,
   geometry,
   style = null,
   chart = null,
@@ -388,10 +397,25 @@ export function Inspector({
     setBackgroundError('');
   }, [background?.kind, background?.value, slide?.id]);
 
-  const objects = slide ? summarizeObjects(slide.element) : [];
+  // A non-empty path that no longer resolves to an enterable container is
+  // stale: list the slide and keep every row path slide-rooted instead of
+  // mixing slide-level rows with a dead prefix.
+  const requestedContext = contextPath ?? [];
+  const requestedElement =
+    slide && requestedContext.length > 0
+      ? elementAtPath(slide.element, requestedContext)
+      : null;
+  const contextActive =
+    requestedElement !== null && isEnterableContainer(requestedElement);
+  const contextBase = contextActive ? requestedContext : [];
+  const contextElement =
+    contextActive && requestedElement
+      ? requestedElement
+      : slide?.element ?? null;
+  const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
   const readOnly = multi || (selection !== null && selection.path.length > 1);
-  const selectedTopPath = selection?.path[0];
+  const selectedTopPath = selection?.path.slice(contextBase.length)[0];
   const geometryLocked = readOnly || objectActions.locked || objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;
 
@@ -513,6 +537,12 @@ export function Inspector({
             <ul data-testid="object-list" className="flex flex-col gap-1">
               {objects.map((object) => {
                 const selected = selectedTopPath === object.path[0];
+                const objectElement = contextElement?.children[object.index];
+                const firstClass = objectElement
+                  ?.getAttribute('class')
+                  ?.trim()
+                  .split(/\s+/)[0];
+                const objectPath = [...contextBase, ...object.path];
                 return (
                   <li
                     key={object.path.join('.')}
@@ -526,9 +556,9 @@ export function Inspector({
                       type="button"
                       data-testid="object-row"
                       data-object-id={object.elementId ?? undefined}
-                      data-object-path={object.path.join('.')}
+                      data-object-path={objectPath.join('.')}
                       aria-current={selected ? 'true' : undefined}
-                      onClick={() => onSelectObject(object.path)}
+                      onClick={() => onSelectObject(objectPath)}
                       className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs ${
                         selected ? 'text-accent' : 'text-muted'
                       }`}
@@ -566,6 +596,20 @@ export function Inspector({
                         </span>
                       )}
                     </button>
+                    {object.hasChildren && onEnterContext ? (
+                      <button
+                        type="button"
+                        aria-label={t('editor.context.enter', {
+                          name: firstClass || object.tag
+                        })}
+                        onClick={() =>
+                          onEnterContext([...contextBase, object.index])
+                        }
+                        className="shrink-0 px-2 text-[13px] leading-none text-muted transition-colors hover:text-ink"
+                      >
+                        ›
+                      </button>
+                    ) : null}
                     {object.locked && (
                       <button
                         type="button"
@@ -573,7 +617,7 @@ export function Inspector({
                         aria-label={t('inspector.unlockItemLabel', {
                           name: object.text || object.elementId || object.tag
                         })}
-                        onClick={() => onObjectRecovery(object.path, 'unlock')}
+                        onClick={() => onObjectRecovery(objectPath, 'unlock')}
                         className="shrink-0 px-2 text-[11px] text-danger underline-offset-2 hover:underline"
                       >
                         {t('inspector.unlockItem')}
@@ -586,7 +630,7 @@ export function Inspector({
                         aria-label={t('inspector.showItemLabel', {
                           name: object.text || object.elementId || object.tag
                         })}
-                        onClick={() => onObjectRecovery(object.path, 'unhide')}
+                        onClick={() => onObjectRecovery(objectPath, 'unhide')}
                         className="shrink-0 px-2 text-[11px] text-warning underline-offset-2 hover:underline"
                       >
                         {t('inspector.showItem')}

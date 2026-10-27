@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { selectionFromEvent, topLevelObjects } from './selection.js';
+import {
+  contextEntry,
+  describeContextSegment,
+  isEnterableContainer,
+  selectionFromEvent,
+  topLevelObjects
+} from './selection.js';
 
 function makeSlide(): Element {
   const slide = document.createElement('section');
@@ -56,6 +62,55 @@ function makeNotesFirstSlide(): Element {
   slide.append(notes, group, script, figure);
   return slide;
 }
+
+describe('isEnterableContainer', () => {
+  function parseElement(html: string): Element {
+    const template = document.createElement('template');
+    template.innerHTML = html.trim();
+    const element = template.content.firstElementChild;
+    if (!element) throw new Error('Missing fixture element.');
+    return element;
+  }
+
+  it('accepts a layout container with object children', () => {
+    expect(
+      isEnterableContainer(
+        parseElement(
+          '<div class="pad"><div class="cover">c</div><p>foot</p></div>'
+        )
+      )
+    ).toBe(true);
+  });
+
+  it('rejects text leaves that only wrap inline markup', () => {
+    expect(isEnterableContainer(parseElement('<p>x <strong>y</strong></p>'))).toBe(
+      false
+    );
+    expect(
+      isEnterableContainer(parseElement('<h1><span>Title</span></h1>'))
+    ).toBe(false);
+  });
+
+  it('rejects a div whose only element children are line breaks', () => {
+    expect(isEnterableContainer(parseElement('<div><br></div>'))).toBe(false);
+    expect(isEnterableContainer(parseElement('<div></div>'))).toBe(false);
+    expect(isEnterableContainer(parseElement('<div>plain text</div>'))).toBe(false);
+  });
+
+  it('rejects excluded children so a wrapper of notes or scripts stays inert', () => {
+    expect(
+      isEnterableContainer(
+        parseElement('<div><script>void 0;</script></div>')
+      )
+    ).toBe(false);
+  });
+
+  it('rejects groups so they stay atomic', () => {
+    expect(
+      isEnterableContainer(parseElement('<div data-ppt-group="1"><p>a</p></div>'))
+    ).toBe(false);
+  });
+});
 
 describe('topLevelObjects', () => {
   it('lists direct object children and skips notes and non-object tags', () => {
@@ -204,5 +259,181 @@ describe('selectionFromEvent', () => {
       path: [0, 0],
       elementId: null
     });
+  });
+});
+
+function build(): Element {
+  const doc = new DOMParser().parseFromString(
+    `<section data-slide-id="s1">
+       <div class="halo"></div>
+       <div class="pad">
+         <div class="cover"><h1>Title</h1><p>Sub</p></div>
+         <p class="foot">Footer</p>
+       </div>
+     </section>`,
+    'text/html'
+  );
+  return doc.querySelector('section') as Element;
+}
+
+describe('editing context', () => {
+  it('selects the context container child, not the slide-level wrapper', () => {
+    const slide = build();
+    const h1 = slide.querySelector('h1') as Element;
+
+    const selected = selectionFromEvent(h1, slide, { containerPath: [1] });
+
+    expect(selected?.path).toEqual([1, 0]);
+  });
+
+  it('keeps absolute paths for alt-click inside a context', () => {
+    const slide = build();
+    const h1 = slide.querySelector('h1') as Element;
+
+    const selected = selectionFromEvent(h1, slide, {
+      containerPath: [1],
+      altKey: true
+    });
+
+    expect(selected?.path).toEqual([1, 0, 0]);
+  });
+
+  it('enters the nearest container with children', () => {
+    const slide = build();
+    const cover = slide.querySelector('.cover') as Element;
+
+    expect(contextEntry(slide, cover, [])).toEqual([1, 0]);
+  });
+
+  it('does not enter a leaf element', () => {
+    const slide = build();
+    const foot = slide.querySelector('.foot') as Element;
+
+    expect(contextEntry(slide, foot, [1])).toBeNull();
+  });
+
+  it('returns null for the current container and targets outside it', () => {
+    const slide = build();
+    const pad = slide.querySelector('.pad') as Element;
+    const halo = slide.querySelector('.halo') as Element;
+
+    expect(contextEntry(slide, pad, [1])).toBeNull();
+    expect(contextEntry(slide, halo, [1])).toBeNull();
+  });
+
+  it('does not enter excluded elements such as speaker notes', () => {
+    const slide = document.createElement('section');
+    const notes = document.createElement('aside');
+    notes.setAttribute('data-ppt-notes', '1');
+    notes.innerHTML = '<p>Speaker notes</p>';
+    slide.appendChild(notes);
+
+    expect(contextEntry(slide, notes, [])).toBeNull();
+  });
+
+  it('does not enter text leaves, line-break boxes, or groups', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <p class="leaf">x <strong>y</strong></p>
+         <h1 class="heading"><span>Title</span></h1>
+         <div class="textbox"><br></div>
+         <div data-ppt-group="1"><p>a</p></div>
+       </section>`,
+      'text/html'
+    );
+    const slide = doc.querySelector('section') as Element;
+
+    expect(contextEntry(slide, slide.querySelector('.leaf') as Element, [])).toBeNull();
+    expect(contextEntry(slide, slide.querySelector('.heading') as Element, [])).toBeNull();
+    expect(contextEntry(slide, slide.querySelector('.textbox') as Element, [])).toBeNull();
+    expect(
+      contextEntry(slide, slide.querySelector('[data-ppt-group]') as Element, [])
+    ).toBeNull();
+  });
+
+  it('keeps raw child indices when an excluded sibling precedes a container', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad">
+           <script>void 0;</script>
+           <div class="cover"><p>body</p></div>
+         </div>
+       </section>`,
+      'text/html'
+    );
+    const slide = doc.querySelector('section') as Element;
+
+    expect(contextEntry(slide, slide.querySelector('.cover') as Element, [0])).toEqual([
+      0, 1
+    ]);
+  });
+
+  it('prepends the absolute container path when entering deeper', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad"><div class="cover"><div class="card"><p>body</p></div></div></div>
+       </section>`,
+      'text/html'
+    );
+    const slide = doc.querySelector('section') as Element;
+
+    expect(
+      contextEntry(slide, slide.querySelector('.card') as Element, [0, 0])
+    ).toEqual([0, 0, 0]);
+  });
+
+  it('keeps slide index, absolute path, and element ids for context selections', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="pad">
+           <script>void 0;</script>
+           <div class="cover" data-ppt-el="c1"><p data-ppt-el="p1">body</p></div>
+         </div>
+       </section>`,
+      'text/html'
+    );
+    const slide = doc.querySelector('section') as Element;
+    const paragraph = slide.querySelector('p') as Element;
+
+    expect(
+      selectionFromEvent(paragraph, slide, { containerPath: [0], slideIndex: 5 })
+    ).toEqual({
+      slideIndex: 5,
+      path: [0, 1],
+      elementId: 'c1'
+    });
+    expect(
+      selectionFromEvent(paragraph, slide, {
+        containerPath: [0],
+        slideIndex: 5,
+        altKey: true
+      })
+    ).toEqual({
+      slideIndex: 5,
+      path: [0, 1, 0],
+      elementId: 'p1'
+    });
+  });
+
+  it('describes a context segment by class, then tag', () => {
+    const slide = build();
+
+    expect(describeContextSegment(slide.querySelector('.pad') as Element)).toBe('.pad');
+    expect(describeContextSegment(slide.querySelector('h1') as Element)).toBe('h1');
+  });
+
+  it('uses the first class of a multi-class segment and ignores blank classes', () => {
+    const doc = new DOMParser().parseFromString(
+      `<section data-slide-id="s1">
+         <div class="  pad   cover  "></div>
+         <div class="   "></div>
+       </section>`,
+      'text/html'
+    );
+    const elements = Array.from(doc.querySelectorAll('div'));
+    if (elements.length !== 2) throw new Error('Missing fixture elements.');
+
+    expect(describeContextSegment(elements[0] as Element)).toBe('.pad');
+    expect(describeContextSegment(elements[1] as Element)).toBe('div');
   });
 });

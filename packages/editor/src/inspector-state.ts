@@ -8,6 +8,7 @@ import {
 import { normalizeAngle, type Point, type Rect } from './geometry';
 import {
   elementAtPath,
+  isEnterableContainer,
   topLevelObjects,
   type SelectionTarget
 } from './selection';
@@ -33,8 +34,10 @@ export interface GeometrySnapshot {
 }
 
 export interface ObjectSummary {
-  /** Raw child-index path from the slide, matching SelectionTarget.path. */
+  /** Raw child-index path from the summarized element. */
   path: number[];
+  /** Child index inside the summarized element. */
+  index: number;
   tag: string;
   elementId: string | null;
   text: string;
@@ -43,6 +46,8 @@ export interface ObjectSummary {
   group: boolean;
   /** A hide recovery can restore the authored display declaration. */
   canUnhide: boolean;
+  /** The element can become an editing context (not a text leaf or a group). */
+  hasChildren: boolean;
 }
 
 export type SlideBackground =
@@ -189,17 +194,28 @@ function textSummary(element: Element): string {
     : text;
 }
 
-export function summarizeObjects(slide: Element): ObjectSummary[] {
-  return topLevelObjects(slide).map((element) => ({
-    path: [Array.from(slide.children).indexOf(element)],
-    tag: element.tagName.toLowerCase(),
-    elementId: element.getAttribute('data-ppt-el')?.trim() || null,
-    text: textSummary(element),
-    locked: element.getAttribute('data-ppt-locked') === 'true',
-    hidden: (element as HTMLElement).style?.display === 'none',
-    group: element.hasAttribute('data-ppt-group'),
-    canUnhide: element.hasAttribute('data-ppt-display')
-  }));
+/**
+ * Summarizes the direct object children of the given element. Passing a slide
+ * lists its top-level objects; passing a container lists the children of the
+ * entered editing context. Paths and indexes stay relative to that element.
+ */
+export function summarizeObjects(container: Element): ObjectSummary[] {
+  const children = Array.from(container.children);
+  return topLevelObjects(container).map((element) => {
+    const index = children.indexOf(element);
+    return {
+      path: [index],
+      index,
+      tag: element.tagName.toLowerCase(),
+      elementId: element.getAttribute('data-ppt-el')?.trim() || null,
+      text: textSummary(element),
+      locked: element.getAttribute('data-ppt-locked') === 'true',
+      hidden: (element as HTMLElement).style?.display === 'none',
+      group: element.hasAttribute('data-ppt-group'),
+      canUnhide: element.hasAttribute('data-ppt-display'),
+      hasChildren: isEnterableContainer(element)
+    };
+  });
 }
 
 function findNotesAside(slide: Element | null | undefined): Element | null {

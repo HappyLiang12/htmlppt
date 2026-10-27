@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -110,7 +111,10 @@ import {
   type Rect
 } from './geometry';
 import {
+  contextEntry,
+  describeContextSegment,
   elementAtPath,
+  isEnterableContainer,
   selectionFromEvent,
   topLevelObjects,
   type SelectionTarget
@@ -521,6 +525,12 @@ export function App() {
     id: number;
   } | null>(null);
   const transitionPreviewSequence = useRef(0);
+  const [containerPath, setContainerPath] = useState<number[]>([]);
+  // The preview frame's dblclick and keydown listeners register once per frame
+  // load and would otherwise close over the path from that render, so the
+  // handlers read the current value through this mirror.
+  const containerPathRef = useRef(containerPath);
+  containerPathRef.current = containerPath;
   const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
@@ -547,6 +557,28 @@ export function App() {
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
   const [exportSignal, setExportSignal] = useState(0);
+
+  // A container path only means something within one slide of one deck:
+  // navigating or reloading starts again from the slide level. Deleting the
+  // active slide keeps the index and mutates the master in place, so the
+  // slide's identity, not just its position, has to gate the reset.
+  useEffect(() => {
+    setContainerPath((path) => (path.length === 0 ? path : []));
+  }, [activeIndex, activeSlide?.id, master]);
+
+  // A commit can delete or lock the entered container; a dead path would leave
+  // the breadcrumb naming an element that can no longer be entered. The
+  // inspector resolves its context with the same predicate, so the breadcrumb
+  // and the object list cannot disagree.
+  useEffect(() => {
+    if (containerPath.length === 0) return;
+    const container = activeSlide
+      ? elementAtPath(activeSlide.element, containerPath)
+      : null;
+    if (!container || !isEnterableContainer(container)) {
+      setContainerPath([]);
+    }
+  }, [activeSlide, containerPath]);
 
   const sessionRef = useRef<TransformSession | null>(null);
   const finishSessionRef = useRef<() => void>(() => undefined);
@@ -576,6 +608,9 @@ export function App() {
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
   const keyDownRef = useRef<
+    (event: KeyboardEvent, activeDocument: Document | null) => void
+  >(() => undefined);
+  const contextKeyDownRef = useRef<
     (event: KeyboardEvent, activeDocument: Document | null) => void
   >(() => undefined);
   const framePointerDownRef = useRef<
@@ -684,6 +719,27 @@ export function App() {
     setSelectionGeometry(null);
     setGuides([]);
   }, []);
+
+  /**
+   * Moves the drill-in context and drops the selection, which belonged to the
+   * level being left behind. A non-empty path must still resolve to a
+   * container the shared predicate accepts, so a stale chevron cannot enter a
+   * deleted, locked, or hidden wrapper.
+   */
+  const changeContext = useCallback(
+    (path: number[]) => {
+      if (path.length > 0) {
+        const current = stateRef.current;
+        const slide = current.slides[current.activeIndex]?.element;
+        const container = slide ? elementAtPath(slide, path) : null;
+        if (!container || !isEnterableContainer(container)) return;
+      }
+      setContainerPath(path);
+      actionsRef.current.clearSelection();
+      clearOverlay();
+    },
+    [clearOverlay]
+  );
 
   const requestPlayFullscreen = useCallback(async () => {
     const root = document.documentElement;
@@ -2417,6 +2473,79 @@ export function App() {
     [runObjectCommand]
   );
 
+  /**
+   * Enter and Escape for the drill-in context. The same callback is registered
+   * on the parent document and on the preview frame document: a keydown inside
+   * the iframe never bubbles to the parent. Capture phase gives the context
+   * precedence over the frame's text-editing listener and over the shortcut
+   * layer when a context is active.
+   */
+  const handleContextKeyDown = useCallback(
+    (event: KeyboardEvent, activeDocument: Document | null) => {
+      if (event.defaultPrevented) return;
+      // A pointer gesture owns the transform until pointerup: Escape cancels
+      // the drag in the shortcut layer and Enter must not drill in mid-drag.
+      if (sessionRef.current) return;
+      if (playingRef.current) return;
+      // Dialogs and an in-place text edit own every key while they are open.
+      if (shortcutsOpen || chartEditor || editingElementRef.current) return;
+      const active = activeDocument ?? document;
+      if (
+        isEditableTarget(eventElement(event.target)) ||
+        isEditableTarget(active.activeElement) ||
+        isEditableShortcutTarget(event.target)
+      ) {
+        return;
+      }
+      // An open toolbar popover owns Escape so the context does not drill out
+      // from underneath it. Popovers live in the editor chrome, so this probe
+      // never sees authored slide content.
+      const path = containerPathRef.current;
+      if (event.key === 'Escape') {
+        if (path.length === 0) return;
+        if (document.querySelector('[aria-expanded="true"]')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setContainerPath(path.slice(0, -1));
+        actionsRef.current.clearSelection();
+        clearOverlay();
+        return;
+      }
+      if (event.key !== 'Enter') return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      // Enter on a focused control activates that control, as in the shortcut
+      // layer's edit action; dialogs and text editing returned above.
+      const target = eventElement(event.target);
+      if (target?.closest('button, a, [role="button"], [role="tab"]')) return;
+
+      const current = stateRef.current;
+      const selected = current.selection;
+      if (!selected || current.selections.length !== 1) return;
+      if (selected.slideIndex !== current.activeIndex) return;
+      // Only the active context's direct child can be entered; any other
+      // selection falls through to the shortcut layer.
+      if (
+        selected.path.length !== path.length + 1 ||
+        !path.every((index, depth) => selected.path[depth] === index)
+      ) {
+        return;
+      }
+      const slide = frameSlideNow();
+      if (!slide) return;
+      const element = elementAtPath(slide, selected.path);
+      if (!element || !isEnterableContainer(element)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setContainerPath([...selected.path]);
+      actionsRef.current.clearSelection();
+      clearOverlay();
+    },
+    [chartEditor, clearOverlay, frameSlideNow, shortcutsOpen]
+  );
+  contextKeyDownRef.current = handleContextKeyDown;
+
   const handleKeyDown = useCallback(
     (event: KeyboardEvent, activeDocument: Document | null) => {
       if (event.defaultPrevented) return;
@@ -2694,9 +2823,19 @@ export function App() {
 
       const selected = selectionFromEvent(target, frameSlide, {
         slideIndex: current.activeIndex,
-        altKey: event.altKey
+        altKey: event.altKey,
+        containerPath
       });
       if (!selected) {
+        // A click inside the entered container keeps the context, including a
+        // click on the container's own padding. A click outside it leaves the
+        // drill-in so the canvas is not stuck one level deep.
+        if (containerPath.length > 0) {
+          const contextContainer = elementAtPath(frameSlide, containerPath);
+          if (contextContainer && !contextContainer.contains(target)) {
+            setContainerPath([]);
+          }
+        }
         actionsRef.current.clearSelection();
         clearOverlay();
         return;
@@ -2759,7 +2898,7 @@ export function App() {
         event.altKey
       );
     },
-    [beginDragSession, clearOverlay]
+    [beginDragSession, clearOverlay, containerPath]
   );
 
   keyDownRef.current = handleKeyDown;
@@ -2770,6 +2909,13 @@ export function App() {
       keyDownRef.current(event, document);
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) =>
+      contextKeyDownRef.current(event, document);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
 
   const commit = useCallback(
@@ -2804,22 +2950,14 @@ export function App() {
     setFrameEpoch((value) => value + 1);
 
     frameDocument.addEventListener('dblclick', (event) => {
-      const target = event.target as HTMLElement | null;
+      const target = eventElement(event.target);
       if (!target || !frameDocument.body.contains(target)) return;
-      const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
-      if (!editable || !isLeafTextElement(editable)) return;
-      if (
-        !editable.textContent?.trim() &&
-        editable.tagName !== 'DIV' &&
-        editable.tagName !== 'TD' &&
-        editable.tagName !== 'TH'
-      ) {
-        return;
-      }
+      // One top-level guard covers both outcomes: locked, hidden, and grouped
+      // objects accept neither text editing nor container entry.
       const slideRoot =
         frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}]`) ??
         frameDocument.body;
-      let top: Element = editable;
+      let top: Element = target;
       while (top.parentElement && top.parentElement !== slideRoot) {
         top = top.parentElement;
       }
@@ -2830,15 +2968,54 @@ export function App() {
       ) {
         return;
       }
-      event.preventDefault();
-      if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
-        textBaselineRef.current.set(editable, editable.innerHTML);
+      // Text leaves stay first: when the double-click can start an in-place
+      // text edit it consumes the gesture and never enters a container.
+      const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
+      if (editable && isLeafTextElement(editable)) {
+        // Empty semantic elements stay inert; div shapes and table cells
+        // accept a first text entry, so these rules are not reordered.
+        if (
+          editable.textContent?.trim() ||
+          editable.tagName === 'DIV' ||
+          editable.tagName === 'TD' ||
+          editable.tagName === 'TH'
+        ) {
+          event.preventDefault();
+          if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
+            textBaselineRef.current.set(editable, editable.innerHTML);
+          }
+          editable.setAttribute('contenteditable', 'true');
+          editable.setAttribute(EDITING_ATTRIBUTE, 'true');
+          editable.focus();
+          beginTextEditing(editable);
+          return;
+        }
       }
-      editable.setAttribute('contenteditable', 'true');
-      editable.setAttribute(EDITING_ATTRIBUTE, 'true');
-      editable.focus();
-      beginTextEditing(editable);
+      // No text edit started, so a double-click on a container inside the
+      // active context drills in. The path is read from the ref because this
+      // listener was registered on load and closes over that render.
+      const current = stateRef.current;
+      const slideInfo = current.slides[current.activeIndex];
+      const frameSlide = slideInfo
+        ? frameSlideElement(slideInfo, frameDocument)
+        : null;
+      if (!frameSlide) return;
+      const next = contextEntry(frameSlide, target, containerPathRef.current);
+      if (!next) return;
+      event.preventDefault();
+      setContainerPath(next);
+      actionsRef.current.clearSelection();
+      clearOverlay();
     });
+
+    // The frame document needs its own copy: an iframe keydown never reaches
+    // the parent window. Capture phase runs before the text-editing listener
+    // below, so a handled Enter/Escape stops there.
+    frameDocument.addEventListener(
+      'keydown',
+      (event) => contextKeyDownRef.current(event, frameDocument),
+      true
+    );
 
     frameDocument.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
@@ -2960,7 +3137,7 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
-  }, [beginTextEditing, commit, endTextEditing, finishTextEditing]);
+  }, [beginTextEditing, clearOverlay, commit, endTextEditing, finishTextEditing]);
 
   const applyTextToolbarCommand = useCallback(
     (command: TextCommand) => {
@@ -3502,6 +3679,40 @@ export function App() {
         </div>
       )}
 
+      {containerPath.length > 0 && activeSlide ? (
+        <nav
+          data-testid="edit-context"
+          aria-label={t('editor.context.label')}
+          className="flex flex-wrap items-center gap-1 border-b border-line bg-surface px-4 py-1 text-xs text-muted"
+        >
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+            onClick={() => changeContext([])}
+          >
+            {t('editor.context.slide')}
+          </button>
+          {containerPath.map((_, depth) => {
+            const path = containerPath.slice(0, depth + 1);
+            const element = elementAtPath(activeSlide.element, path);
+            return (
+              <Fragment key={path.join('.')}>
+                <span aria-hidden="true">›</span>
+                <button
+                  type="button"
+                  className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+                  onClick={() => changeContext(path)}
+                >
+                  {element
+                    ? describeContextSegment(element)
+                    : t('editor.context.unknown')}
+                </button>
+              </Fragment>
+            );
+          })}
+        </nav>
+      ) : null}
+
       {view === 'sorter' ? (
         <SorterView
           master={master}
@@ -3527,6 +3738,9 @@ export function App() {
             data-testid="canvas-preview"
             onPointerDown={(event) => {
               if (event.target !== event.currentTarget) return;
+              // The canvas background is outside the slide, so it leaves every
+              // drill-in level as well as dropping the selection.
+              setContainerPath((path) => (path.length === 0 ? path : []));
               actions.clearSelection();
               clearOverlay();
             }}
@@ -3594,6 +3808,8 @@ export function App() {
             slide={activeSlide}
             selection={selection}
             selectionCount={selections.length}
+            contextPath={containerPath}
+            onEnterContext={changeContext}
             geometry={selectionGeometry}
             style={styleState}
             chart={chartState}

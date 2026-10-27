@@ -191,6 +191,30 @@ never contains the editing marker. Thumbnails, sorter tiles, and the play view
 use the same script-free iframe technique with `markFrame: false` so they do not
 disturb the main preview token.
 
+### Editing context (drill-in)
+
+A slide's top-level children remain the object model, but a layout wrapper that
+holds other objects can be entered. The editor tracks the entered level in
+`containerPath`, an array of raw child indexes from the slide root, empty at
+slide level. While it is non-empty, click resolution selects the container's
+direct children, the overlay and inspector describe that level, and inspector
+rows keep slide-rooted `data-object-path` values (`2.0`, not `0`). Escape pops
+one segment, a breadcrumb segment jumps to an ancestor, and a click on the slide
+area outside the active container leaves it; a click on the editor canvas
+outside the slide also clears it. A slide change, deck change, reload, or a
+deleted or no-longer-enterable container resets the path. Nested geometry and
+appearance stay read-only in this phase.
+
+`isEnterableContainer` in `packages/editor/src/selection.ts` is the single
+predicate behind every entry path: double-click entry, the inspector chevron,
+and the Enter key. A target qualifies when it holds at least one object child,
+is not a text leaf (double-clicking one edits text instead), is neither locked
+nor hidden, is not an atomic `data-ppt-group` wrapper, and is not a `div` whose
+only element children are `<br>` line breaks (that is a text box, so a
+double-click edits it). The context is editor-only state. It is never
+serialized, is not restored after a reload, and writes no deck attributes or
+ids.
+
 ## Presenter BroadcastChannel protocol
 
 Both the editor play mode and the standalone runtime use one origin-scoped

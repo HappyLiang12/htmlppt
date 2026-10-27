@@ -105,6 +105,9 @@ test(
       // The documented export shortcut opens the same menu without a mouse.
       await page.keyboard.press('ControlOrMeta+Shift+E');
       await expect(page.getByTestId('export-menu')).toBeVisible();
+      // The menu handles Escape on itself, so focus must have moved inside it;
+      // waiting for visibility alone races the focus effect on slow runners.
+      await expect(page.getByTestId('export-html')).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(page.getByTestId('export-menu')).toHaveCount(0);
       await expect(page.getByTestId('export-open')).toBeFocused();
