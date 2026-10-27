@@ -14,6 +14,7 @@ import {
   symlink,
   writeFile
 } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -990,6 +991,64 @@ async function closedPort(): Promise<number> {
   return address.port;
 }
 
+interface BrieflyHeldPort {
+  port: number;
+  release: () => Promise<void>;
+}
+
+/**
+ * Holds a port and gives it back a short moment after the first health probe.
+ * That probe is the last request `open` sends before it binds the recorded
+ * port, so the first bind is refused while the address is already free inside
+ * the retry window. The 401 is a definitive rejection, so the registered entry
+ * is pruned instead of being reported as a live host.
+ */
+async function brieflyHeldPort(
+  releaseDelayMs: number
+): Promise<BrieflyHeldPort> {
+  const sockets = new Set<Socket>();
+  let closing: Promise<void> | null = null;
+  let releaseTimer: NodeJS.Timeout | undefined;
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(401, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: 'unauthorized' }));
+    if (releaseTimer === undefined) {
+      releaseTimer = setTimeout(() => {
+        void release();
+      }, releaseDelayMs);
+    }
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The held port did not expose a TCP port.');
+  }
+
+  function release(): Promise<void> {
+    if (closing !== null) {
+      return closing;
+    }
+    if (releaseTimer !== undefined) {
+      clearTimeout(releaseTimer);
+      releaseTimer = undefined;
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    closing = new Promise<void>((resolve) => server.close(() => resolve()));
+    return closing;
+  }
+
+  return { port: address.port, release };
+}
+
 function spawnKeepalive(): Promise<ChildProcess> {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore'
@@ -1943,6 +2002,52 @@ describe('htmlppt cli as a real process', () => {
       if (probe.listening) {
         await new Promise<void>((resolve) => probe.close(() => resolve()));
       }
+    }
+  });
+
+  it('retries a briefly held recorded port instead of falling back', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    // The recorded address is the deck's bookmark. The helper answers the
+    // health probe that precedes the bind and frees the port 300 ms later, so
+    // the first bind is refused and a retry lands inside its own window.
+    const held = await brieflyHeldPort(300);
+    const persistedAt = '2026-10-01T00:00:00.000Z';
+    let open: CliProcess | undefined;
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid: process.pid,
+        port: held.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: held.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+
+      expect(url.port).toBe(String(held.port));
+      expect(open.stderr).not.toContain('is in use');
+      expect(open.stderr).not.toContain('on a new port');
+      expect(
+        JSON.parse(await readFile(credentialPath, 'utf8'))
+      ).toMatchObject({
+        token: 'stale-token',
+        port: held.port,
+        createdAt: persistedAt
+      });
+    } finally {
+      open?.kill();
+      await held.release();
     }
   });
 

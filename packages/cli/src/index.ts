@@ -56,6 +56,11 @@ const DEFAULT_STREAMS = {
 
 const STOP_TIMEOUT_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 100;
+// The recorded port is the deck's bookmark address, but a host that was just
+// replaced can keep it for a moment after it exits (Windows TIME_WAIT), so a
+// replacement retries the same address before giving up on it.
+const STICKY_PORT_ATTEMPTS = 5;
+const STICKY_PORT_RETRY_DELAY_MS = 100;
 
 /**
  * Resolves the editor build for both the workspace and the installed package.
@@ -805,25 +810,43 @@ export async function runCli(
           port,
           onDeckOpened: moveSession
         });
+      // Only an EADDRINUSE is retried: a replaced host can release the socket
+      // a moment after it exits, while any other failure belongs to the caller.
+      const startOnStickyPort = async (): Promise<
+        Awaited<ReturnType<typeof startHost>> | null
+      > => {
+        for (let attempt = 0; attempt < STICKY_PORT_ATTEMPTS; attempt += 1) {
+          if (attempt > 0) {
+            await delay(STICKY_PORT_RETRY_DELAY_MS);
+          }
+          try {
+            return await start(stickyPort);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
+              throw error;
+            }
+          }
+        }
+        return null;
+      };
       let attemptedPort = stickyPort;
       let host: Awaited<ReturnType<typeof startHost>>;
       try {
-        try {
-          host = await start(stickyPort);
-        } catch (error) {
-          if (
-            requestedPort === undefined &&
-            credential !== null &&
-            (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
-          ) {
+        if (requestedPort === undefined && credential !== null) {
+          // The recorded port is the deck's bookmark, so retry it before
+          // falling back to an address that invalidates the bookmark.
+          const bound = await startOnStickyPort();
+          if (bound === null) {
             io.stderr(
               `Port ${stickyPort} is in use; starting ${file} on a new port. Existing bookmarks for this deck will stop working.`
             );
             attemptedPort = 0;
             host = await start(0);
           } else {
-            throw error;
+            host = bound;
           }
+        } else {
+          host = await start(stickyPort);
         }
       } catch (error) {
         const message = formatHostStartError(
