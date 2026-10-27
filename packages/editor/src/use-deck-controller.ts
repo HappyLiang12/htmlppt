@@ -664,13 +664,18 @@ export function useDeckController(
       const current = stateRef.current;
       const base = current.selections;
       const sameSlide = base[0]?.slideIndex === target.slideIndex;
+      const baseIsTopLevel =
+        base.length > 0 &&
+        base.every((candidate) => candidate.path.length === 1);
       if (
         target.path.length !== 1 ||
-        base.length === 0 ||
+        !baseIsTopLevel ||
         !sameSlide
       ) {
-        // Nested selections stay single and read-only; a target on another
-        // slide starts a fresh selection rather than mixing slides.
+        // Multi-selection is top-level only: a nested target, or a nested
+        // base, collapses to the incoming target instead of mixing levels.
+        // A target on another slide starts a fresh selection rather than
+        // mixing slides.
         applySelections([target]);
         return;
       }

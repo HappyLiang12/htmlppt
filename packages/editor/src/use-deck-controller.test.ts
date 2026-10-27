@@ -223,6 +223,29 @@ describe('useDeckController', () => {
     ]);
   });
 
+  it('collapses a nested base when a top-level target is shift-clicked', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: [0, 0],
+        elementId: null
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    expect(controller.state.selections).toEqual([
+      { slideIndex: 0, path: [1], elementId: 'e2' }
+    ]);
+    expect(controller.state.selection?.path).toEqual([1]);
+  });
+
   it('selects every top-level object on the active slide', async () => {
     await act(async () => {
       await controller.actions.load(DECK);

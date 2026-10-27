@@ -151,6 +151,12 @@ import {
   type TransformTarget
 } from './transform';
 import {
+  shouldDismissPinNotice,
+  shouldNotifyPin,
+  willAnyPinToAbsolute,
+  willPinToAbsolute
+} from './geometry-guards';
+import {
   applyBackground,
   applyGeometryEdit,
   applyInspectorEdit,
@@ -233,6 +239,8 @@ interface GestureBase {
   start: Point;
   moved: boolean;
   altKey: boolean;
+  /** The gesture's first geometry write pinned a flow target. */
+  pinned: boolean;
   /** The iframe-rendered slide, used for containing-block geometry. */
   slide: Element;
 }
@@ -357,6 +365,23 @@ function selectionElements(
   return elements;
 }
 
+/**
+ * A locked, hidden, or group top-level wrapper owns its whole subtree, so an
+ * Alt-drilled child inside one must stay inert. Top-level paths return null:
+ * they keep their own per-element checks, including group rotation.
+ */
+function blockedTopLevelAncestor(
+  slide: Element,
+  path: readonly number[]
+): Element | null {
+  if (path.length < 2) return null;
+  const top = elementAtPath(slide, [path[0] ?? -1]);
+  if (!top) return null;
+  return isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
+    ? top
+    : null;
+}
+
 function objectActionStateFor(
   slide: SlideInfo | undefined,
   selections: readonly SelectionTarget[],
@@ -383,6 +408,31 @@ function objectActionStateFor(
     locked: isLockedElement(single),
     hidden: isHiddenElement(single),
     group: isGroupElement(single)
+  };
+}
+
+/**
+ * A nested selection keeps every structural command off, but the Inspector
+ * still needs the element's own lock/hidden/group state. Without it the
+ * numeric geometry fields stay enabled and a commit is rejected or, worse,
+ * applied to a locked child.
+ */
+function nestedElementState(
+  slide: SlideInfo | undefined,
+  selections: readonly SelectionTarget[],
+  activeIndex: number
+): Pick<ObjectActionState, 'locked' | 'hidden' | 'group'> | null {
+  if (!slide || selections.length !== 1) return null;
+  const target = selections[0];
+  if (!target || target.slideIndex !== activeIndex || target.path.length < 2) {
+    return null;
+  }
+  const element = elementAtPath(slide.element, target.path);
+  if (!element) return null;
+  return {
+    locked: isLockedElement(element),
+    hidden: isHiddenElement(element),
+    group: isGroupElement(element)
   };
 }
 
@@ -557,6 +607,38 @@ export function App() {
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
   const [exportSignal, setExportSignal] = useState(0);
+  const [pinNotice, setPinNotice] = useState(false);
+  const pinNoticeShownRef = useRef(false);
+  const pinNoticeContextRef = useRef<{
+    master: Document | null;
+    slides: SlideInfo[];
+  } | null>(null);
+
+  const showPinNotice = useCallback((pinned: boolean): void => {
+    if (!shouldNotifyPin(pinned, pinNoticeShownRef.current)) return;
+    pinNoticeShownRef.current = true;
+    setPinNotice(true);
+  }, []);
+
+  // Every commit and history restore re-detects the slide list, and deck loads
+  // replace the master. The notice belongs to the history entry its Undo would
+  // revert, so it must not survive any of those transitions. The first render
+  // after showing it records the baseline; a later identity change dismisses.
+  useEffect(() => {
+    if (!pinNotice) {
+      pinNoticeContextRef.current = null;
+      return;
+    }
+    const context = pinNoticeContextRef.current;
+    if (!context) {
+      pinNoticeContextRef.current = { master, slides };
+      return;
+    }
+    if (context.master !== master || context.slides !== slides) {
+      pinNoticeContextRef.current = null;
+      setPinNotice(false);
+    }
+  }, [master, pinNotice, slides]);
 
   // A container path only means something within one slide of one deck:
   // navigating or reloading starts again from the slide level. Deleting the
@@ -983,8 +1065,9 @@ export function App() {
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
+      const pinned = field !== 'rotation' && willPinToAbsolute(element);
       const snapshot = snapshotGeometry(element, slide);
-      return applyInspectorEdit(
+      const committed = applyInspectorEdit(
         current.master,
         (master) => {
           const applied = applyGeometryEdit(
@@ -1011,8 +1094,10 @@ export function App() {
         },
         () => void commitMasterDocument()
       );
+      if (committed) showPinNotice(pinned);
+      return committed;
     },
-    [commitMasterDocument]
+    [commitMasterDocument, showPinNotice]
   );
 
   const handleTransitionChange = useCallback(
@@ -1762,15 +1847,17 @@ export function App() {
     []
   );
 
-  const commitFrame = useCallback(async () => {
+  const commitFrame = useCallback(async (): Promise<boolean> => {
     const frameDocument = frame.current?.contentDocument;
-    if (!frameDocument) return;
+    if (!frameDocument) return false;
     try {
       await actionsRef.current.commit((master, slide) =>
         commitSlide(master, slide.index, frameDocument)
       );
+      return true;
     } catch {
       // The controller already surfaced the status and message.
+      return false;
     }
   }, []);
 
@@ -1876,10 +1963,20 @@ export function App() {
       if (distance < threshold) return;
       session.moved = true;
       if (session.kind === 'drag') {
+        // Detect before the first write: this is the inline position the pin
+        // is about to replace.
+        session.pinned = willAnyPinToAbsolute(
+          session.targets.map((target) => target.element)
+        );
         session.targets.forEach((target) =>
           pinToAbsolute(target.element, target.start, session.slide)
         );
       } else {
+        // Rotation also materializes the box, but the one-time notice covers
+        // position and size gestures only.
+        if (session.kind === 'resize') {
+          session.pinned = willPinToAbsolute(session.target.element);
+        }
         pinToAbsolute(
           session.target.element,
           session.target.start,
@@ -2010,8 +2107,10 @@ export function App() {
       return;
     }
     if (session.kind === 'resize') refreshCharts(session.slide);
-    void commitFrame();
-  }, [commitFrame, refreshOverlay]);
+    void commitFrame().then((committed) => {
+      if (committed) showPinNotice(session.pinned);
+    });
+  }, [commitFrame, refreshOverlay, showPinNotice]);
   finishSessionRef.current = applySession;
 
   const finishSession = useCallback(() => {
@@ -2082,6 +2181,7 @@ export function App() {
         start,
         altKey,
         moved: false,
+        pinned: false,
         slide,
         slideOffset: slideOffsetOf(slide),
         targets: items.map((item) => ({
@@ -2112,14 +2212,18 @@ export function App() {
       if (
         !selected ||
         current.selections.length !== 1 ||
-        selected.path.length !== 1 ||
         !slideInfo ||
         !slide
       ) {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element || isLockedElement(element) || isGroupElement(element)) {
+      if (
+        !element ||
+        isLockedElement(element) ||
+        isGroupElement(element) ||
+        blockedTopLevelAncestor(slide, selected.path) !== null
+      ) {
         return;
       }
       event.preventDefault();
@@ -2133,6 +2237,7 @@ export function App() {
         start: outerDesignPoint(event.clientX, event.clientY, slide),
         altKey: event.altKey,
         moved: false,
+        pinned: false,
         slide,
         slideOffset: slideOffsetOf(slide),
         target: { element, start: rectOf(element, slide) },
@@ -2156,13 +2261,17 @@ export function App() {
       if (
         !selected ||
         current.selections.length !== 1 ||
-        selected.path.length !== 1 ||
         !slide
       ) {
         return;
       }
       const element = elementAtPath(slide, selected.path);
-      if (!element || isLockedElement(element) || isHiddenElement(element)) {
+      if (
+        !element ||
+        isLockedElement(element) ||
+        isHiddenElement(element) ||
+        blockedTopLevelAncestor(slide, selected.path) !== null
+      ) {
         return;
       }
       event.preventDefault();
@@ -2181,6 +2290,7 @@ export function App() {
         start: startPoint,
         altKey: event.altKey,
         moved: false,
+        pinned: false,
         slide,
         target: { element, start: startRect },
         path: selected.path,
@@ -2201,21 +2311,25 @@ export function App() {
       const slide = frameSlideNow();
       if (!slideInfo || !slide) return false;
       const targets = current.selections.filter(
-        (target) =>
-          target.slideIndex === current.activeIndex &&
-          target.path.length === 1
+        (target) => target.slideIndex === current.activeIndex
       );
       if (targets.length === 0) return false;
 
       const offset = slideOffsetOf(slide);
       const boxes: SelectionBox[] = [];
       let changed = false;
+      let pinned = false;
       for (const target of targets) {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
         const rect = rectOf(element, slide);
-        if (isLockedElement(element) || isHiddenElement(element)) {
-          if (!isHiddenElement(element)) {
+        const blockedAncestor = blockedTopLevelAncestor(slide, target.path);
+        if (
+          isLockedElement(element) ||
+          isHiddenElement(element) ||
+          blockedAncestor !== null
+        ) {
+          if (!isHiddenElement(element) && !isHiddenElement(blockedAncestor)) {
             boxes.push({
               rect: frameRectOf(rect, offset),
               rotation: rotationOf(element),
@@ -2240,6 +2354,7 @@ export function App() {
           });
           continue;
         }
+        if (willPinToAbsolute(element)) pinned = true;
         pinToAbsolute(element, next, slide);
         changed = true;
         boxes.push({
@@ -2252,10 +2367,12 @@ export function App() {
       if (!changed) return false;
       setSelectionBoxes(boxes);
       setGuides([]);
-      void commitFrame();
+      void commitFrame().then((committed) => {
+        if (committed) showPinNotice(pinned);
+      });
       return true;
     },
-    [commitFrame, frameSlideNow]
+    [commitFrame, frameSlideNow, showPinNotice]
   );
 
   const beginTextEditing = useCallback((editable: HTMLElement) => {
@@ -2275,6 +2392,20 @@ export function App() {
     lastTextRangeRef.current = null;
     setTextToolbar(null);
   }, []);
+
+  // The notice's Undo delegates to the global undo. A pending edit is settled
+  // into its own history entry and then undone by that undo, and an active
+  // text session is the same hazard, so the notice steps aside instead of
+  // reverting the wrong change. Toolbar and Ctrl+Z undo keep their behaviour.
+  useEffect(() => {
+    if (
+      !shouldDismissPinNotice(pinNotice, state.pending, textToolbar !== null)
+    ) {
+      return;
+    }
+    pinNoticeContextRef.current = null;
+    setPinNotice(false);
+  }, [pinNotice, state.pending, textToolbar]);
 
   const finishTextEditing = useCallback(
     (editable: HTMLElement) => {
@@ -2772,10 +2903,6 @@ export function App() {
         case 'nudge': {
           if (current.selections.length > 0) {
             event.preventDefault();
-            // Nested selections are read-only: no nudge and no slide change.
-            if (current.selections.some((target) => target.path.length !== 1)) {
-              return;
-            }
             nudgeSelection(action.dx, action.dy);
             return;
           }
@@ -2852,27 +2979,25 @@ export function App() {
         sameSelection(candidate, selected)
       );
       if (!existing) actionsRef.current.select(selected);
-      // Drilled nested selections show read-only geometry for now.
-      if (selected.path.length !== 1) return;
+      // A nested path resolves to the child object itself, so a single
+      // nested selection drags like a top-level one.
       const clickedTop = elementAtPath(frameSlide, selected.path);
       if (
         !clickedTop ||
         isLockedElement(clickedTop) ||
-        isHiddenElement(clickedTop)
+        isHiddenElement(clickedTop) ||
+        blockedTopLevelAncestor(frameSlide, selected.path) !== null
       ) {
         // Locked objects stay selectable but inert: no native text selection
-        // drag, and no editor transform session.
+        // drag, and no editor transform session. The same holds for a child
+        // of a locked, hidden, or group top-level wrapper.
         if (clickedTop) event.preventDefault();
         return;
       }
 
       const dragSelections = existing ? current.selections : [selected];
       const items = dragSelections
-        .filter(
-          (candidate) =>
-            candidate.slideIndex === current.activeIndex &&
-            candidate.path.length === 1
-        )
+        .filter((candidate) => candidate.slideIndex === current.activeIndex)
         .map((candidate) => ({
           selection: candidate,
           element: elementAtPath(frameSlide, candidate.path)
@@ -2881,7 +3006,8 @@ export function App() {
           (item): item is { element: Element; selection: SelectionTarget } =>
             item.element !== null &&
             !isLockedElement(item.element) &&
-            !isHiddenElement(item.element)
+            !isHiddenElement(item.element) &&
+            blockedTopLevelAncestor(frameSlide, item.selection.path) === null
         )
         .sort((a, b) => {
           if (sameSelection(a.selection, selected)) return -1;
@@ -3380,6 +3506,10 @@ export function App() {
   }, [activeIndex, activeSlide?.id, slides.length, t]);
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
+  const nestedActions = nestedElementState(activeSlide, selections, activeIndex);
+  const inspectorObjectActions = nestedActions
+    ? { ...objectActions, ...nestedActions }
+    : objectActions;
   const styleState: InspectorStyleState | null = (() => {
     if (
       !activeSlide ||
@@ -3438,8 +3568,15 @@ export function App() {
       return { type: 'invalid', title: t('app.invalidData') };
     }
   })();
+  const blockedAncestor =
+    activeSlide && selection
+      ? blockedTopLevelAncestor(activeSlide.element, selection.path)
+      : null;
+  const blockedByAncestor =
+    selection !== null && selection.path.length > 1 && blockedAncestor !== null;
   const overlayHandles =
-    primaryObject && isLockedElement(primaryObject)
+    blockedAncestor !== null ||
+    (primaryObject && isLockedElement(primaryObject))
       ? 'none'
       : primaryObject && isGroupElement(primaryObject)
         ? 'rotate'
@@ -3774,8 +3911,7 @@ export function App() {
                   guides={guides}
                   scale={scale}
                   readOnly={
-                    selectionBoxes.length > 1 ||
-                    (selection !== null && selection.path.length > 1)
+                    selectionBoxes.length > 1 || blockedAncestor !== null
                   }
                   handles={overlayHandles}
                   onResizeStart={beginResizeSession}
@@ -3800,6 +3936,50 @@ export function App() {
             ) : (
               <p className="text-sm text-muted">{t('editor.noSlides')}</p>
             )}
+            {/* The live region stays mounted so its first text change is
+                announced; mounting the region and its text together is missed
+                by some screen readers. */}
+            <span
+              data-testid="pin-notice-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {pinNotice ? t('editor.notice.pinned') : ''}
+            </span>
+            {pinNotice && (
+              <div className="pointer-events-none absolute bottom-4 left-4 z-20">
+                <div
+                  data-testid="pin-notice"
+                  className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
+                >
+                  <span className="min-w-0 flex-1">
+                    {t('editor.notice.pinned')}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="pin-notice-undo"
+                    className="rounded border border-line px-2 py-0.5 text-ink transition-colors hover:bg-hover"
+                    onClick={() => {
+                      actionsRef.current.undo();
+                      setPinNotice(false);
+                    }}
+                  >
+                    {t('editor.notice.undo')}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="pin-notice-dismiss"
+                    aria-label={t('editor.notice.dismiss')}
+                    className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
+                    onClick={() => setPinNotice(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
           </main>
 
           <Inspector
@@ -3808,13 +3988,16 @@ export function App() {
             slide={activeSlide}
             selection={selection}
             selectionCount={selections.length}
+            blockedByAncestor={blockedByAncestor}
             contextPath={containerPath}
             onEnterContext={changeContext}
             geometry={selectionGeometry}
             style={styleState}
             chart={chartState}
-            styleDisabled={objectActions.locked || objectActions.hidden}
-            objectActions={objectActions}
+            styleDisabled={
+              inspectorObjectActions.locked || inspectorObjectActions.hidden
+            }
+            objectActions={inspectorObjectActions}
             onSelectObject={handleSelectObject}
             onObjectCommand={handleObjectCommand}
             onObjectRecovery={handleObjectRecovery}

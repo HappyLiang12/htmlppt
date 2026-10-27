@@ -5,6 +5,7 @@ import {
   type SlideInfo,
   type Transition
 } from '@htmlppt/core';
+import { isPositioned } from './geometry-guards';
 import { normalizeAngle, type Point, type Rect } from './geometry';
 import {
   elementAtPath,
@@ -162,7 +163,7 @@ export function applyGeometryEdit(
     return true;
   }
 
-  const positioned = style.position === 'absolute' || style.position === 'fixed';
+  const positioned = isPositioned(element);
   if (!positioned) {
     pinToAbsolute(element, snapshot.rect, slide.element);
   }

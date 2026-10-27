@@ -136,6 +136,44 @@ async function createTwoBoxFixture(
   );
 }
 
+async function createNestedGeometryFixture(
+  directory: string,
+  file: string
+): Promise<void> {
+  await createTemplate(directory, file);
+  const path = join(directory, file);
+  const html = await readFile(path, 'utf8');
+  const closing = html.indexOf('</section>');
+  if (closing === -1) {
+    throw new Error('Template slide closing tag was not found.');
+  }
+  // The template nests the heading inside .slide-inner. Top-level siblings
+  // provide a multi-selection target and a group wrapper, while the locked
+  // child inside the wrapper gives the Inspector a nested target whose
+  // geometry must stay disabled.
+  const lockedChild =
+    '<p data-ppt-el="locked-nested" data-ppt-locked="true" style="margin:8px 0 0;font-size:28px">Locked nested</p>';
+  const headingEnd = html.indexOf('</h1>');
+  if (headingEnd === -1) {
+    throw new Error('Template heading closing tag was not found.');
+  }
+  const withLockedChild = `${html.slice(0, headingEnd + 5)}${lockedChild}${html.slice(headingEnd + 5)}`;
+  const objectClosing = withLockedChild.indexOf('</section>');
+  if (objectClosing === -1) {
+    throw new Error('Template slide closing tag was not found.');
+  }
+  const object =
+    '    <div data-ppt-el="sibling" style="position:absolute;left:1180px;top:760px;width:200px;height:60px;background:#9ac0d8">Sibling</div>\n' +
+    '    <div data-ppt-el="grouped" data-ppt-group="1" style="position:absolute;left:900px;top:620px;width:300px;height:90px;background:#e8dfc9">\n' +
+    '      <p style="margin:16px;font-size:28px">Grouped child</p>\n' +
+    '    </div>\n';
+  await writeFile(
+    path,
+    `${withLockedChild.slice(0, objectClosing)}${object}${withLockedChild.slice(objectClosing)}`,
+    'utf8'
+  );
+}
+
 async function createPlacedFixture(
   directory: string,
   file: string
@@ -241,6 +279,13 @@ function openTwoBoxDeck(page: Page): Promise<EditorHarness> {
   return openDeck(page, createTwoBoxFixture, async (frame) => {
     await expect(frame.locator('[data-ppt-el="box-a"]')).toBeVisible();
     await expect(frame.locator('[data-ppt-el="box-b"]')).toBeVisible();
+  });
+}
+
+function openNestedGeometryDeck(page: Page): Promise<EditorHarness> {
+  return openDeck(page, createNestedGeometryFixture, async (frame) => {
+    await expect(frame.locator('h1')).toContainText('Untitled deck');
+    await expect(frame.locator('[data-ppt-el="sibling"]')).toBeVisible();
   });
 }
 
@@ -738,77 +783,259 @@ test(
 );
 
 test(
-  'nested selections are read-only: outline only, no transforms',
-  { tag: '@feature:editor-core' },
+  'nested single selection is editable while multi-selection stays read-only',
+  {
+    tag: [
+      '@feature:editor-core',
+      '@feature:drill-in-selection',
+      '@feature:nested-geometry'
+    ]
+  },
   async ({ page }) => {
-    const editor = await openTemplateDeck(page);
+    const editor = await openNestedGeometryDeck(page);
     try {
-      await editor.frame.locator('h1').click({ modifiers: ['Alt'] });
-
+      const heading = editor.frame.locator('h1');
       const outline = page.getByTestId('selection-outline');
-      await expect(outline).toBeVisible();
-      await expect(outline).toHaveAttribute('data-readonly', 'true');
-      await expect(outline).toHaveAttribute('data-selected-id', 'e1');
-      await expect(outline).toHaveAttribute('data-selected-path', '0.1');
+
+      // Two top-level objects: the outer wrapper and the sibling box. A
+      // multi-selection keeps the read-only contract: outlines only, no
+      // handles, and disabled numeric geometry.
+      await editor.frame.locator('[data-ppt-el="sibling"]').click();
+      await heading.click({ modifiers: ['Shift'] });
+      await expect(outline).toHaveCount(2);
+      expect(
+        await outline.evaluateAll((elements) =>
+          elements.map((element) => element.getAttribute('data-readonly'))
+        )
+      ).toEqual(['true', 'true']);
       await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
       await expect(page.getByTestId('rotate-handle')).toHaveCount(0);
+      await expect(page.getByTestId('field-x')).toBeDisabled();
+      await expect(page.getByTestId('field-rotation')).toBeDisabled();
 
-      const headingBefore = await headingGeometry(editor.frame);
-      const wrapperBefore = await slideInnerGeometry(editor.frame);
-      expect(headingBefore.position).toBe('');
+      // Enter the wrapper from its own padding: a child click now produces a
+      // single nested selection instead of the top-level wrapper.
+      const innerBox = await editor.frame.locator('.slide-inner').boundingBox();
+      if (!innerBox) throw new Error('Slide inner has no bounding box.');
+      await page.mouse.dblclick(innerBox.x + 8, innerBox.y + 8);
+      await expect(page.getByTestId('edit-context')).toBeVisible();
 
-      // There is no east handle to grab. Dispatch the same pointer sequence a
-      // handle drag would use at the heading's east edge; the nested
-      // read-only selection must ignore it.
-      await editor.frame.locator('h1').evaluate((heading) => {
-        const rect = heading.getBoundingClientRect();
-        type FrameEvent = Parameters<typeof heading.dispatchEvent>[0];
-        const view = heading.ownerDocument.defaultView as unknown as {
-          PointerEvent: new (
-            type: string,
-            init?: Record<string, unknown>
-          ) => FrameEvent;
-        } | null;
-        if (!view) throw new Error('Frame window is unavailable.');
-        const pointer = {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          pointerId: 1,
-          pointerType: 'mouse',
-          isPrimary: true,
-          button: 0,
-          altKey: true,
-          clientX: rect.right - 1,
-          clientY: rect.top + rect.height / 2
-        };
-        heading.dispatchEvent(
-          new view.PointerEvent('pointerdown', { ...pointer, buttons: 1 })
-        );
-        heading.dispatchEvent(
-          new view.PointerEvent('pointermove', {
-            ...pointer,
-            buttons: 1,
-            clientX: pointer.clientX - 40
-          })
-        );
-        heading.dispatchEvent(
-          new view.PointerEvent('pointerup', {
-            ...pointer,
-            buttons: 0,
-            clientX: pointer.clientX - 40
-          })
-        );
+      await heading.click();
+      await expect(outline).toHaveCount(1);
+      await expect(outline).toHaveAttribute('data-selected-id', 'e1');
+      await expect(outline).toHaveAttribute('data-selected-path', '0.1');
+      await expect(outline).not.toHaveAttribute('data-readonly', 'true');
+      await expect(page.getByTestId('handle-e')).toBeVisible();
+      await expect(page.getByTestId('rotate-handle')).toBeVisible();
+      await expect(page.getByTestId('field-x')).toBeEnabled();
+      await expect(page.getByTestId('field-rotation')).toBeEnabled();
+
+      // Drag the nested heading: the live gesture pins the flow child to
+      // absolute geometry at its measured origin plus the pointer delta.
+      const scale = await frameScale(page);
+      const start = await heading.evaluate((element) => {
+        const slide = element.closest('[data-ppt-frame-slide]');
+        if (!slide) throw new Error('Frame slide is missing.');
+        const rect = element.getBoundingClientRect();
+        const base = slide.getBoundingClientRect();
+        return { x: rect.left - base.left, y: rect.top - base.top };
       });
+      const box = await heading.boundingBox();
+      if (!box) throw new Error('Heading has no bounding box.');
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
 
-      expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
-      expect(await slideInnerGeometry(editor.frame)).toEqual(wrapperBefore);
+      const save = waitForDeckSave(page);
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+      await page.mouse.up();
+      expect((await save).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
 
-      // Arrow keys neither nudge the nested element nor change slides.
-      await expectNoDeckSave(page, () => page.keyboard.press('ArrowRight'));
-      expect(await headingGeometry(editor.frame)).toEqual(headingBefore);
-      await expect(editor.frame.locator('h1')).toHaveText('Untitled deck');
-      await expect(page.getByTestId('save-status')).toHaveText('已同步');
+      const dragged = await headingGeometry(editor.frame);
+      expect(dragged.position).toBe('absolute');
+      expect(dragged.left).toBeCloseTo(start.x + 100 / scale, 0);
+      expect(dragged.top).toBeCloseTo(start.y + 50 / scale, 0);
+      // Only the nested child is pinned; the wrapper stays in flow.
+      expect((await slideInnerGeometry(editor.frame)).position).toBe('');
+
+      const savedHeading = () =>
+        savedStyle(editor.directory, editor.file, /<h1[^>]*>/);
+      await expect.poll(async () => (await savedHeading()).position).toBe(
+        'absolute'
+      );
+      const savedAfterDrag = await savedHeading();
+      expect(Number.parseFloat(savedAfterDrag.left ?? '')).toBeCloseTo(
+        dragged.left ?? 0,
+        1
+      );
+      expect(Number.parseFloat(savedAfterDrag.top ?? '')).toBeCloseTo(
+        dragged.top ?? 0,
+        1
+      );
+
+      // Arrow keys nudge the nested selection instead of changing slides.
+      const nudgeSave = waitForDeckSave(page);
+      await page.keyboard.press('ArrowRight');
+      expect((await nudgeSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+      const nudged = await headingGeometry(editor.frame);
+      expect(nudged.left).toBeCloseTo((dragged.left ?? 0) + 1, 0);
+      expect(nudged.top).toBeCloseTo(dragged.top ?? 0, 0);
+      await expect(heading).toHaveText('Untitled deck');
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'nested locked and group-blocked targets keep inspector geometry disabled',
+  { tag: ['@feature:editor-core', '@feature:nested-geometry'] },
+  async ({ page }) => {
+    const editor = await openNestedGeometryDeck(page);
+    try {
+      const outline = page.getByTestId('selection-outline');
+      const nestedFields = [
+        'field-x',
+        'field-y',
+        'field-width',
+        'field-height',
+        'field-rotation'
+      ];
+
+      // A locked child of an unlocked top-level wrapper: the canvas already
+      // refuses transforms, and the Inspector must agree instead of accepting
+      // a numeric edit that would move a locked object.
+      await editor.frame
+        .locator('[data-ppt-el="locked-nested"]')
+        .click({ modifiers: ['Alt'] });
+      await expect(outline).toHaveAttribute('data-selected-path', '0.2');
+      await expect(outline).toHaveAttribute('data-readonly', 'true');
+      for (const field of nestedFields) {
+        await expect(page.getByTestId(field)).toBeDisabled();
+      }
+
+      // A child of a top-level group wrapper: the group ancestor blocks every
+      // geometry field, including the position and rotation that a top-level
+      // group itself may still change.
+      await editor.frame
+        .locator('[data-ppt-el="grouped"] p')
+        .click({ modifiers: ['Alt'] });
+      await expect(outline).toHaveAttribute('data-selected-path', '2.0');
+      await expect(outline).toHaveAttribute('data-readonly', 'true');
+      for (const field of nestedFields) {
+        await expect(page.getByTestId(field)).toBeDisabled();
+      }
+    } finally {
+      await closeEditor(editor);
+    }
+  }
+);
+
+test(
+  'nested single selection resizes and rotates from the overlay handles',
+  {
+    tag: [
+      '@feature:editor-core',
+      '@feature:drill-in-selection',
+      '@feature:nested-geometry'
+    ]
+  },
+  async ({ page }) => {
+    const editor = await openNestedGeometryDeck(page);
+    try {
+      const heading = editor.frame.locator('h1');
+      const outline = page.getByTestId('selection-outline');
+      const innerBox = await editor.frame.locator('.slide-inner').boundingBox();
+      if (!innerBox) throw new Error('Slide inner has no bounding box.');
+      await page.mouse.dblclick(innerBox.x + 8, innerBox.y + 8);
+      await expect(page.getByTestId('edit-context')).toBeVisible();
+      await heading.click();
+      await expect(outline).toHaveAttribute('data-selected-path', '0.1');
+
+      const scale = await frameScale(page);
+      const startBox = await heading.boundingBox();
+      if (!startBox) throw new Error('Heading has no bounding box.');
+      const startWidth = startBox.width / scale;
+      const startHeight = startBox.height / scale;
+
+      const east = page.getByTestId('handle-e');
+      const eastBox = await east.boundingBox();
+      if (!eastBox) throw new Error('East handle has no bounding box.');
+      const eastX = eastBox.x + eastBox.width / 2;
+      const eastY = eastBox.y + eastBox.height / 2;
+
+      const resizeSave = waitForDeckSave(page);
+      await page.mouse.move(eastX, eastY);
+      await page.mouse.down();
+      // Shrink so the inline width stays below the template's 1200px
+      // max-width; otherwise the rendered box and the inline geometry that
+      // the rotation centre uses would disagree.
+      await page.mouse.move(eastX - 80, eastY, { steps: 5 });
+      await page.mouse.up();
+      expect((await resizeSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const resized = await headingGeometry(editor.frame);
+      expect(resized.width).not.toBeNull();
+      expect(resized.height).not.toBeNull();
+      expect(resized.width!).toBeCloseTo(startWidth - 80 / scale, 0);
+      expect(resized.height!).toBeCloseTo(startHeight, 0);
+      const savedHeading = () =>
+        savedStyle(editor.directory, editor.file, /<h1[^>]*>/);
+      await expect
+        .poll(async () => (await savedHeading()).width)
+        .not.toBeNull();
+      const savedAfterResize = await savedHeading();
+      expect(Number.parseFloat(savedAfterResize.width ?? '')).toBeCloseTo(
+        resized.width!,
+        1
+      );
+      expect(Number.parseFloat(savedAfterResize.height ?? '')).toBeCloseTo(
+        resized.height!,
+        1
+      );
+
+      const rotatedBox = await heading.boundingBox();
+      const rotate = page.getByTestId('rotate-handle');
+      const rotateBox = await rotate.boundingBox();
+      if (!rotatedBox || !rotateBox) {
+        throw new Error('Rotation geometry is unavailable.');
+      }
+      const center = centerOfBox(rotatedBox);
+      const handleCenter = {
+        x: rotateBox.x + rotateBox.width / 2,
+        y: rotateBox.y + rotateBox.height / 2
+      };
+      // Keep the pointer far from the centre so integer client coordinates
+      // cannot shift the measured angle by more than the tolerance below.
+      const radius = 240;
+      const target = pointAt(center, radius, -33);
+      const expectedRotation = normalizeAngle(
+        angleDelta(
+          pointerAngle(center, handleCenter),
+          pointerAngle(center, target)
+        )
+      );
+
+      const rotateSave = waitForDeckSave(page);
+      await page.mouse.move(handleCenter.x, handleCenter.y);
+      await page.mouse.down();
+      await page.mouse.move(target.x, target.y, { steps: 8 });
+      await page.mouse.up();
+      expect((await rotateSave).ok()).toBeTruthy();
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+      const inlineTransform = await transformOf(editor.frame, 'h1');
+      expect(inlineTransform).toContain('rotate(');
+      expect(
+        Math.abs(rotationDegrees(inlineTransform) - expectedRotation)
+      ).toBeLessThanOrEqual(2);
+      await expect
+        .poll(async () => (await savedHeading()).transform ?? null)
+        .toBe(inlineTransform);
     } finally {
       await closeEditor(editor);
     }
