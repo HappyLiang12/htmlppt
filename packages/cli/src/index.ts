@@ -1106,18 +1106,20 @@ export async function runCli(
       }
       if (registered?.health === 'unknown') {
         io.stderr(
-          `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop ${file}" when it responds.`
+          `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop <file>" when it responds.`
         );
         exitCode = 1;
         return;
       }
       // The caller's spelling has no entry, but a same-deck host may be
       // registered under another spelling and still be unverified. `open`
-      // refuses in that state, so never advise starting a session; a retry or
-      // `stop --all` is the actionable way out.
+      // refuses in that state, so never advise starting a session; a retry is
+      // the way out. `stop --all` cannot verify an `unknown` entry either and
+      // leaves it running. The placeholder keeps a path with spaces from
+      // looking like a runnable command.
       if (await hasUnresponsiveRegisteredHost(filePath)) {
         io.stderr(
-          `A registered editor for this deck could not be verified; leaving it running. Retry "htmlppt stop ${file}" when it responds, or run "htmlppt stop --all".`
+          'A registered editor for this deck could not be verified; leaving it running. Retry "htmlppt stop <file>" when it responds.'
         );
         exitCode = 1;
         return;

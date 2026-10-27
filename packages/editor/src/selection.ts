@@ -40,18 +40,51 @@ function hasObjectChild(element: Element): boolean {
   return Array.from(element.children).some(isObjectElement);
 }
 
+function isGuardedElement(element: Element): boolean {
+  // Mirrors the editor's isLockedElement / isHiddenElement / isGroupElement
+  // predicates without importing the command layer into this pure module.
+  return (
+    element.hasAttribute('data-ppt-group') ||
+    element.getAttribute('data-ppt-locked') === 'true' ||
+    (element as HTMLElement).style?.display === 'none'
+  );
+}
+
+/**
+ * True when a locked, hidden, or grouped ancestor owns this element. The scan
+ * stops at the slide: a wrapper above the slide is not part of the authored
+ * subtree, and the top-level wrapper's own guard is judged by the element
+ * checks below. Checking only the element itself would let the chevron, Enter,
+ * or a door-opening double-click reach a plain container nested inside a
+ * guarded wrapper.
+ */
+function hasGuardedAncestor(element: Element): boolean {
+  // Mirror detectSlides' slide selectors so the walk stops at a slide even when
+  // it has no authored id yet.
+  const slide = element.closest(
+    '[data-slide-id], .slide, .page, .slide-page'
+  );
+  for (
+    let current = element.parentElement;
+    current && current !== slide;
+    current = current.parentElement
+  ) {
+    if (isGuardedElement(current)) return true;
+  }
+  return false;
+}
+
 /**
  * True when the element can become an editing context: it holds at least one
  * object child, is not a text leaf (the double-click text-edit target), is not
- * an atomic group wrapper, and is neither locked nor hidden. Locked and hidden
- * objects stay inert, so the chevron, Enter, double-click entry, and the App's
- * stale-context check all read the same answer from here.
+ * an atomic group wrapper, and is neither locked nor hidden — itself or through
+ * an ancestor. Locked and hidden subtrees stay inert, so the chevron, Enter,
+ * double-click entry, and the App's stale-context check all read the same
+ * answer from here.
  */
 export function isEnterableContainer(element: Element): boolean {
-  if (element.hasAttribute('data-ppt-group')) return false;
-  // Mirrors the editor's isLockedElement / isHiddenElement predicates.
-  if (element.getAttribute('data-ppt-locked') === 'true') return false;
-  if ((element as HTMLElement).style?.display === 'none') return false;
+  if (isGuardedElement(element)) return false;
+  if (hasGuardedAncestor(element)) return false;
   if (!hasObjectChild(element)) return false;
   const tag = element.tagName.toUpperCase();
   if (TEXT_LEAF_TAGS.has(tag)) return false;

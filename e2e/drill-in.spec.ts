@@ -36,6 +36,8 @@ const SLIDE_SEGMENT = /^(Slide|投影片|幻灯片)$/;
 // The suite runs under the zh-TW pin, so the hint copy is asserted verbatim
 // rather than through a broad cross-locale substring.
 const HINT_LOCKED = '這個物件已鎖定。請先解鎖，再編輯其內容。';
+const HINT_GROUP =
+  '群組會作為單一物件編輯。請先取消群組，再編輯其中的元件。';
 const HINT_NOT_TEXT = '只有文字元素可以就地編輯。連按兩下容器空白處即可進入容器。';
 
 interface Harness {
@@ -378,6 +380,73 @@ test('names a locked wrapper instead of silently ignoring the double-click', { t
     await page.getByTestId('edit-hint-dismiss').click();
     await expect(hint).toHaveCount(0);
     await expect(status).toHaveText('');
+  } finally {
+    await close(editor);
+  }
+});
+
+test('a nested group keeps a plain container descendant out of reach', { tag: '@feature:edit-context-feedback' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+
+    const context = page.getByTestId('edit-context');
+    const rows = page.getByTestId('object-row');
+    await enterPad(page);
+
+    // The group wrapper is a context child but stays atomic: no chevron.
+    const groupRow = page.locator(
+      '[data-testid="object-row"][data-object-id="e9"]'
+    );
+    const groupItem = page.locator('li').filter({ has: groupRow });
+    await expect(groupRow).toContainText('Grouped note');
+    await expect(groupRow).toHaveAttribute('data-object-path', '2.2');
+    await expect(groupItem.getByRole('button', { name: ENTER_ANY })).toHaveCount(
+      0
+    );
+    // The plain div is not promoted to a context row, so no chevron can offer
+    // entry into the group's subtree.
+    await expect(
+      page.locator('[data-testid="object-row"][data-object-id="e11"]')
+    ).toHaveCount(0);
+
+    // The plain div inside the group would be enterable on its own, but its
+    // group ancestor owns the subtree. A double-click on its padding must name
+    // the group and leave the current context untouched.
+    const groupBody = editor.frame.locator(
+      '[data-slide-id="s2"] .group .group-body'
+    );
+    await groupBody.dblclick({ position: { x: 2, y: 2 } });
+    const hint = page.getByTestId('edit-hint');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText(HINT_GROUP);
+    await expect(context).toContainText('.pad');
+    await expect(context).not.toContainText('.group-body');
+    await expect(rows).toHaveCount(3);
+    await expect(groupRow).toHaveAttribute('data-object-path', '2.2');
+    await expect(groupBody).not.toHaveAttribute('contenteditable', 'true');
+
+    // An Alt-drilled selection still lands, but the guarded subtree keeps the
+    // handles, appearance fields, and geometry fields inert.
+    await page.getByTestId('edit-hint-dismiss').click();
+    await page.keyboard.press('Escape');
+    await expect(context).toBeHidden();
+    await groupBody.click({ modifiers: ['Alt'], position: { x: 2, y: 2 } });
+    const outline = page.getByTestId('selection-outline');
+    await expect(outline).toHaveAttribute('data-selected-path', '2.2.0');
+    await expect(outline).toHaveAttribute('data-readonly', 'true');
+    await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
+    await expect(page.getByTestId('field-x')).toBeDisabled();
+    await expect(page.getByTestId('style-fill')).toBeDisabled();
+
+    // ArrowRight must not nudge (and pin) the guarded child.
+    expect(await groupBody.getAttribute('style')).toBeNull();
+    await page.keyboard.press('ArrowRight');
+    expect(await groupBody.getAttribute('style')).toBeNull();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
   } finally {
     await close(editor);
   }
@@ -1004,66 +1073,77 @@ test('a text edit dismisses the pin notice instead of undoing the text', { tag: 
   }
 });
 
-test('keeps the pin notice clear of the selection handles at a narrow viewport', { tag: '@feature:nested-geometry' }, async ({
-  page
-}) => {
-  await page.setViewportSize({ width: 1024, height: 768 });
-  const editor = await openWrappedDeck(page);
-  try {
-    const notice = page.getByTestId('pin-notice');
-    const expectClearOfBottomHandles = async (label: string) => {
-      const noticeBox = await boxOf(notice, 'Pin notice');
-      for (const handle of ['sw', 's', 'se']) {
-        const handleBox = await boxOf(
-          page.getByTestId(`handle-${handle}`),
-          `${label} handle ${handle}`
-        );
-        const overlap =
-          noticeBox.x < handleBox.x + handleBox.width &&
-          handleBox.x < noticeBox.x + noticeBox.width &&
-          noticeBox.y < handleBox.y + handleBox.height &&
-          handleBox.y < noticeBox.y + noticeBox.height;
-        expect(
-          overlap,
-          `pin notice ${JSON.stringify(noticeBox)} covers ${label} ${handle} ${JSON.stringify(handleBox)}`
-        ).toBe(false);
-      }
-    };
+// A height-limited viewport shrinks the canvas to its 48px padding, while the
+// bottom handles hang 5px below the slide. Both the usual narrow window and a
+// short 1600x700 window must keep the notice below that band.
+for (const viewport of [
+  { label: 'a narrow viewport', width: 1024, height: 768 },
+  { label: 'a short viewport', width: 1600, height: 700 }
+]) {
+  test(`keeps the pin notice clear of the selection handles at ${viewport.label}`, { tag: '@feature:nested-geometry' }, async ({
+    page
+  }) => {
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height
+    });
+    const editor = await openWrappedDeck(page);
+    try {
+      const notice = page.getByTestId('pin-notice');
+      const expectClearOfBottomHandles = async (label: string) => {
+        const noticeBox = await boxOf(notice, 'Pin notice');
+        for (const handle of ['sw', 's', 'se']) {
+          const handleBox = await boxOf(
+            page.getByTestId(`handle-${handle}`),
+            `${label} handle ${handle}`
+          );
+          const overlap =
+            noticeBox.x < handleBox.x + handleBox.width &&
+            handleBox.x < noticeBox.x + noticeBox.width &&
+            noticeBox.y < handleBox.y + handleBox.height &&
+            handleBox.y < noticeBox.y + noticeBox.height;
+          expect(
+            overlap,
+            `pin notice ${JSON.stringify(noticeBox)} covers ${label} ${handle} ${JSON.stringify(handleBox)}`
+          ).toBe(false);
+        }
+      };
 
-    await enterPad(page);
-    const foot = editor.frame.locator('.pad .foot');
-    await foot.click();
-    const save = page.waitForResponse(isDeckSaveResponse);
-    const box = await boxOf(foot, 'Footer');
-    await dragFrom(
-      page,
-      { x: box.x + 12, y: box.y + box.height / 2 },
-      { x: 60, y: 40 }
-    );
-    await expect(notice).toBeVisible();
-    expect((await save).ok()).toBeTruthy();
-    // The pinned child is the selection while its notice explains the change.
-    await expectClearOfBottomHandles('pinned footer');
+      await enterPad(page);
+      const foot = editor.frame.locator('.pad .foot');
+      await foot.click();
+      const save = page.waitForResponse(isDeckSaveResponse);
+      const box = await boxOf(foot, 'Footer');
+      await dragFrom(
+        page,
+        { x: box.x + 12, y: box.y + box.height / 2 },
+        { x: 60, y: 40 }
+      );
+      await expect(notice).toBeVisible();
+      expect((await save).ok()).toBeTruthy();
+      // The pinned child is the selection while its notice explains the change.
+      await expectClearOfBottomHandles('pinned footer');
 
-    // Leave the context and select the full-slide halo: its bottom handles sit
-    // on the stage's bottom edge, the lowest any bottom handle can reach, so a
-    // clear result here holds for the pinned child too.
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('edit-context')).toBeHidden();
-    const haloRow = page.locator(
-      '[data-testid="object-row"][data-object-id="e1"]'
-    );
-    await haloRow.click();
-    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-      'data-selected-path',
-      '0'
-    );
-    await expect(notice).toBeVisible();
-    await expectClearOfBottomHandles('full-slide halo');
-  } finally {
-    await close(editor);
-  }
-});
+      // Leave the context and select the full-slide halo: its bottom handles
+      // sit on the stage's bottom edge, the lowest any bottom handle can reach,
+      // so a clear result here holds for the pinned child too.
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('edit-context')).toBeHidden();
+      const haloRow = page.locator(
+        '[data-testid="object-row"][data-object-id="e1"]'
+      );
+      await haloRow.click();
+      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+        'data-selected-path',
+        '0'
+      );
+      await expect(notice).toBeVisible();
+      await expectClearOfBottomHandles('full-slide halo');
+    } finally {
+      await close(editor);
+    }
+  });
+}
 
 test('drags a grid child without changing the grid parent', { tag: '@feature:nested-geometry' }, async ({
   page

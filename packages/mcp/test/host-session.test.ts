@@ -528,30 +528,45 @@ describe('findStoppableSession', () => {
     }
   });
 
-  it('skips an unknown entry but keeps scanning for a stoppable alias', async () => {
+  it('keeps scanning past an unknown entry for a healthy entry that sorts later', async () => {
     const fixture = await sessionFixture();
     const aliasPath = await aliasFor(fixture);
-    const unknownHost = await silentShellHost(fixture.deckPath);
-    const staleHost = await fakeHost((path) =>
+    // The alias spelling sorts first, so the scan meets the unknown entry
+    // before the healthy one and must not stop there.
+    expect(aliasPath < fixture.deckPath).toBe(true);
+    const unknownHost = await silentShellHost(aliasPath);
+    const healthyHost = await fakeHost((path) =>
       path.startsWith('/api/health')
-        ? { status: 200, type: 'application/json', body: healthPayload(aliasPath) }
-        : { status: 500, type: 'text/plain', body: 'broken editor build' }
+        ? {
+            status: 200,
+            type: 'application/json',
+            body: healthPayload(fixture.deckPath)
+          }
+        : { status: 200, type: 'text/html', body: '<div id="root"></div>' }
     );
-    const unknownEntry = entryFor(unknownHost.entry.port, fixture.deckPath);
-    const staleEntry = entryFor(staleHost.entry.port, aliasPath);
+    const unknownEntry = entryFor(unknownHost.entry.port, aliasPath);
+    const healthyEntry = entryFor(healthyHost.entry.port, fixture.deckPath);
+    const aliasSessionFile = join(
+      sessionsDirectory(),
+      `${sessionKey(aliasPath)}.json`
+    );
     try {
       await writeSession(unknownEntry);
-      await writeSession(staleEntry);
+      await writeSession(healthyEntry);
+      const snapshot = await readFile(fixture.sessionFile, 'utf8');
 
       const result = await findStoppableSession(fixture.deckPath);
 
-      expect(result?.health).toBe('stale-build');
-      expect(result?.entry.path).toBe(aliasPath);
+      expect(result).toEqual({
+        entry: healthyEntry,
+        snapshot,
+        health: 'healthy'
+      });
       // A busy host may recover, so its entry survives the scan for a retry.
-      expect(await readSession(fixture.sessionFile)).toEqual(unknownEntry);
+      expect(await readSession(aliasSessionFile)).toEqual(unknownEntry);
     } finally {
       await unknownHost.close();
-      await staleHost.close();
+      await healthyHost.close();
       await fixture.cleanup();
     }
   });

@@ -982,15 +982,49 @@ describe('waitForSession', () => {
     }
   });
 
-  it('reports the spawned CLI exit code instead of waiting for a session', async () => {
+  it('reports the spawned CLI exit code and a placeholder suggestion', async () => {
     deckPath = await copyFixture('basic.deck.html', dir);
 
-    await expect(
-      waitForSession(deckPath, { exitCode: 1, signalCode: null })
-    ).rejects.toMatchObject({
-      code: 'editor-failed',
-      message: expect.stringContaining('code 1')
-    });
+    let failure: { code?: string; message?: string } = {};
+    try {
+      await waitForSession(deckPath, { exitCode: 1, signalCode: null });
+      throw new Error('Expected the spawned CLI exit to reject the wait.');
+    } catch (error) {
+      failure = error as { code?: string; message?: string };
+    }
+
+    expect(failure).toMatchObject({ code: 'editor-failed' });
+    const message = failure.message ?? '';
+    expect(message).toContain(
+      `exited with code 1 before publishing a session for ${deckPath}`
+    );
+    expect(message).toContain(
+      'Run "htmlppt open <path> --no-browser" in a terminal to see the error.'
+    );
+    // The suggestion is a template, not a command built from an unquoted path.
+    expect(message).not.toContain(`htmlppt open ${deckPath} --no-browser`);
+  });
+
+  it('reports a spawned CLI signal and a placeholder suggestion', async () => {
+    deckPath = await copyFixture('basic.deck.html', dir);
+
+    let failure: { code?: string; message?: string } = {};
+    try {
+      await waitForSession(deckPath, { exitCode: null, signalCode: 'SIGTERM' });
+      throw new Error('Expected the spawned CLI signal to reject the wait.');
+    } catch (error) {
+      failure = error as { code?: string; message?: string };
+    }
+
+    expect(failure).toMatchObject({ code: 'editor-failed' });
+    const message = failure.message ?? '';
+    expect(message).toContain(
+      `terminated by SIGTERM before publishing a session for ${deckPath}`
+    );
+    expect(message).toContain(
+      'Run "htmlppt open <path> --no-browser" in a terminal to see the error.'
+    );
+    expect(message).not.toContain(`htmlppt open ${deckPath} --no-browser`);
   });
 });
 

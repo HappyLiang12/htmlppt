@@ -2333,12 +2333,17 @@ describe('htmlppt cli as a real process', () => {
       });
 
       // `open` refuses while this host is registered but unverified, so advice
-      // to start one is wrong; a retry or `stop --all` is the way out.
+      // to start one is wrong. A retry is the way out: `stop --all` cannot
+      // verify an `unknown` entry either and leaves it running.
       expect(stop.code).toBe(1);
       expect(stop.stderr).toContain(
         'A registered editor for this deck could not be verified'
       );
-      expect(stop.stderr).toContain('htmlppt stop --all');
+      expect(stop.stderr).toContain(
+        'Retry "htmlppt stop <file>" when it responds.'
+      );
+      expect(stop.stderr).not.toContain('htmlppt stop --all');
+      expect(stop.stderr).not.toContain('basic.deck.html');
       expect(stop.stderr).not.toContain('Start one with');
       expect(stop.stderr).not.toContain('Stopped editor');
       expect(await readFile(sessionFilePath(workspace, aliasDeck), 'utf8')).toBe(

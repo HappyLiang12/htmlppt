@@ -384,36 +384,60 @@ function selectionElements(
 }
 
 /**
- * A locked, hidden, or group top-level wrapper owns its whole subtree, so an
- * Alt-drilled child inside one must stay inert. Top-level paths return null:
- * they keep their own per-element checks, including group rotation.
+ * A locked, hidden, or group ancestor along a selection path owns that
+ * subtree, so an Alt-drilled child inside one must stay inert. Nested authored
+ * guards count: checking only `path[0]` would miss a group, lock, or hidden
+ * wrapper deeper inside an unlocked top-level object. The target itself is
+ * judged by each caller, whose rules differ (a group rotates but does not
+ * resize).
  */
-function blockedTopLevelAncestor(
+function blockedPathAncestor(
   slide: Element,
   path: readonly number[]
 ): Element | null {
-  if (path.length < 2) return null;
-  const top = elementAtPath(slide, [path[0] ?? -1]);
-  if (!top) return null;
-  return isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
-    ? top
-    : null;
+  for (let depth = 1; depth < path.length; depth += 1) {
+    const element = elementAtPath(slide, path.slice(0, depth));
+    if (!element) return null;
+    if (
+      isLockedElement(element) ||
+      isHiddenElement(element) ||
+      isGroupElement(element)
+    ) {
+      return element;
+    }
+  }
+  return null;
 }
 
 /**
- * A locked, hidden, or group top-level target owns its subtree, so every edit
- * that targets a path inside it must be rejected. Path-based callers that
- * capture their path across an await (image uploads) cannot rely on the
- * selection guards, so the check also runs at apply time.
+ * The nearest guarded element on the path, including the target. Callers that
+ * mutate a whole subtree — appearance, table structure, chart data — must
+ * reject a guarded target as well as a guarded ancestor.
  */
-function topLevelBlocksEdit(
+function guardedPathElement(
   slide: Element,
   path: readonly number[]
-): boolean {
-  const top = elementAtPath(slide, [path[0] ?? -1]);
-  return (
-    !top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
-  );
+): Element | null {
+  const target = elementAtPath(slide, path);
+  if (!target) return null;
+  if (
+    isLockedElement(target) ||
+    isHiddenElement(target) ||
+    isGroupElement(target)
+  ) {
+    return target;
+  }
+  return blockedPathAncestor(slide, path);
+}
+
+/**
+ * A locked, hidden, or group wrapper owns its subtree, so every edit that
+ * targets a path inside it must be rejected. Path-based callers that capture
+ * their path across an await (image uploads) cannot rely on the selection
+ * guards, so the check also runs at apply time.
+ */
+function pathBlocksEdit(slide: Element, path: readonly number[]): boolean {
+  return guardedPathElement(slide, path) !== null;
 }
 
 function objectActionStateFor(
@@ -1120,6 +1144,9 @@ export function App() {
       }
       const top = elementAtPath(slideInfo.element, [selected.path[0] ?? -1]);
       if (!top || isLockedElement(top) || isHiddenElement(top)) return false;
+      // A nested group, lock, or hidden wrapper inside an unlocked top-level
+      // object owns its subtree just as a top-level one does.
+      if (blockedPathAncestor(slideInfo.element, selected.path)) return false;
       if (isGroupElement(top) && (field === 'width' || field === 'height')) {
         return false;
       }
@@ -1127,6 +1154,10 @@ export function App() {
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
+      if (isLockedElement(element) || isHiddenElement(element)) return false;
+      if (isGroupElement(element) && (field === 'width' || field === 'height')) {
+        return false;
+      }
       const pinned = field !== 'rotation' && willPinToAbsolute(element);
       const snapshot = snapshotGeometry(element, slide);
       const committed = applyInspectorEdit(
@@ -1265,7 +1296,7 @@ export function App() {
           master,
           (draft) => {
             const target = findSlide(draft, slideId);
-            if (topLevelBlocksEdit(target.element, path)) return false;
+            if (pathBlocksEdit(target.element, path)) return false;
             const element = elementAtPath(target.element, [...path]);
             if (!element) return false;
             mutate(element);
@@ -1293,7 +1324,7 @@ export function App() {
       ) {
         return false;
       }
-      if (topLevelBlocksEdit(slideInfo.element, selection.path)) {
+      if (pathBlocksEdit(slideInfo.element, selection.path)) {
         return false;
       }
       return applyPathEdit(slideInfo.id, selection.path, mutate);
@@ -1373,10 +1404,10 @@ export function App() {
       }
       const context = tableContext(slideInfo.element, selection.path);
       if (!context) return;
-      const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
-      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
-        return;
-      }
+      // A table inside a nested guarded wrapper is as inert as one under a
+      // top-level guard.
+      if (!elementAtPath(slideInfo.element, context.tablePath)) return;
+      if (guardedPathElement(slideInfo.element, context.tablePath)) return;
       try {
         const applied = applyInspectorEdit(
           current.master,
@@ -1426,10 +1457,8 @@ export function App() {
       }
       const context = tableContext(slideInfo.element, selection.path);
       if (!context) return false;
-      const top = elementAtPath(slideInfo.element, [context.tablePath[0] ?? -1]);
-      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
-        return false;
-      }
+      if (!elementAtPath(slideInfo.element, context.tablePath)) return false;
+      if (guardedPathElement(slideInfo.element, context.tablePath)) return false;
       try {
         return applyInspectorEdit(
           current.master,
@@ -1482,7 +1511,7 @@ export function App() {
       return;
     }
     const top = elementAtPath(slideInfo.element, [selection.path[0] ?? -1]);
-    if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+    if (!top || guardedPathElement(slideInfo.element, selection.path)) {
       return;
     }
     let failure = '';
@@ -2284,7 +2313,7 @@ export function App() {
         !element ||
         isLockedElement(element) ||
         isGroupElement(element) ||
-        blockedTopLevelAncestor(slide, selected.path) !== null
+        blockedPathAncestor(slide, selected.path) !== null
       ) {
         return;
       }
@@ -2332,7 +2361,7 @@ export function App() {
         !element ||
         isLockedElement(element) ||
         isHiddenElement(element) ||
-        blockedTopLevelAncestor(slide, selected.path) !== null
+        blockedPathAncestor(slide, selected.path) !== null
       ) {
         return;
       }
@@ -2385,7 +2414,7 @@ export function App() {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
         const rect = rectOf(element, slide);
-        const blockedAncestor = blockedTopLevelAncestor(slide, target.path);
+        const blockedAncestor = blockedPathAncestor(slide, target.path);
         if (
           isLockedElement(element) ||
           isHiddenElement(element) ||
@@ -3051,7 +3080,7 @@ export function App() {
         !clickedTop ||
         isLockedElement(clickedTop) ||
         isHiddenElement(clickedTop) ||
-        blockedTopLevelAncestor(frameSlide, selected.path) !== null
+        blockedPathAncestor(frameSlide, selected.path) !== null
       ) {
         // Locked objects stay selectable but inert: no native text selection
         // drag, and no editor transform session. The same holds for a child
@@ -3072,7 +3101,7 @@ export function App() {
             item.element !== null &&
             !isLockedElement(item.element) &&
             !isHiddenElement(item.element) &&
-            blockedTopLevelAncestor(frameSlide, item.selection.path) === null
+            blockedPathAncestor(frameSlide, item.selection.path) === null
         )
         .sort((a, b) => {
           if (sameSelection(a.selection, selected)) return -1;
@@ -3164,6 +3193,14 @@ export function App() {
       // text edit it consumes the gesture and never enters a container. The
       // reason is kept for the case where no path applies at all.
       const block = textEditBlockFor(target);
+      // A guard on the target or a nested ancestor owns its subtree, so it
+      // must stop the gesture before container entry. Leaving this to the
+      // rejection path would let contextEntry enter the guarded subtree and
+      // suppress the reason entirely.
+      if (block === 'locked' || block === 'hidden' || block === 'group') {
+        showEditHint(block);
+        return;
+      }
       if (block === null) {
         // The block check resolved a text tag for this same target, so the
         // selector result here cannot be null.
@@ -3679,7 +3716,7 @@ export function App() {
   })();
   const blockedAncestor =
     activeSlide && selection
-      ? blockedTopLevelAncestor(activeSlide.element, selection.path)
+      ? blockedPathAncestor(activeSlide.element, selection.path)
       : null;
   const blockedByAncestor =
     selection !== null && selection.path.length > 1 && blockedAncestor !== null;
@@ -4060,13 +4097,18 @@ export function App() {
             >
               {pinNotice ? t('editor.notice.pinned') : ''}
             </span>
+            {/* One compact line at the very bottom edge: the stage keeps 48px
+                of canvas padding, and the bottom handles reach 5px below the
+                slide, so a 4px offset plus a ~32px line always clears them at
+                any aspect ratio. A wrapping, taller notice would cover them
+                when the viewport is short. */}
             {pinNotice && (
-              <div className="pointer-events-none absolute bottom-4 left-4 z-20">
+              <div className="pointer-events-none absolute bottom-1 left-4 z-20">
                 <div
                   data-testid="pin-notice"
-                  className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
+                  className="pointer-events-auto flex items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-1 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
                 >
-                  <span className="min-w-0 flex-1">
+                  <span className="whitespace-nowrap">
                     {t('editor.notice.pinned')}
                   </span>
                   <button
