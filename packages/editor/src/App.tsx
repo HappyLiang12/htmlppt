@@ -219,7 +219,12 @@ import {
   reorderSlides,
   type SlideOpsContext
 } from './slide-ops';
-import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
+import {
+  isEditableShortcutTarget,
+  mapShortcut,
+  mapTextShortcut,
+  type TextShortcutAction
+} from './shortcuts';
 import {
   isSwitchedFileConflict,
   useDeckController,
@@ -793,6 +798,9 @@ export function App() {
   const selectionToolbarRef = useRef<typeof selectionToolbar>(null);
   selectionToolbarRef.current = selectionToolbar;
   const selectionBusyRef = useRef(false);
+  const textShortcutRef = useRef<(action: TextShortcutAction) => void>(
+    () => undefined
+  );
   const [chartEditor, setChartEditor] = useState<{
     json: string;
     error: string;
@@ -2977,6 +2985,25 @@ export function App() {
         }
       }
 
+      const textShortcut = mapTextShortcut(event);
+      if (textShortcut) {
+        const target = eventElement(event.target);
+        const inForm = target?.closest('input, textarea, select');
+        const foreignEditable =
+          isEditableShortcutTarget(event.target) && !editingElementRef.current;
+        if (
+          !shortcutsOpen &&
+          !chartEditor &&
+          !inForm &&
+          !foreignEditable &&
+          (editingElementRef.current || selectionToolbarRef.current)
+        ) {
+          event.preventDefault();
+          textShortcutRef.current(textShortcut);
+          return;
+        }
+      }
+
       if (editable) return;
       // Modal dialogs own every key while they are open; their own handlers
       // provide Escape and focus trapping. Still suppress browser defaults
@@ -3603,6 +3630,19 @@ export function App() {
       editable.focus();
     }
   }, [endTextEditing, t]);
+
+  const applyTextShortcut = useCallback(
+    (action: TextShortcutAction) => {
+      const command: TextCommand = { type: action.type };
+      if (editingElementRef.current) {
+        applyTextToolbarCommand(command);
+        return;
+      }
+      void applySelectionTextCommand(command);
+    },
+    [applySelectionTextCommand, applyTextToolbarCommand]
+  );
+  textShortcutRef.current = applyTextShortcut;
 
   const runInsertion = useCallback(async (request: InsertRequest) => {
     if (!actionsRef.current.settlePendingEdits()) return;

@@ -24,7 +24,7 @@ const DECK = `<!doctype html>
     <h1 data-ppt-el="title">Heading</h1>
     <div class="box" data-ppt-el="box">Box text</div>
     <h2 class="locked" data-ppt-el="locked" data-ppt-locked="true">Locked text</h2>
-    <div class="box" data-ppt-el="empty-box" style="top:680px"></div>
+    <div class="box" data-ppt-el="empty-box" style="top:680px;width:320px;height:60px"></div>
     <div data-ppt-el="wrapper" style="position:absolute;left:120px;top:760px;font-size:32px"><span>First</span><span>Second</span></div>
   </section>
 </main>
@@ -168,6 +168,92 @@ test.describe('text entry @feature:text-entry', () => {
       expect(html).not.toMatch(
         /<span style="[^"]*font-weight[^"]*">Second<\/span>/
       );
+    } finally {
+      await deck.close();
+    }
+  });
+
+  test('Ctrl/Cmd+B/I/U format the selection or the whole leaf', async ({ page }) => {
+    const deck = await openDeck(page);
+    try {
+      await deck.frame.locator('[data-ppt-el="title"]').click();
+      const boldSave = waitForDeckSave(page);
+      await page.keyboard.press('ControlOrMeta+b');
+      expect((await boldSave).ok()).toBeTruthy();
+      await expect
+        .poll(() => readFile(deck.path, 'utf8'))
+        .toMatch(/font-weight:\s*(bold|700)/i);
+
+      await deck.frame.locator('[data-ppt-el="title"]').dblclick();
+      await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+        'data-mode',
+        'editing'
+      );
+      await deck.frame.locator('[data-ppt-el="title"]').evaluate((element) => {
+        const walker = element.ownerDocument.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT
+        );
+        const text = walker.nextNode();
+        if (!text) throw new Error('The heading has no text node.');
+        const range = element.ownerDocument.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 4);
+        const selection = element.ownerDocument.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      });
+      const italicSave = waitForDeckSave(page);
+      await page.keyboard.press('ControlOrMeta+i');
+      await page.keyboard.press('Escape');
+      expect((await italicSave).ok()).toBeTruthy();
+      await expect
+        .poll(() => readFile(deck.path, 'utf8'))
+        .toMatch(
+          /<span style="[^"]*font-style:\s*italic[^"]*">Head<\/span>ing/
+        );
+    } finally {
+      await deck.close();
+    }
+  });
+
+  test('guarded, empty, and multi selections expose the right Text tab state', async ({ page }) => {
+    const deck = await openDeck(page);
+    try {
+      await deck.frame.locator('[data-ppt-el="locked"]').click({ force: true });
+      await page
+        .locator('[data-testid="object-row"][data-object-id="locked"]')
+        .click();
+      await page.getByTestId('inspector-tab-text').click();
+      await expect(page.getByTestId('inspector-text-blocked')).toBeVisible();
+      await expect(page.getByTestId('inspector-text-blocked')).toContainText(
+        '已鎖定'
+      );
+      await expect(page.getByTestId('inspector-edit-text')).toHaveCount(0);
+      await expect(page.getByTestId('text-toolbar')).toHaveCount(0);
+
+      await deck.frame.locator('[data-ppt-el="empty-box"]').click();
+      await page.getByTestId('inspector-tab-text').click();
+      await expect(page.getByTestId('inspector-edit-text')).toBeVisible();
+      await expect(page.getByTestId('text-toolbar')).toHaveCount(0);
+      await page.getByTestId('inspector-edit-text').click();
+      await page.keyboard.type('New text');
+      const save = waitForDeckSave(page);
+      await deck.frame.locator('body').click({ position: { x: 5, y: 5 } });
+      expect((await save).ok()).toBeTruthy();
+      await expect
+        .poll(() => readFile(deck.path, 'utf8'))
+        .toContain('New text');
+      await deck.frame.locator('[data-ppt-el="empty-box"]').click();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+
+      await deck.frame.locator('[data-ppt-el="title"]').click();
+      await deck.frame
+        .locator('[data-ppt-el="box"]')
+        .click({ modifiers: ['Shift'] });
+      await expect(page.getByTestId('text-toolbar')).toHaveCount(0);
+      await page.getByTestId('inspector-tab-text').click();
+      await expect(page.getByTestId('inspector-text-multi')).toBeVisible();
     } finally {
       await deck.close();
     }
