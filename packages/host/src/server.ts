@@ -68,7 +68,7 @@ const HISTORY_LIMIT = 20;
 const WATCH_INTERVAL_MS = 50;
 const WATCH_DEBOUNCE_MS = 100;
 const HEARTBEAT_MS = 15_000;
-const TOKEN_COOKIE = 'htmlppt_token';
+export const TOKEN_COOKIE = 'htmlppt_token';
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const DECK_BODY_LIMIT = 16 * 1024 * 1024;
 const EXPORT_BODY_LIMIT = 64 * 1024;
@@ -115,6 +115,19 @@ function tokenCookie(token: string): string {
 
 function friendlyDeckPath(filePath: string): string {
   return `/d/${encodeURIComponent(path.basename(filePath))}`;
+}
+
+/**
+ * Escapes a deck name for the unauthorized HTML page so a file name cannot
+ * inject markup. The ampersand runs first, otherwise it would re-escape the
+ * entity references the later replacements introduce.
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function sessionBootstrapUrl(session: { port: number; token: string }): string {
@@ -908,8 +921,13 @@ export async function startHost(options: HostOptions): Promise<HostHandle> {
     const queryToken = url.searchParams.get('token');
     const cookieToken = readCookie(c.req.header('cookie'), TOKEN_COOKIE);
     if (queryToken !== options.token && cookieToken !== options.token) {
-      return c.text(
-        'Unauthorized. Open the tokenized URL printed by "htmlppt open".',
+      const deckName = path.basename(filePath);
+      return c.html(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>htmlppt</title></head>` +
+          `<body><main><h1>This browser has no session for ${escapeHtml(deckName)}</h1>` +
+          `<p>The editor host is running, but this browser has no valid session cookie for it.</p>` +
+          `<p>Run <code>htmlppt open &lt;deck&gt;</code> in a terminal and open the printed URL once; ` +
+          `this browser is signed in for 30 days afterwards.</p></main></body></html>`,
         401
       );
     }

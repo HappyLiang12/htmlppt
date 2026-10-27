@@ -14,10 +14,10 @@ import {
   INVALID_OUT_DIR_MESSAGE,
   resolveExportDirectory
 } from './export-path.js';
+import { probeSessionHealth } from './host-session.js';
 
 const SESSION_POLL_INTERVAL_MS = 100;
 const SESSION_TIMEOUT_MS = 5_000;
-const SESSION_HEALTH_TIMEOUT_MS = 1_000;
 
 /**
  * Resolves paths against the server cwd and keeps the last read or written
@@ -97,35 +97,53 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 /**
- * A registry entry alone is not proof of a usable editor: a host that died
- * without cleaning up leaves a live PID and a closed port behind. Only a
- * healthy authenticated response makes the session eligible.
+ * The exit state of a spawned editor CLI, observed without touching its stdio.
+ * Successful opens keep the detached child alive as the host, so the parent
+ * only reads the exit fields instead of holding pipes open for its lifetime.
  */
-async function sessionIsHealthy(session: {
-  port: number;
-  token: string;
-}): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `http://127.0.0.1:${session.port}/api/health`,
-      {
-        headers: { authorization: `Bearer ${session.token}` },
-        signal: AbortSignal.timeout(SESSION_HEALTH_TIMEOUT_MS)
-      }
-    );
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      return false;
-    }
-    const payload = (await response.json()) as { ok?: unknown } | null;
-    return payload?.ok === true;
-  } catch {
-    return false;
-  }
+export interface SpawnedEditorStatus {
+  readonly exitCode: number | null;
+  readonly signalCode: NodeJS.Signals | null;
 }
 
+/**
+ * Describes a spawned CLI that exited before publishing a session. Successful
+ * opens keep the detached child alive as the host, so the parent only reads
+ * these fields instead of holding pipes open for its lifetime.
+ */
+function spawnedEditorFailure(
+  filePath: string,
+  status: SpawnedEditorStatus
+): ToolError | null {
+  if (status.exitCode !== null && status.exitCode !== 0) {
+    return new ToolError(
+      'editor-failed',
+      `The editor host process exited with code ${status.exitCode} before publishing a session for ${filePath}. Run "htmlppt open ${filePath} --no-browser" in a terminal to see the error.`
+    );
+  }
+  if (status.signalCode !== null) {
+    return new ToolError(
+      'editor-failed',
+      `The editor host process was terminated by ${status.signalCode} before publishing a session for ${filePath}. Run "htmlppt open ${filePath} --no-browser" in a terminal to see the error.`
+    );
+  }
+  return null;
+}
+
+/**
+ * Waits for the session the spawned CLI registers to become a usable editor.
+ * A registry entry alone is not proof: a host can answer `/api/health` while
+ * its editor shell is broken, so only a `healthy` probe makes the URL
+ * eligible. Stale-build and unknown entries stay registered for `stop` and
+ * are deliberately not reported as a successful open.
+ *
+ * When the caller passes the spawned CLI, an early exit fails the wait with
+ * `editor-failed` instead of polling until the timeout. The CLI's refusal is
+ * otherwise lost because its stdio is ignored.
+ */
 export async function waitForSession(
-  filePath: string
+  filePath: string,
+  spawned?: SpawnedEditorStatus
 ): Promise<{ port: number; token: string }> {
   const sessionFile = path.join(
     sessionsDirectory(),
@@ -133,11 +151,17 @@ export async function waitForSession(
   );
   const deadline = Date.now() + SESSION_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (spawned) {
+      const failure = spawnedEditorFailure(filePath, spawned);
+      if (failure) {
+        throw failure;
+      }
+    }
     const session = await readSession(sessionFile);
     if (
       session &&
       session.path === filePath &&
-      (await sessionIsHealthy(session))
+      (await probeSessionHealth(session)) === 'healthy'
     ) {
       return { port: session.port, token: session.token };
     }

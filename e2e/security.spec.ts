@@ -394,14 +394,22 @@ test(
 
       const anonymous = await fetch(`${origin}/`);
       expect(anonymous.status).toBe(401);
+      expect(anonymous.headers.get('content-type')).toContain('text/html');
       const anonymousBody = await anonymous.text();
-      expect(anonymousBody.toLowerCase()).toContain('unauthorized');
+      expect(anonymousBody).toContain('security.html');
+      expect(anonymousBody).toContain('no valid session cookie');
+      expect(anonymousBody).toContain('htmlppt open');
+      expect(anonymousBody).not.toContain(hostToken(host.url));
       expect(anonymousBody).not.toContain('canvas-preview');
 
       const wrong = await fetch(`${origin}/?token=${encodeURIComponent('wrong-token')}`);
       expect(wrong.status).toBe(401);
+      expect(wrong.headers.get('content-type')).toContain('text/html');
       const wrongBody = await wrong.text();
-      expect(wrongBody.toLowerCase()).toContain('unauthorized');
+      expect(wrongBody).toContain('security.html');
+      expect(wrongBody).toContain('no valid session cookie');
+      expect(wrongBody).toContain('htmlppt open');
+      expect(wrongBody).not.toContain(hostToken(host.url));
       expect(wrongBody).not.toContain('canvas-preview');
 
       await page.goto(host.url);

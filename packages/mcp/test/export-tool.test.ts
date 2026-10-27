@@ -353,7 +353,7 @@ describe('export_deck tool', () => {
       await mkdir(editorDir, { recursive: true });
       await writeFile(
         path.join(editorDir, 'index.html'),
-        '<!doctype html><title>Editor</title>',
+        '<!doctype html><title>Editor</title><div id="root"></div>',
         'utf8'
       );
       const token = randomUUID();

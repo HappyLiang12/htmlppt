@@ -3,12 +3,14 @@
 htmlppt runs locally. The editor host binds to `127.0.0.1` and requires the
 per-deck capability token minted by the first `htmlppt open`. `open` records the
 token and port in a local credential store and reuses them for that deck until
-`htmlppt stop` rotates the token; the tokenized first visit sets an HttpOnly,
-`SameSite=Strict` session cookie with a 30-day `Max-Age`. It serves only the
-opened deck and the packaged editor assets, and confines HTML/PDF/PNG exports to
-the deck directory. Deck previews use an iframe sandbox without script
-execution; unsaved drafts live only in the editor origin's IndexedDB and never
-contain the session token.
+`htmlppt stop` rotates the token. A stale-build replacement rotates it too,
+because `open` stops the broken host first, so a URL bookmarked before the
+replacement needs the newly printed one. The tokenized first visit sets an
+HttpOnly, `SameSite=Strict` session cookie with a 30-day `Max-Age`. It serves
+only the opened deck and the packaged editor assets, and confines HTML/PDF/PNG
+exports to the deck directory. Deck previews use an iframe sandbox without
+script execution; unsaved drafts live only in the editor origin's IndexedDB and
+never contain the session token.
 PDF/PNG rendering runs Chromium with JavaScript disabled and blocks file,
 network-navigation, frame, worker, and script requests. The MCP server uses
 stdio only. Direct mode reads and writes the paths you give it; host-attached

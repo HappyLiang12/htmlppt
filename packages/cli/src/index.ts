@@ -145,10 +145,12 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
 }
 
 /**
- * A health timeout or 5xx keeps the registry entry even though no live session
- * can be confirmed. Starting another host would overwrite that entry and orphan
- * the process that may still own the socket, so a recorded live pid blocks the
- * new host until the user retries or stops it.
+ * A health timeout or a 5xx keeps the registry entry even though no healthy
+ * session can be confirmed. Starting another host would overwrite that entry
+ * and orphan the process that may still own the socket, so a recorded live pid
+ * blocks the new host until the user retries or stops it. A broken editor
+ * shell (`stale-build`) is handled by `open` itself: it retries the probe once
+ * and replaces the host when the verdict persists.
  *
  * Registry keys keep the spelling their writer used, so the caller-spelling key
  * can be absent after an open moved the entry to the host's canonical path.
@@ -297,7 +299,22 @@ async function readListedEntries(names: string[]): Promise<ListedEntry[]> {
   return entries;
 }
 
-async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
+/**
+ * Stops the process recorded by one registry entry. A caller that already
+ * checked the entry passes the exact snapshot it verified; the file must still
+ * hold those bytes, so a registry that changed after the probe can never make
+ * this signal a pid the probe did not vouch for.
+ *
+ * `announce` controls the stdout confirmation. `stop` reports the session it
+ * retired, while `open` suppresses the line because its stdout carries only
+ * the `HTMLPPT_URL` contract and warns about the replacement on stderr.
+ */
+async function stopSession(
+  session: SessionEntry,
+  io: CliIO,
+  snapshotOverride?: string,
+  options: { announce?: boolean } = {}
+): Promise<boolean> {
   const sessionFile = join(
     sessionsDirectory(),
     `${sessionKey(session.path)}.json`
@@ -317,7 +334,8 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
     }
     return false;
   }
-  if (snapshot !== `${JSON.stringify(session, null, 2)}\n`) {
+  const expected = snapshotOverride ?? `${JSON.stringify(session, null, 2)}\n`;
+  if (snapshot !== expected) {
     // The registry changed after the health check; never signal a pid that no
     // longer matches the session that was verified.
     io.stderr(
@@ -349,7 +367,9 @@ async function stopSession(session: SessionEntry, io: CliIO): Promise<boolean> {
   // recorded port stays stable so the deck keeps its address. The host is
   // already gone, so a failed write warns instead of failing the stop.
   await rotateStoppedCredential(session.path, session.port, io);
-  io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
+  if (options.announce !== false) {
+    io.stdout(`Stopped editor for ${session.path} (port ${session.port}).`);
+  }
   return true;
 }
 
@@ -618,24 +638,29 @@ export async function runCli(
       // so canonicalizing here would hide entries written by another process.
       const filePath = resolve(io.cwd, file);
 
-      const { findLiveSession } = await import('@htmlppt/mcp');
-      const existing = await findLiveSession(filePath);
-      if (existing) {
-        const url = sessionUrl(existing);
-        // Decks opened before the credential store existed still deserve a
-        // stable bookmark. A stale credential is worse than none: after a
-        // crash the stored identity would start a host the live one never
-        // served, so rewrite it to the host that is actually answering.
+      const {
+        findLiveSession,
+        findStoppableSession,
+        lookupRegisteredSession,
+        probeSessionHealth
+      } = await import('@htmlppt/mcp');
+      // A host that already serves the editor is handed out as-is. Decks
+      // opened before the credential store existed still deserve a stable
+      // bookmark, and a stale credential is worse than none: after a crash the
+      // stored identity would start a host the live one never served, so
+      // rewrite it to the host that is actually answering.
+      const reuseSession = async (session: SessionEntry): Promise<void> => {
+        const url = sessionUrl(session);
         const stored = await readCredential(filePath);
         if (
           stored === null ||
-          stored.token !== existing.token ||
-          stored.port !== existing.port
+          stored.token !== session.token ||
+          stored.port !== session.port
         ) {
           const now = new Date().toISOString();
           await writeCredential(filePath, {
-            token: existing.token,
-            port: existing.port,
+            token: session.token,
+            port: session.port,
             createdAt: stored?.createdAt ?? now,
             updatedAt: now
           }).catch((error: unknown) => {
@@ -648,7 +673,56 @@ export async function runCli(
         if (options.browser) {
           await openBrowser(url, io);
         }
+      };
+
+      const existing = await findLiveSession(filePath);
+      if (existing) {
+        await reuseSession(existing);
         return;
+      }
+
+      // A host that answered health for this deck but no longer serves the
+      // editor (`stale-build`) is alive and owns the recorded port. Retry it
+      // once, then replace it instead of handing out its dead URL. Only that
+      // verdict may be signalled: `unhealthy` and `unknown` never prove the pid
+      // belongs to this deck.
+      //
+      // Registry keys keep the spelling their writer used, and the caller's
+      // spelling may have no entry at all, so a stale host registered under an
+      // alias is reached through the canonical-path scan.
+      const direct = await lookupRegisteredSession(filePath);
+      let staleBuild = direct?.health === 'stale-build' ? direct : null;
+      if (direct === null) {
+        // A direct entry that survived `findLiveSession` is either the
+        // candidate above or a busy host that the refusal below already
+        // blocks, so only a missing entry can hide a stale host behind another
+        // spelling. Scanning the registry would probe that same host again.
+        const alias = await findStoppableSession(filePath);
+        staleBuild = alias?.health === 'stale-build' ? alias : null;
+      }
+      if (staleBuild !== null) {
+        // One quick retry absorbs a transient shell failure, such as a build
+        // being copied into place, before the host is replaced.
+        await delay(150);
+        const retry = await probeSessionHealth(staleBuild.entry);
+        if (retry === 'healthy') {
+          // The host recovered and serves the editor again, so reuse it
+          // instead of replacing a process that just proved itself.
+          await reuseSession(staleBuild.entry);
+          return;
+        }
+        if (retry === 'stale-build') {
+          io.stderr(
+            `The editor registered for ${file} is running but does not serve the editor (stale build). Stopping it and starting a fresh one.`
+          );
+          // Evict before reading the credential: the stop rotates the token,
+          // so the new host starts with the rotated token and the store and
+          // the process agree. `open` keeps stdout to the URL contract, so the
+          // stop does not announce itself here.
+          await stopSession(staleBuild.entry, io, staleBuild.snapshot, {
+            announce: false
+          });
+        }
       }
 
       if (await hasUnresponsiveRegisteredHost(filePath)) {
@@ -837,7 +911,11 @@ export async function runCli(
     .description('Stop a running editor session')
     .option('--all', 'stop every live editor session')
     .action(async (file: string | undefined, options: { all?: boolean }) => {
-      const { findLiveSession } = await import('@htmlppt/mcp');
+      const {
+        findLiveSession,
+        findStoppableSession,
+        lookupRegisteredSession
+      } = await import('@htmlppt/mcp');
       if (options.all) {
         if (file !== undefined) {
           io.stderr('Pass either a deck file or --all, not both.');
@@ -899,36 +977,61 @@ export async function runCli(
         let cleaned = 0;
         let failed = 0;
         for (const session of sessions) {
-          const live = await findLiveSession(session.path);
-          if (!live) {
-            const entryState = await sessionFileState(session.path);
-            if (entryState === 'missing') {
-              // The health check definitively proved the entry stale and
-              // already removed it; there is no live host left to fail. Its
-              // credential must not outlive that host either.
-              await rotateStoppedCredential(session.path, session.port, io);
-              cleaned += 1;
-              io.stdout(`Removed stale editor session for ${session.path}.`);
-              continue;
-            }
-            if (entryState === 'unreadable') {
-              io.stderr(
-                `Could not read the editor session entry for ${session.path}. Check permissions on ${sessionsDirectory()}, then retry "htmlppt stop --all".`
-              );
+          // Judge this exact registry entry instead of asking findLiveSession
+          // for a live host: a stale-build entry is alive and must be stopped,
+          // but findLiveSession deliberately reports no live session for it.
+          const registered = await lookupRegisteredSession(session.path);
+          if (
+            registered?.health === 'healthy' ||
+            registered?.health === 'stale-build'
+          ) {
+            if (await stopSession(registered.entry, io, registered.snapshot)) {
+              stopped += 1;
+            } else {
               failed += 1;
-              continue;
             }
+            continue;
+          }
+          if (registered?.health === 'unhealthy') {
+            // The process answered, but not as the host that owns this deck.
+            // Never signal that pid; prune the entry exactly as
+            // findLiveSession fences it and let the missing-entry branch below
+            // rotate a credential no host can use.
+            await removeSessionIfUnchanged(
+              join(
+                sessionsDirectory(),
+                `${sessionKey(registered.entry.path)}.json`
+              ),
+              registered.snapshot
+            );
+          } else if (registered?.health === 'unknown') {
             io.stderr(
               `Could not verify a live editor for ${session.path}; leaving it running. Retry "htmlppt stop ${session.path}" when it responds.`
             );
             failed += 1;
             continue;
           }
-          if (await stopSession(live, io)) {
-            stopped += 1;
-          } else {
-            failed += 1;
+          const entryState = await sessionFileState(session.path);
+          if (entryState === 'missing') {
+            // The entry is gone (a dead pid was pruned by listSessions, or the
+            // verdict above removed it); there is no live host left to fail.
+            // Its credential must not outlive that host either.
+            await rotateStoppedCredential(session.path, session.port, io);
+            cleaned += 1;
+            io.stdout(`Removed stale editor session for ${session.path}.`);
+            continue;
           }
+          if (entryState === 'unreadable') {
+            io.stderr(
+              `Could not read the editor session entry for ${session.path}. Check permissions on ${sessionsDirectory()}, then retry "htmlppt stop --all".`
+            );
+            failed += 1;
+            continue;
+          }
+          io.stderr(
+            `Could not verify a live editor for ${session.path}; leaving it running. Retry "htmlppt stop ${session.path}" when it responds.`
+          );
+          failed += 1;
         }
         // listSessions pruned dead-pid entries before the loop, so their
         // credentials never reached stopSession. Rotate every snapshotted
@@ -962,17 +1065,54 @@ export async function runCli(
         return;
       }
       const filePath = resolve(io.cwd, file);
+      // Judge the caller-spelling entry before findLiveSession prunes an
+      // unhealthy one or returns a healthy alias: a stale-build entry is alive
+      // and must be stopped, not reported missing.
+      const registered = await lookupRegisteredSession(filePath);
+      if (
+        registered?.health === 'healthy' ||
+        registered?.health === 'stale-build'
+      ) {
+        if (!(await stopSession(registered.entry, io, registered.snapshot))) {
+          exitCode = 1;
+        }
+        return;
+      }
+      // A host that cannot serve the editor (`stale-build`) is alive and must
+      // be stopped, but `findLiveSession` only reports healthy hosts. When the
+      // caller's spelling has no entry at all, scan the registry by canonical
+      // path for a same-deck host that `stop` can safely retire with its
+      // checked snapshot. A healthy entry still wins inside that scan, so the
+      // pre-existing reuse path below only handles a race that appeared after
+      // the scan.
+      if (registered === null) {
+        const stoppable = await findStoppableSession(filePath);
+        if (stoppable) {
+          if (!(await stopSession(stoppable.entry, io, stoppable.snapshot))) {
+            exitCode = 1;
+          }
+          return;
+        }
+      }
+      // A healthy host may still be registered under another spelling.
       const live = await findLiveSession(filePath);
-      if (!live) {
+      if (live) {
+        if (!(await stopSession(live, io))) {
+          exitCode = 1;
+        }
+        return;
+      }
+      if (registered?.health === 'unknown') {
         io.stderr(
-          `No live editor session for ${file}. Start one with "htmlppt open ${file}".`
+          `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop ${file}" when it responds.`
         );
         exitCode = 1;
         return;
       }
-      if (!(await stopSession(live, io))) {
-        exitCode = 1;
-      }
+      io.stderr(
+        `No live editor session for ${file}. Start one with "htmlppt open ${file}".`
+      );
+      exitCode = 1;
     });
 
   program

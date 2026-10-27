@@ -890,6 +890,13 @@ test.describe('theme', () => {
   }) => {
     const harness = await openThemeDeck(page, STATUS_DECK);
     try {
+      // getComputedStyle returns the animated colour mid-transition, so a theme
+      // switch right before a measurement samples a blended palette. Freeze
+      // transitions here; the assertions still compare the final token values.
+      await page.addStyleTag({
+        content:
+          '*, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }'
+      });
       // Block the autosave so the external write lands while the editor is
       // still dirty and must show the conflict warning.
       await page.route('**/api/deck', (route) =>

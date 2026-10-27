@@ -12,6 +12,7 @@ import { basename, join } from 'node:path';
 import { copyFixture, makeTempDir } from '@htmlppt/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  escapeHtml,
   HOST_VERSION,
   isAllowedOrigin,
   startHost
@@ -392,6 +393,20 @@ describe('isAllowedOrigin', () => {
   });
 });
 
+describe('escapeHtml', () => {
+  it('escapes all four markup characters a deck name can carry', () => {
+    expect(escapeHtml('a<b>&"c.deck.html')).toBe(
+      'a&lt;b&gt;&amp;&quot;c.deck.html'
+    );
+  });
+
+  it('escapes ampersands before it adds entity references', () => {
+    // A second pass over the output would double-escape these references.
+    expect(escapeHtml('<')).toBe('&lt;');
+    expect(escapeHtml('&lt;')).toBe('&amp;lt;');
+  });
+});
+
 describe('host', () => {
   it('redirects the tokenized root and serves the deck', async () => {
     const ctx = await setup();
@@ -437,6 +452,87 @@ describe('host', () => {
     });
     expect(wrongCookie.status).toBe(401);
   });
+
+  it('explains how to recover from a missing session', async () => {
+    const ctx = await setup();
+
+    const page = await fetch(
+      `${ctx.base}/d/${encodeURIComponent(basename(ctx.deckPath))}`
+    );
+
+    expect(page.status).toBe(401);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    const body = await page.text();
+    expect(body).toContain('<title>htmlppt</title>');
+    expect(body).toContain(basename(ctx.deckPath));
+    expect(body).toContain('no valid session cookie');
+    expect(body).toContain('htmlppt open');
+    expect(body).not.toContain('<script');
+    expect(body).not.toContain(ctx.deckPath);
+    expect(body).not.toContain(ctx.token);
+  });
+
+  it('escapes the deck name in the unauthorized page', async () => {
+    const ctx = await setup();
+    const cookie = await bootstrapCookie(ctx);
+    const deckName = 'review & notes.deck.html';
+    const target = await addDeck(ctx, deckName, 'Review notes');
+    const opened = await openDeck(ctx, cookie, target);
+    expect(opened.status).toBe(200);
+
+    const page = await fetch(`${ctx.base}/d/${encodeURIComponent(deckName)}`);
+
+    expect(page.status).toBe(401);
+    const body = await page.text();
+    expect(body).toContain('review &amp; notes.deck.html');
+    expect(body).not.toContain(deckName);
+    expect(body).not.toContain(ctx.token);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'escapes markup characters in the unauthorized deck name',
+    async () => {
+      // Windows cannot create these file names, so the escaping of `<`, `>`,
+      // and `"` is exercised end to end only on POSIX.
+      const dir = await makeTempDir('htmlppt-host-escape-');
+      let host: Awaited<ReturnType<typeof startHost>> | undefined;
+      try {
+        const editorDir = join(dir, 'editor');
+        await mkdir(editorDir);
+        await writeFile(
+          join(editorDir, 'index.html'),
+          '<!doctype html><div id="root">editor-shell</div>',
+          'utf8'
+        );
+        const fixture = await copyFixture('basic.deck.html', dir);
+        const deckName = 'a<b>&"c.deck.html';
+        const deckPath = join(dir, deckName);
+        await writeFile(deckPath, await readFile(fixture, 'utf8'), 'utf8');
+        const token = randomUUID();
+        host = await startHost({
+          filePath: deckPath,
+          token,
+          editorDir,
+          port: 0
+        });
+        const base = new URL(host.url).origin;
+
+        const page = await fetch(`${base}/`);
+
+        expect(page.status).toBe(401);
+        expect(page.headers.get('content-type')).toContain('text/html');
+        const body = await page.text();
+        expect(body).toContain('a&lt;b&gt;&amp;&quot;c.deck.html');
+        expect(body).not.toContain(deckName);
+        expect(body).not.toContain('a<b>');
+        expect(body).not.toContain('&"c.deck.html');
+        expect(body).not.toContain(token);
+      } finally {
+        await host?.close();
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('serves the page and assets with the session cookie', async () => {
     const ctx = await setup();

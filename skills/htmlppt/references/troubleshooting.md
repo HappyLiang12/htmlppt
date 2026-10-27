@@ -89,13 +89,24 @@ edits make this easier to diagnose.
 `create_deck` never overwrites. Choose a new path, or ask the user before
 replacing the existing deck.
 
-### `editor-unavailable` or `editor-timeout`
+### `editor-unavailable`, `editor-failed`, or `editor-timeout`
 
 `open_editor` starts the built CLI. If it reports `editor-unavailable`, run
 `npm run build` so `packages/editor/dist` and the CLI dist exist. If it reports
-`editor-timeout`, the CLI did not write a session within 5 seconds: run
-`htmlppt open <file> --no-browser` manually and read its stderr. A blocked
-session from a busy host is a common cause; stop it first.
+`editor-failed`, the spawned CLI exited with a non-zero code or was terminated
+by a signal before publishing a healthy session, and the message names that
+code or signal: run `htmlppt open <file> --no-browser` manually and read its
+stderr. If it reports `editor-timeout`, the CLI did not publish a healthy
+session within 5 seconds (an exit with code 0 before a session surfaces here,
+not as `editor-failed`): run the same command manually.
+
+A host that is alive but times out or answers health with a 5xx is `unknown`,
+and a shell probe that times out leaves the same verdict; these hosts block a
+second host for that deck, so retry, or stop one explicitly. A host whose health
+passes but whose editor shell answers a non-200 status, returns non-HTML, or
+omits `id="root"` (`stale-build`) is not a blocker: the next `open` stops it and
+replaces it automatically, which rotates the token. Do not stop a broken editor
+by hand unless the automatic replacement itself fails.
 
 ### Unexpected host behavior
 
@@ -117,7 +128,7 @@ CLI failures print a message to stderr and exit 1.
 | `Invalid --slides. Use a positive integer up to 1000.` | Fix the `--slides` value. |
 | `Port <port> is already in use. Omit --port or choose another.` | Another process owns the port. Omit `--port` to let `open` retry the deck's recorded port and fall back to an ephemeral one, or choose another port. |
 | `Editor build not found. Run "npm run build" first.` | `packages/editor/dist` is missing. Build the workspace. |
-| `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but failed the health check (timeout/5xx). Do not start a second host; retry or stop the recorded one. |
+| `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but its health check timed out or returned a 5xx (`unknown`), so `open` cannot prove it owns the deck and refuses to start a second host. Retry, or stop the recorded one. An alive host whose health passes but whose editor shell is broken is `stale-build` instead: `open` replaces it automatically, and this message is not printed. |
 | `No live editor session for <file>. Start one with "htmlppt open <file>".` | `stop` found nothing to stop for that deck. |
 | `Specify a deck file to stop or pass --all.` | `stop` needs a target. |
 | `Pass either a deck file or --all, not both.` | Use one form. |
@@ -136,10 +147,14 @@ CLI failures print a message to stderr and exit 1.
 | `Unsupported export format "<format>". Use --format html, pdf, or png.` | Fix `--format`. |
 | `Invalid --port. Use an integer between 0 and 65535.` | Fix the port number. |
 
-`open` reuses a live editor for the same deck and prints its existing
-`HTMLPPT_URL` instead of starting a second host. The session registry lives
-under `~/.htmlppt/sessions`; set `HTMLPPT_HOME` to isolate it for tests or
-automation. `HTMLPPT_EDITOR_DIR` overrides the editor build location.
+`open` reuses an editor for the same deck and prints its `HTMLPPT_URL` instead
+of starting a second host, but only when the authenticated health endpoint
+accepts the deck and `/d/<deck-name>` serves the built editor shell. A
+`stale-build` host (health OK, editor broken) is stopped and replaced on the
+recorded port; because that stop rotates the token, the printed URL carries a
+new token. The session registry lives under `~/.htmlppt/sessions`; set
+`HTMLPPT_HOME` to isolate it for tests or automation. `HTMLPPT_EDITOR_DIR`
+overrides the editor build location.
 
 ## Editor and host behavior
 

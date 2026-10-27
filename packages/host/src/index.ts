@@ -1,4 +1,4 @@
-export { HOST_VERSION, startHost } from './server.js';
+export { HOST_VERSION, TOKEN_COOKIE, startHost } from './server.js';
 export type { HostHandle, HostOptions, RevisionSource } from './server.js';
 export {
   canonicalCredentialFile,

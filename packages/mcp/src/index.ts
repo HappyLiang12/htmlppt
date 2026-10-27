@@ -13,7 +13,16 @@ export type {
   HostDeckServiceOptions,
   SaveResult
 } from './deck-service.js';
-export { findLiveSession } from './host-session.js';
+export {
+  findLiveSession,
+  findStoppableSession,
+  lookupRegisteredSession,
+  probeSessionHealth
+} from './host-session.js';
+export type {
+  HealthStatus,
+  RegisteredSessionCheck
+} from './host-session.js';
 export { createMcpServer, startStdio } from './server.js';
 export type { CreateMcpServerOptions } from './server.js';
 export { registerResources, registerTools } from './tools.js';
