@@ -138,6 +138,11 @@ import {
   FRAME_SLIDE_ATTRIBUTE,
   frameSlideElement
 } from './slide-doc';
+import { revealPreviewSlide } from './frame-reveal';
+import {
+  resolveSelectedTextTarget,
+  type TextTargetResult
+} from './text-target';
 import type { PastedObjectGeometry } from './object-ops';
 import {
   applyObjectCommand,
@@ -309,6 +314,38 @@ function errorMessage(cause: unknown): string {
 function eventElement(target: EventTarget | null): Element | null {
   const node = target as Node | null;
   return node && node.nodeType === 1 ? (node as Element) : null;
+}
+
+function resolveTextTargetAt(
+  frameDocument: Document | null | undefined,
+  slideInfo: SlideInfo | undefined,
+  path: readonly number[]
+): TextTargetResult | null {
+  if (!frameDocument || !slideInfo) return null;
+  const slide = frameSlideElement(slideInfo, frameDocument);
+  if (!slide) return null;
+  return resolveSelectedTextTarget(slide, path);
+}
+
+/**
+ * Whole-leaf commands wrap the contents in a styled span, so anchoring the
+ * toolbar state on the leaf element itself would report the old, outer style.
+ * Start the probe inside the first child instead, which is where the applied
+ * style actually lands.
+ */
+function selectionRangeFor(
+  frameDocument: Document,
+  leaf: HTMLElement
+): Range {
+  const range = frameDocument.createRange();
+  const first = leaf.firstChild;
+  if (first) {
+    range.setStart(first, 0);
+    range.setEnd(leaf, leaf.childNodes.length);
+  } else {
+    range.selectNodeContents(leaf);
+  }
+  return range;
 }
 
 function isEditableTarget(element: Element | null): boolean {
@@ -755,6 +792,14 @@ export function App() {
     state: TextToolbarState;
     error: string;
   } | null>(null);
+  const [selectionToolbar, setSelectionToolbar] = useState<{
+    state: TextToolbarState;
+    error: string;
+    path: number[];
+  } | null>(null);
+  const selectionToolbarRef = useRef<typeof selectionToolbar>(null);
+  selectionToolbarRef.current = selectionToolbar;
+  const selectionBusyRef = useRef(false);
   const [chartEditor, setChartEditor] = useState<{
     json: string;
     error: string;
@@ -1952,6 +1997,62 @@ export function App() {
     }
   }, []);
 
+  const applySelectionTextCommand = useCallback(
+    async (command: TextCommand) => {
+      if (selectionBusyRef.current) return;
+      if (!actionsRef.current.settlePendingEdits()) return;
+      const current = stateRef.current;
+      if (current.selections.length !== 1 || !current.selection) return;
+      const frameDocument = frame.current?.contentDocument;
+      if (!frameDocument) return;
+      const resolved = resolveTextTargetAt(
+        frameDocument,
+        current.slides[current.activeIndex],
+        current.selection.path
+      );
+      if (!resolved || resolved.status !== 'editable') {
+        setSelectionToolbar(null);
+        return;
+      }
+      try {
+        frameDocument.getSelection()?.removeAllRanges();
+        applyTextCommand(frameDocument, resolved.leaf, command, null);
+        selectionBusyRef.current = true;
+        const saved = await commitFrame();
+        if (saved) {
+          setSelectionToolbar((previous) =>
+            previous ? { ...previous, error: '' } : previous
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setSelectionToolbar((previous) =>
+          previous ? { ...previous, error: message } : previous
+        );
+      } finally {
+        selectionBusyRef.current = false;
+      }
+    },
+    [commitFrame]
+  );
+
+  const applySelectionTextLink = useCallback(() => {
+    const current = selectionToolbarRef.current;
+    if (!current) return;
+    toolbarInteractionRef.current = true;
+    let value: string | null = null;
+    try {
+      value = window.prompt(
+        t('app.linkPromptDetail'),
+        current.state.link || 'https://'
+      );
+    } finally {
+      toolbarInteractionRef.current = false;
+    }
+    if (value === null) return;
+    void applySelectionTextCommand({ type: 'link', value });
+  }, [applySelectionTextCommand, t]);
+
   const changeView = useCallback(
     (next: EditorView) => {
       if (next === view || !actionsRef.current.settlePendingEdits()) return;
@@ -2486,6 +2587,54 @@ export function App() {
     lastTextRangeRef.current = null;
     setTextToolbar(null);
   }, []);
+
+  useEffect(() => {
+    if (textToolbar) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const current = stateRef.current;
+    if (
+      current.selections.length !== 1 ||
+      !current.selection ||
+      current.selection.slideIndex !== current.activeIndex
+    ) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const frameDocument = frame.current?.contentDocument;
+    const resolved = resolveTextTargetAt(
+      frameDocument,
+      current.slides[current.activeIndex],
+      current.selection.path
+    );
+    if (
+      !frameDocument ||
+      !resolved ||
+      resolved.status !== 'editable' ||
+      resolved.empty
+    ) {
+      setSelectionToolbar(null);
+      return;
+    }
+    setSelectionToolbar({
+      state: readTextToolbarState(
+        frameDocument,
+        resolved.leaf,
+        selectionRangeFor(frameDocument, resolved.leaf)
+      ),
+      error: '',
+      path: current.selection.path
+    });
+  }, [
+    textToolbar,
+    selection,
+    selections,
+    activeIndex,
+    slides,
+    master,
+    frameEpoch
+  ]);
 
   // The notice's Undo delegates to the global undo. A pending edit is settled
   // into its own history entry and then undone by that undo, and an active
@@ -3167,6 +3316,7 @@ export function App() {
     const frameDocument = frame.current?.contentDocument;
     if (!frameDocument) return;
 
+    revealPreviewSlide(frameDocument);
     setFrameEpoch((value) => value + 1);
 
     frameDocument.addEventListener('dblclick', (event) => {
@@ -4032,6 +4182,21 @@ export function App() {
             }}
             className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-12"
           >
+            {selectionToolbar && !textToolbar && (
+              <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center">
+                <div className="pointer-events-auto overflow-hidden rounded-md border border-line-strong shadow-[0_16px_40px_var(--editor-shadow-panel)]">
+                  <TextToolbar
+                    mode="selection"
+                    state={selectionToolbar.state}
+                    error={selectionToolbar.error || undefined}
+                    onCommand={(command) =>
+                      void applySelectionTextCommand(command)
+                    }
+                    onLink={applySelectionTextLink}
+                  />
+                </div>
+              </div>
+            )}
             {activeSlide ? (
               <div
                 className="relative shadow-[0_24px_80px_var(--editor-shadow-stage)]"

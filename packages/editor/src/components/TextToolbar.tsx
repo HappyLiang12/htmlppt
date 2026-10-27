@@ -12,6 +12,7 @@ import { useI18n } from '../i18n';
 export interface TextToolbarProps {
   state: TextToolbarState;
   error?: string;
+  mode?: 'editing' | 'selection';
   onCommand: (command: TextCommand) => void;
   onLink: () => void;
 }
@@ -71,6 +72,7 @@ function toggleClass(active: boolean): string {
 export function TextToolbar({
   state,
   error,
+  mode = 'editing',
   onCommand,
   onLink
 }: TextToolbarProps) {
@@ -124,12 +126,15 @@ export function TextToolbar({
   return (
     <div
       data-testid="text-toolbar"
+      data-mode={mode}
       role="toolbar"
       aria-label={t('text.toolbar')}
       className="relative flex flex-wrap items-center gap-1 border-b border-accent/20 bg-accent-soft px-4 py-1.5"
       onPointerDown={(event) => event.preventDefault()}
     >
-      <span className="mr-1 text-xs text-accent">{t('text.group')}</span>
+      <span className="mr-1 text-xs text-accent">
+        {t(mode === 'selection' ? 'text.selection' : 'text.group')}
+      </span>
 
       <button
         type="button"
