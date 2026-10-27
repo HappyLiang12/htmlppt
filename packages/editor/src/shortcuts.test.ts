@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapShortcut,
+  mapTextShortcut,
   type ShortcutEventLike
 } from './shortcuts.js';
 
@@ -227,5 +228,31 @@ describe('mapShortcut modifier and key guards', () => {
     expect(mapShortcut(press('Delete', { target: bodyElement }))).toEqual({
       type: 'delete'
     });
+  });
+});
+
+describe('mapTextShortcut', () => {
+  it('maps B/I/U with Ctrl or Cmd and is case-insensitive', () => {
+    expect(mapTextShortcut(press('b', { ctrlKey: true }))).toEqual({
+      type: 'bold'
+    });
+    expect(mapTextShortcut(press('I', { metaKey: true }))).toEqual({
+      type: 'italic'
+    });
+    expect(mapTextShortcut(press('u', { ctrlKey: true }))).toEqual({
+      type: 'underline'
+    });
+  });
+
+  it('rejects modifiers, repeats, composition, and bare keys', () => {
+    expect(mapTextShortcut(press('b', { ctrlKey: true, shiftKey: true })))
+      .toBeNull();
+    expect(mapTextShortcut(press('b', { ctrlKey: true, altKey: true })))
+      .toBeNull();
+    expect(mapTextShortcut(press('b', { ctrlKey: true, repeat: true })))
+      .toBeNull();
+    expect(mapTextShortcut(press('b', { ctrlKey: true, isComposing: true })))
+      .toBeNull();
+    expect(mapTextShortcut(press('b'))).toBeNull();
   });
 });

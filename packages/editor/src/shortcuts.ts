@@ -33,6 +33,7 @@ export interface ShortcutEventLike {
   altKey?: boolean;
   target?: EventTarget | null;
   isComposing?: boolean;
+  repeat?: boolean;
 }
 
 const ARROW_VECTORS: Record<string, readonly [number, number] | undefined> = {
@@ -137,5 +138,28 @@ export function mapShortcut(
 
   const direction = ARROW_VECTORS[key];
   if (direction) return nudge(direction[0], direction[1]);
+  return null;
+}
+
+export type TextShortcutAction = {
+  type: 'bold' | 'italic' | 'underline';
+};
+
+/**
+ * Text commands are separate from mapShortcut: contenteditable targets own
+ * normal shortcuts, but B/I/U must still reach the text command layer. The
+ * caller decides whether a text target exists and whether a form field owns
+ * the key.
+ */
+export function mapTextShortcut(
+  event: ShortcutEventLike
+): TextShortcutAction | null {
+  if (event.isComposing || event.repeat) return null;
+  if (event.altKey || event.shiftKey) return null;
+  if (!primaryModifier(event)) return null;
+  const key = normalizedKey(event);
+  if (key === 'b') return { type: 'bold' };
+  if (key === 'i') return { type: 'italic' };
+  if (key === 'u') return { type: 'underline' };
   return null;
 }
