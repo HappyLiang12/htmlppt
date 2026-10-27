@@ -65,6 +65,77 @@ describe('textEditBlockFor', () => {
     expect(textEditBlockFor(pick('<div><span>a</span></div>', 'span'))).toBeNull();
   });
 
+  it('names a nested authored lock instead of the text contract', () => {
+    // The top-level wrapper is unlocked; the lock sits deeper in the subtree,
+    // where the text contract would otherwise report editable or has-children.
+    const locked =
+      '<div><div data-ppt-locked="true"><p>Locked</p></div></div>';
+    expect(textEditBlockFor(pick(locked, 'p'))).toBe('locked');
+    expect(
+      textEditBlockFor(pick(locked, '[data-ppt-locked]'))
+    ).toBe('locked');
+    expect(
+      textEditBlockFor(
+        pick(
+          '<div><div data-ppt-locked="true"><button>Go</button></div></div>',
+          'button'
+        )
+      )
+    ).toBe('locked');
+  });
+
+  it('names a nested group wrapper instead of the text contract', () => {
+    const grouped = '<div><div data-ppt-group><p>Grouped</p></div></div>';
+    expect(textEditBlockFor(pick(grouped, 'p'))).toBe('group');
+    expect(
+      textEditBlockFor(pick(grouped, '[data-ppt-group]'))
+    ).toBe('group');
+    expect(
+      textEditBlockFor(
+        pick(
+          '<div><div data-ppt-group><button>Go</button></div></div>',
+          'button'
+        )
+      )
+    ).toBe('group');
+  });
+
+  it('names a nested hidden wrapper instead of the text contract', () => {
+    expect(
+      textEditBlockFor(
+        pick('<div><div style="display:none"><p>Hidden</p></div></div>', 'p')
+      )
+    ).toBe('hidden');
+  });
+
+  it('keeps the guard precedence on a nested wrapper', () => {
+    expect(
+      textEditBlockFor(
+        pick(
+          '<div><div data-ppt-locked="true" data-ppt-group style="display:none"><p>x</p></div></div>',
+          'p'
+        )
+      )
+    ).toBe('locked');
+    expect(
+      textEditBlockFor(
+        pick(
+          '<div><div data-ppt-group style="display:none"><p>x</p></div></div>',
+          'p'
+        )
+      )
+    ).toBe('hidden');
+  });
+
+  it('leaves an unguarded nested wrapper on the text contract', () => {
+    expect(
+      textEditBlockFor(pick('<div><div><span>a</span></div></div>', 'span'))
+    ).toBeNull();
+    expect(
+      textEditBlockFor(pick('<div><div><span>a</span></div></div>', 'div > div'))
+    ).toBe('has-children');
+  });
+
   it('accepts a div with only line breaks and an empty table cell', () => {
     expect(textEditBlockFor(pick('<div><br></div>', 'div'))).toBeNull();
     expect(

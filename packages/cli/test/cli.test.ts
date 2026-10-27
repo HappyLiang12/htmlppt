@@ -14,6 +14,7 @@ import {
   symlink,
   writeFile
 } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -990,6 +991,64 @@ async function closedPort(): Promise<number> {
   return address.port;
 }
 
+interface BrieflyHeldPort {
+  port: number;
+  release: () => Promise<void>;
+}
+
+/**
+ * Holds a port and gives it back a short moment after the first health probe.
+ * That probe is the last request `open` sends before it binds the recorded
+ * port, so the first bind is refused while the address is already free inside
+ * the retry window. The 401 is a definitive rejection, so the registered entry
+ * is pruned instead of being reported as a live host.
+ */
+async function brieflyHeldPort(
+  releaseDelayMs: number
+): Promise<BrieflyHeldPort> {
+  const sockets = new Set<Socket>();
+  let closing: Promise<void> | null = null;
+  let releaseTimer: NodeJS.Timeout | undefined;
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(401, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: 'unauthorized' }));
+    if (releaseTimer === undefined) {
+      releaseTimer = setTimeout(() => {
+        void release();
+      }, releaseDelayMs);
+    }
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('The held port did not expose a TCP port.');
+  }
+
+  function release(): Promise<void> {
+    if (closing !== null) {
+      return closing;
+    }
+    if (releaseTimer !== undefined) {
+      clearTimeout(releaseTimer);
+      releaseTimer = undefined;
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    closing = new Promise<void>((resolve) => server.close(() => resolve()));
+    return closing;
+  }
+
+  return { port: address.port, release };
+}
+
 function spawnKeepalive(): Promise<ChildProcess> {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore'
@@ -1162,7 +1221,7 @@ async function brokenShellHost(): Promise<BrokenShellHost> {
   return { pid, port, kill: () => child.kill('SIGKILL') };
 }
 
-type ScriptedProbe = 'stale-build' | 'unknown' | 'healthy';
+type ScriptedProbe = 'stale-build' | 'unknown' | 'unhealthy' | 'healthy';
 
 interface ScriptedHost {
   pid: number;
@@ -1174,7 +1233,8 @@ interface ScriptedHost {
  * A live host whose editor-shell verdict is scripted per health probe. The nth
  * `/api/health` request uses `probes[n - 1]`; later probes repeat the last
  * entry. `stale-build` answers health but fails the shell, `unknown` answers
- * health with a 5xx like a busy host, and `healthy` serves the editor root.
+ * health with a 5xx like a busy host, `unhealthy` answers health with a 401
+ * like a revoked token, and `healthy` serves the editor root.
  * The process exits on SIGTERM, so a test can prove `open` never signalled it
  * by checking that the pid is still alive.
  */
@@ -1202,6 +1262,11 @@ async function scriptedHost(probes: ScriptedProbe[]): Promise<ScriptedHost> {
         if (verdict === 'unknown') {
           response.writeHead(500, { 'content-type': 'text/plain' });
           response.end('busy');
+          return;
+        }
+        if (verdict === 'unhealthy') {
+          response.writeHead(401, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
         response.writeHead(200, { 'content-type': 'application/json' });
@@ -1940,6 +2005,52 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('retries a briefly held recorded port instead of falling back', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    // The recorded address is the deck's bookmark. The helper answers the
+    // health probe that precedes the bind and frees the port 300 ms later, so
+    // the first bind is refused and a retry lands inside its own window.
+    const held = await brieflyHeldPort(300);
+    const persistedAt = '2026-10-01T00:00:00.000Z';
+    let open: CliProcess | undefined;
+
+    try {
+      await writeStaleSession(workspace, deckPath, {
+        pid: process.pid,
+        port: held.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: held.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const match = await open.waitForOutput(/HTMLPPT_URL=(\S+)\r?\n/);
+      const url = new URL(match[1]);
+
+      expect(url.port).toBe(String(held.port));
+      expect(open.stderr).not.toContain('is in use');
+      expect(open.stderr).not.toContain('on a new port');
+      expect(
+        JSON.parse(await readFile(credentialPath, 'utf8'))
+      ).toMatchObject({
+        token: 'stale-token',
+        port: held.port,
+        createdAt: persistedAt
+      });
+    } finally {
+      open?.kill();
+      await held.release();
+    }
+  });
+
   it('gives an explicit --port precedence over the stored port', async () => {
     const workspace = await createCliWorkspace();
     await copyFixture('basic.deck.html', workspace.cwd);
@@ -2287,6 +2398,66 @@ describe('htmlppt cli as a real process', () => {
       if (keepalive.exitCode === null && keepalive.signalCode === null) {
         keepalive.kill('SIGKILL');
       }
+    }
+  });
+
+  it('does not advise opening a deck whose unverified host is registered under an alias', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const aliasDir = join(workspace.cwd, 'alias-decks');
+    await symlink(
+      workspace.cwd,
+      aliasDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDir, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    // A busy host answers health with a 5xx, so the caller-spelling lookup
+    // finds nothing and the alias scan cannot prove an editor either.
+    const host = await scriptedHost(['unknown']);
+
+    try {
+      // The live host is registered under a different spelling, exactly where
+      // an earlier `open` could have recorded it.
+      const raw = await writeStaleSession(workspace, aliasDeck, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      const credentialBefore = await readFile(credentialPath, 'utf8');
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      // `open` refuses while this host is registered but unverified, so advice
+      // to start one is wrong. A retry is the way out: `stop --all` cannot
+      // verify an `unknown` entry either and leaves it running.
+      expect(stop.code).toBe(1);
+      expect(stop.stderr).toContain(
+        'A registered editor for this deck could not be verified'
+      );
+      expect(stop.stderr).toContain(
+        'Retry "htmlppt stop <file>" when it responds.'
+      );
+      expect(stop.stderr).not.toContain('htmlppt stop --all');
+      expect(stop.stderr).not.toContain('basic.deck.html');
+      expect(stop.stderr).not.toContain('Start one with');
+      expect(stop.stderr).not.toContain('Stopped editor');
+      expect(await readFile(sessionFilePath(workspace, aliasDeck), 'utf8')).toBe(
+        raw
+      );
+      expect(await readFile(credentialPath, 'utf8')).toBe(credentialBefore);
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+    } finally {
+      host.kill();
     }
   });
 
@@ -2729,6 +2900,48 @@ describe('htmlppt cli as a real process', () => {
         raw
       );
       expect(await sessionCount(workspace)).toBe(1);
+    } finally {
+      open?.kill();
+      host.kill();
+    }
+  });
+
+  it('refuses to replace a host whose retry is rejected as unauthorized', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    // The retry answers health with a 401, so the process no longer proves it
+    // owns this deck and must not be signalled.
+    const host = await scriptedHost(['stale-build', 'stale-build', 'unhealthy']);
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid: host.pid,
+        port: host.port
+      });
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      // Positive control: the entry names a live pid, so the refusal is what
+      // kept it, not a dead-process prune.
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await sessionCount(workspace)).toBe(1);
+      // The refusal used the 401 leg: one probe from findLiveSession and one
+      // from the direct lookup precede the retry.
+      const probes = await fetch(`http://127.0.0.1:${host.port}/probes`);
+      expect(await probes.json()).toEqual({ count: 3 });
     } finally {
       open?.kill();
       host.kill();

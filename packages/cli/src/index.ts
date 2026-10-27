@@ -56,6 +56,11 @@ const DEFAULT_STREAMS = {
 
 const STOP_TIMEOUT_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 100;
+// The recorded port is the deck's bookmark address, but a host that was just
+// replaced can keep it for a moment after it exits (Windows TIME_WAIT), so a
+// replacement retries the same address before giving up on it.
+const STICKY_PORT_ATTEMPTS = 5;
+const STICKY_PORT_RETRY_DELAY_MS = 100;
 
 /**
  * Resolves the editor build for both the workspace and the installed package.
@@ -150,7 +155,9 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
  * and orphan the process that may still own the socket, so a recorded live pid
  * blocks the new host until the user retries or stops it. A broken editor
  * shell (`stale-build`) is handled by `open` itself: it retries the probe once
- * and replaces the host when the verdict persists.
+ * and replaces the host when the verdict persists. `stop` uses the same scan
+ * to avoid telling the user to open a deck whose host is registered under
+ * another spelling and merely busy.
  *
  * Registry keys keep the spelling their writer used, so the caller-spelling key
  * can be absent after an open moved the entry to the host's canonical path.
@@ -803,25 +810,43 @@ export async function runCli(
           port,
           onDeckOpened: moveSession
         });
+      // Only an EADDRINUSE is retried: a replaced host can release the socket
+      // a moment after it exits, while any other failure belongs to the caller.
+      const startOnStickyPort = async (): Promise<
+        Awaited<ReturnType<typeof startHost>> | null
+      > => {
+        for (let attempt = 0; attempt < STICKY_PORT_ATTEMPTS; attempt += 1) {
+          if (attempt > 0) {
+            await delay(STICKY_PORT_RETRY_DELAY_MS);
+          }
+          try {
+            return await start(stickyPort);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
+              throw error;
+            }
+          }
+        }
+        return null;
+      };
       let attemptedPort = stickyPort;
       let host: Awaited<ReturnType<typeof startHost>>;
       try {
-        try {
-          host = await start(stickyPort);
-        } catch (error) {
-          if (
-            requestedPort === undefined &&
-            credential !== null &&
-            (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
-          ) {
+        if (requestedPort === undefined && credential !== null) {
+          // The recorded port is the deck's bookmark, so retry it before
+          // falling back to an address that invalidates the bookmark.
+          const bound = await startOnStickyPort();
+          if (bound === null) {
             io.stderr(
               `Port ${stickyPort} is in use; starting ${file} on a new port. Existing bookmarks for this deck will stop working.`
             );
             attemptedPort = 0;
             host = await start(0);
           } else {
-            throw error;
+            host = bound;
           }
+        } else {
+          host = await start(stickyPort);
         }
       } catch (error) {
         const message = formatHostStartError(
@@ -1104,7 +1129,20 @@ export async function runCli(
       }
       if (registered?.health === 'unknown') {
         io.stderr(
-          `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop ${file}" when it responds.`
+          `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop <file>" when it responds.`
+        );
+        exitCode = 1;
+        return;
+      }
+      // The caller's spelling has no entry, but a same-deck host may be
+      // registered under another spelling and still be unverified. `open`
+      // refuses in that state, so never advise starting a session; a retry is
+      // the way out. `stop --all` cannot verify an `unknown` entry either and
+      // leaves it running. The placeholder keeps a path with spaces from
+      // looking like a runnable command.
+      if (await hasUnresponsiveRegisteredHost(filePath)) {
+        io.stderr(
+          'A registered editor for this deck could not be verified; leaving it running. Retry "htmlppt stop <file>" when it responds.'
         );
         exitCode = 1;
         return;

@@ -130,6 +130,7 @@ CLI failures print a message to stderr and exit 1.
 | `Editor build not found. Run "npm run build" first.` | `packages/editor/dist` is missing. Build the workspace. |
 | `An editor for this deck appears to be running but is not responding. Retry in a moment or run "htmlppt stop <file>" to stop it.` | A recorded host has a live PID but its health check timed out or returned a 5xx (`unknown`), so `open` cannot prove it owns the deck and refuses to start a second host. Retry, or stop the recorded one. An alive host whose health passes but whose editor shell is broken is `stale-build` instead: `open` replaces it automatically, and this message is not printed. |
 | `No live editor session for <file>. Start one with "htmlppt open <file>".` | `stop` found nothing to stop for that deck. |
+| `A registered editor for this deck could not be verified; leaving it running. Retry "htmlppt stop <file>" when it responds.` | The caller's spelling has no registry entry, but the same deck is registered under another spelling (alias or short path) and its health check timed out or returned a 5xx (`unknown`). Nothing was stopped; retry when it responds. `stop --all` also leaves unverified entries running. |
 | `Specify a deck file to stop or pass --all.` | `stop` needs a target. |
 | `Pass either a deck file or --all, not both.` | Use one form. |
 | `No live editor sessions.` | The registry is empty (no session files at all). |

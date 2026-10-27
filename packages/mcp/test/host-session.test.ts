@@ -12,6 +12,7 @@ import { makeTempDir } from '@htmlppt/test-utils';
 import { describe, expect, it } from 'vitest';
 import {
   findLiveSession,
+  findStoppableSession,
   lookupRegisteredSession,
   probeSessionHealth
 } from '../src/host-session.js';
@@ -444,6 +445,155 @@ describe('findLiveSession', () => {
 
       expect(await findLiveSession(fixture.deckPath)).toBeNull();
       expect(await readSession(aliasSessionFile)).toEqual(entry);
+    } finally {
+      await host.close();
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe('findStoppableSession', () => {
+  it('prefers a healthy entry over a stale-build one for the same deck', async () => {
+    const fixture = await sessionFixture();
+    const aliasPath = await aliasFor(fixture);
+    // The alias spelling sorts first, so the scan meets the stale-build
+    // fallback before the healthy entry and has to keep looking.
+    const stale = await fakeHost((path) =>
+      path.startsWith('/api/health')
+        ? { status: 200, type: 'application/json', body: healthPayload(aliasPath) }
+        : { status: 500, type: 'text/plain', body: 'broken editor build' }
+    );
+    const healthy = await fakeHost((path) =>
+      path.startsWith('/api/health')
+        ? {
+            status: 200,
+            type: 'application/json',
+            body: healthPayload(fixture.deckPath)
+          }
+        : { status: 200, type: 'text/html', body: '<div id="root"></div>' }
+    );
+    const staleEntry = entryFor(stale.entry.port, aliasPath);
+    const healthyEntry = entryFor(healthy.entry.port, fixture.deckPath);
+    const aliasSessionFile = join(
+      sessionsDirectory(),
+      `${sessionKey(aliasPath)}.json`
+    );
+    try {
+      await writeSession(staleEntry);
+      await writeSession(healthyEntry);
+      const snapshot = await readFile(fixture.sessionFile, 'utf8');
+
+      const result = await findStoppableSession(fixture.deckPath);
+
+      expect(result).toEqual({
+        entry: healthyEntry,
+        snapshot,
+        health: 'healthy'
+      });
+      // The fallback is not removed: `stop` may still need it later.
+      expect(await readSession(aliasSessionFile)).toEqual(staleEntry);
+    } finally {
+      await stale.close();
+      await healthy.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it('returns a stale-build entry with the exact snapshot bytes', async () => {
+    const fixture = await sessionFixture();
+    const host = await fakeHost((path) =>
+      path.startsWith('/api/health')
+        ? {
+            status: 200,
+            type: 'application/json',
+            body: healthPayload(fixture.deckPath)
+          }
+        : { status: 500, type: 'text/plain', body: 'broken editor build' }
+    );
+    const entry = entryFor(host.entry.port, fixture.deckPath);
+    // A hand-formatted but equivalent entry: `stop` must fence on these bytes,
+    // not on a re-serialized copy, so the returned snapshot must be raw.
+    const raw = JSON.stringify(entry);
+    try {
+      await mkdir(sessionsDirectory(), { recursive: true });
+      await writeFile(fixture.sessionFile, raw, 'utf8');
+
+      const result = await findStoppableSession(fixture.deckPath);
+
+      expect(result).toEqual({ entry, snapshot: raw, health: 'stale-build' });
+      expect(await readFile(fixture.sessionFile, 'utf8')).toBe(raw);
+    } finally {
+      await host.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it('keeps scanning past an unknown entry for a healthy entry that sorts later', async () => {
+    const fixture = await sessionFixture();
+    const aliasPath = await aliasFor(fixture);
+    // The alias spelling sorts first, so the scan meets the unknown entry
+    // before the healthy one and must not stop there.
+    expect(aliasPath < fixture.deckPath).toBe(true);
+    const unknownHost = await silentShellHost(aliasPath);
+    const healthyHost = await fakeHost((path) =>
+      path.startsWith('/api/health')
+        ? {
+            status: 200,
+            type: 'application/json',
+            body: healthPayload(fixture.deckPath)
+          }
+        : { status: 200, type: 'text/html', body: '<div id="root"></div>' }
+    );
+    const unknownEntry = entryFor(unknownHost.entry.port, aliasPath);
+    const healthyEntry = entryFor(healthyHost.entry.port, fixture.deckPath);
+    const aliasSessionFile = join(
+      sessionsDirectory(),
+      `${sessionKey(aliasPath)}.json`
+    );
+    try {
+      await writeSession(unknownEntry);
+      await writeSession(healthyEntry);
+      const snapshot = await readFile(fixture.sessionFile, 'utf8');
+
+      const result = await findStoppableSession(fixture.deckPath);
+
+      expect(result).toEqual({
+        entry: healthyEntry,
+        snapshot,
+        health: 'healthy'
+      });
+      // A busy host may recover, so its entry survives the scan for a retry.
+      expect(await readSession(aliasSessionFile)).toEqual(unknownEntry);
+    } finally {
+      await unknownHost.close();
+      await healthyHost.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it('finds a stale-build entry through a directory alias by canonical path', async () => {
+    const fixture = await sessionFixture();
+    const aliasPath = await aliasFor(fixture);
+    const host = await fakeHost((path) =>
+      path.startsWith('/api/health')
+        ? {
+            status: 200,
+            type: 'application/json',
+            body: healthPayload(fixture.deckPath)
+          }
+        : { status: 500, type: 'text/plain', body: 'broken editor build' }
+    );
+    const entry = entryFor(host.entry.port, fixture.deckPath);
+    try {
+      await writeSession(entry);
+      const snapshot = await readFile(fixture.sessionFile, 'utf8');
+
+      // The caller's spelling has no registry key of its own, so only the
+      // canonical-path comparison can reach the entry.
+      const result = await findStoppableSession(aliasPath);
+
+      expect(result).toEqual({ entry, snapshot, health: 'stale-build' });
+      expect(await readSession(fixture.sessionFile)).toEqual(entry);
     } finally {
       await host.close();
       await fixture.cleanup();

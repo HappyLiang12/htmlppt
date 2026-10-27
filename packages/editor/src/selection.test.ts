@@ -110,6 +110,41 @@ describe('isEnterableContainer', () => {
       isEnterableContainer(parseElement('<div data-ppt-group="1"><p>a</p></div>'))
     ).toBe(false);
   });
+
+  it('rejects a container whose ancestor is a group', () => {
+    const slide = parseElement(
+      '<section data-slide-id="s1"><div data-ppt-group="1"><div class="inside"><p>a</p></div></div></section>'
+    );
+    expect(isEnterableContainer(slide.querySelector('.inside') as Element)).toBe(
+      false
+    );
+  });
+
+  it('rejects a container whose ancestor is locked or hidden', () => {
+    const locked = parseElement(
+      '<section data-slide-id="s1"><div data-ppt-locked="true"><div class="inside"><p>a</p></div></div></section>'
+    );
+    const hidden = parseElement(
+      '<section data-slide-id="s1"><div style="display:none"><div class="inside"><p>a</p></div></div></section>'
+    );
+    expect(isEnterableContainer(locked.querySelector('.inside') as Element)).toBe(
+      false
+    );
+    expect(isEnterableContainer(hidden.querySelector('.inside') as Element)).toBe(
+      false
+    );
+  });
+
+  it('stops the guard walk at the slide boundary', () => {
+    // A wrapper above the slide is not part of the authored subtree this
+    // container belongs to, so it cannot make the slide's objects inert.
+    const deck = parseElement(
+      '<main data-ppt-locked="true"><section data-slide-id="s1"><div class="inside"><p>a</p></div></section></main>'
+    );
+    expect(isEnterableContainer(deck.querySelector('.inside') as Element)).toBe(
+      true
+    );
+  });
 });
 
 describe('topLevelObjects', () => {
