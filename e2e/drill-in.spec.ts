@@ -321,6 +321,30 @@ test('jumps to an ancestor from the breadcrumb', { tag: '@feature:drill-in-selec
   }
 });
 
+test('announces the entered and left container in the polite live region', { tag: '@feature:drill-in-selection' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    const context = page.getByTestId('edit-context');
+    const status = page.getByTestId('a11y-status');
+    // The same polite region that announces the slide owns the level change;
+    // the suite runs under the zh-TW pin, so the wording is asserted verbatim.
+    await expect(status).toHaveAttribute('aria-live', 'polite');
+    await expect(status).toHaveText('第 1 頁，共 2 頁');
+
+    await page.getByRole('button', { name: ENTER_PAD }).click();
+    await expect(context).toContainText('.pad');
+    await expect(status).toHaveText('正在編輯 .pad');
+
+    await page.keyboard.press('Escape');
+    await expect(context).toBeHidden();
+    await expect(status).toHaveText('正在編輯投影片');
+  } finally {
+    await close(editor);
+  }
+});
+
 test('names a locked wrapper instead of silently ignoring the double-click', { tag: '@feature:edit-context-feedback' }, async ({
   page
 }) => {
@@ -980,6 +1004,67 @@ test('a text edit dismisses the pin notice instead of undoing the text', { tag: 
   }
 });
 
+test('keeps the pin notice clear of the selection handles at a narrow viewport', { tag: '@feature:nested-geometry' }, async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const editor = await openWrappedDeck(page);
+  try {
+    const notice = page.getByTestId('pin-notice');
+    const expectClearOfBottomHandles = async (label: string) => {
+      const noticeBox = await boxOf(notice, 'Pin notice');
+      for (const handle of ['sw', 's', 'se']) {
+        const handleBox = await boxOf(
+          page.getByTestId(`handle-${handle}`),
+          `${label} handle ${handle}`
+        );
+        const overlap =
+          noticeBox.x < handleBox.x + handleBox.width &&
+          handleBox.x < noticeBox.x + noticeBox.width &&
+          noticeBox.y < handleBox.y + handleBox.height &&
+          handleBox.y < noticeBox.y + noticeBox.height;
+        expect(
+          overlap,
+          `pin notice ${JSON.stringify(noticeBox)} covers ${label} ${handle} ${JSON.stringify(handleBox)}`
+        ).toBe(false);
+      }
+    };
+
+    await enterPad(page);
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    const save = page.waitForResponse(isDeckSaveResponse);
+    const box = await boxOf(foot, 'Footer');
+    await dragFrom(
+      page,
+      { x: box.x + 12, y: box.y + box.height / 2 },
+      { x: 60, y: 40 }
+    );
+    await expect(notice).toBeVisible();
+    expect((await save).ok()).toBeTruthy();
+    // The pinned child is the selection while its notice explains the change.
+    await expectClearOfBottomHandles('pinned footer');
+
+    // Leave the context and select the full-slide halo: its bottom handles sit
+    // on the stage's bottom edge, the lowest any bottom handle can reach, so a
+    // clear result here holds for the pinned child too.
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('edit-context')).toBeHidden();
+    const haloRow = page.locator(
+      '[data-testid="object-row"][data-object-id="e1"]'
+    );
+    await haloRow.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      '0'
+    );
+    await expect(notice).toBeVisible();
+    await expectClearOfBottomHandles('full-slide halo');
+  } finally {
+    await close(editor);
+  }
+});
+
 test('drags a grid child without changing the grid parent', { tag: '@feature:nested-geometry' }, async ({
   page
 }) => {
@@ -1193,6 +1278,54 @@ test('keeps the appearance panel disabled for a selected group wrapper', { tag: 
     await freeRow.click();
     await expect(freeRow).toHaveAttribute('aria-current', 'true');
     await expect(page.getByTestId('image-alt')).toBeEnabled();
+  } finally {
+    await close(editor);
+  }
+});
+
+test('keeps the appearance panel disabled for a group inside an entered context', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    const context = page.getByTestId('edit-context');
+    const rows = page.getByTestId('object-row');
+    await page.getByRole('button', { name: ENTER_PAD }).click();
+    await expect(context).toContainText('.pad');
+    // .cover, .foot, and the authored group wrapper are the context's rows.
+    await expect(rows).toHaveCount(3);
+    const groupRow = page.locator(
+      '[data-testid="object-row"][data-object-id="e9"]'
+    );
+    await expect(groupRow).toContainText('Grouped note');
+    await expect(groupRow).toContainText('群組');
+
+    // Clicking the group's child selects the atomic wrapper: inside an entered
+    // context a click resolves to the context's direct child, so the group is
+    // the selected object and it owns its subtree.
+    await editor.frame.locator('[data-slide-id="s2"] .pad .group p').click();
+    const outline = page.getByTestId('selection-outline');
+    await expect(outline).toHaveAttribute('data-selected-path', '2.2');
+    await expect(outline).toHaveAttribute('data-selected-id', 'e9');
+    await expect(groupRow).toHaveAttribute('aria-current', 'true');
+
+    // The panel renders for the selection, but every field stays inert because
+    // a group wrapper treats its children as one object.
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('style-fill')).toBeDisabled();
+    await expect(page.getByTestId('style-stroke')).toBeDisabled();
+    await expect(page.getByTestId('style-opacity')).toBeDisabled();
+
+    // A group wrapper is not an image, so there is no upload control that could
+    // bypass the disabled panel, and the inert selection raises no error toast.
+    await expect(page.getByTestId('image-replace-input')).toHaveCount(0);
+    await expect(page.getByTestId('image-replace-upload')).toHaveCount(0);
+    await expect(page.getByTestId('editor-error')).toHaveCount(0);
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
   } finally {
     await close(editor);
   }

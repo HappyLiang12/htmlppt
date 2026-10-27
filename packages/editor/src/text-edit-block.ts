@@ -63,11 +63,34 @@ const TEXT_TAGS = new Set([
 ]);
 
 /**
+ * The nearest ancestor-or-self carrying a guard, with the same precedence as
+ * the top-level wrapper: locked, hidden, then group. A nested authored lock,
+ * hidden wrapper, or group inside an unlocked top-level object owns its
+ * subtree the same way, so the text contract must not speak for it. Resolving
+ * from the target upward keeps the deepest guard's own reason, which is the
+ * one the gesture actually hit.
+ */
+function nearestGuardReason(target: Element): TopLevelBlock | null {
+  for (
+    let current: Element | null = target;
+    current;
+    current = current.parentElement
+  ) {
+    if (isLockedElement(current)) return 'locked';
+    if (isHiddenElement(current)) return 'hidden';
+    if (isGroupElement(current)) return 'group';
+  }
+  return null;
+}
+
+/**
  * Names why a double-click cannot start an in-place text edit, or returns
- * null when it can. Mirrors the editor's text path: the target resolves to
- * its nearest text tag; a layout div with element children other than line
- * breaks is a container, an empty semantic element has nothing to edit, and
- * anything else is outside the text tag contract.
+ * null when it can. A guard — locked, hidden, or group — on the target or any
+ * ancestor wins over the text contract, so a nested authored guard reports
+ * its own reason instead of has-children or not-text. Without a guard, the
+ * target resolves to its nearest text tag: a layout div with element children
+ * other than line breaks is a container, an empty semantic element has nothing
+ * to edit, and anything else is outside the text tag contract.
  *
  * A container explains itself only when the user clicked the container
  * itself. A descendant such as a button, image, link, or SVG inside it is
@@ -78,7 +101,9 @@ const TEXT_TAGS = new Set([
  * click targets come from the preview iframe's realm, where the parent
  * window's HTMLElement constructor does not describe them.
  */
-export function textEditBlockFor(target: Element): TextEditBlock | null {
+export function textEditBlockFor(target: Element): EditHintReason | null {
+  const guard = nearestGuardReason(target);
+  if (guard) return guard;
   const candidate = target.closest(TEXT_EDITABLE_SELECTOR);
   if (!candidate) return 'not-text';
   const tag = candidate.tagName.toUpperCase();
