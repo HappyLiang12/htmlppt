@@ -150,7 +150,9 @@ async function sessionFileState(filePath: string): Promise<SessionFileState> {
  * and orphan the process that may still own the socket, so a recorded live pid
  * blocks the new host until the user retries or stops it. A broken editor
  * shell (`stale-build`) is handled by `open` itself: it retries the probe once
- * and replaces the host when the verdict persists.
+ * and replaces the host when the verdict persists. `stop` uses the same scan
+ * to avoid telling the user to open a deck whose host is registered under
+ * another spelling and merely busy.
  *
  * Registry keys keep the spelling their writer used, so the caller-spelling key
  * can be absent after an open moved the entry to the host's canonical path.
@@ -1105,6 +1107,17 @@ export async function runCli(
       if (registered?.health === 'unknown') {
         io.stderr(
           `Could not verify the editor session for ${file}; leaving it running. Retry "htmlppt stop ${file}" when it responds.`
+        );
+        exitCode = 1;
+        return;
+      }
+      // The caller's spelling has no entry, but a same-deck host may be
+      // registered under another spelling and still be unverified. `open`
+      // refuses in that state, so never advise starting a session; a retry or
+      // `stop --all` is the actionable way out.
+      if (await hasUnresponsiveRegisteredHost(filePath)) {
+        io.stderr(
+          `A registered editor for this deck could not be verified; leaving it running. Retry "htmlppt stop ${file}" when it responds, or run "htmlppt stop --all".`
         );
         exitCode = 1;
         return;

@@ -1162,7 +1162,7 @@ async function brokenShellHost(): Promise<BrokenShellHost> {
   return { pid, port, kill: () => child.kill('SIGKILL') };
 }
 
-type ScriptedProbe = 'stale-build' | 'unknown' | 'healthy';
+type ScriptedProbe = 'stale-build' | 'unknown' | 'unhealthy' | 'healthy';
 
 interface ScriptedHost {
   pid: number;
@@ -1174,7 +1174,8 @@ interface ScriptedHost {
  * A live host whose editor-shell verdict is scripted per health probe. The nth
  * `/api/health` request uses `probes[n - 1]`; later probes repeat the last
  * entry. `stale-build` answers health but fails the shell, `unknown` answers
- * health with a 5xx like a busy host, and `healthy` serves the editor root.
+ * health with a 5xx like a busy host, `unhealthy` answers health with a 401
+ * like a revoked token, and `healthy` serves the editor root.
  * The process exits on SIGTERM, so a test can prove `open` never signalled it
  * by checking that the pid is still alive.
  */
@@ -1202,6 +1203,11 @@ async function scriptedHost(probes: ScriptedProbe[]): Promise<ScriptedHost> {
         if (verdict === 'unknown') {
           response.writeHead(500, { 'content-type': 'text/plain' });
           response.end('busy');
+          return;
+        }
+        if (verdict === 'unhealthy') {
+          response.writeHead(401, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: 'unauthorized' }));
           return;
         }
         response.writeHead(200, { 'content-type': 'application/json' });
@@ -2290,6 +2296,61 @@ describe('htmlppt cli as a real process', () => {
     }
   });
 
+  it('does not advise opening a deck whose unverified host is registered under an alias', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    const aliasDir = join(workspace.cwd, 'alias-decks');
+    await symlink(
+      workspace.cwd,
+      aliasDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const aliasDeck = join(aliasDir, 'basic.deck.html');
+    const persistedAt = '2026-10-25T00:00:00.000Z';
+    // A busy host answers health with a 5xx, so the caller-spelling lookup
+    // finds nothing and the alias scan cannot prove an editor either.
+    const host = await scriptedHost(['unknown']);
+
+    try {
+      // The live host is registered under a different spelling, exactly where
+      // an earlier `open` could have recorded it.
+      const raw = await writeStaleSession(workspace, aliasDeck, {
+        pid: host.pid,
+        port: host.port
+      });
+      const credentialPath = await writeStoredCredential(workspace, deckPath, {
+        token: 'stale-token',
+        port: host.port,
+        createdAt: persistedAt,
+        updatedAt: persistedAt
+      });
+      const credentialBefore = await readFile(credentialPath, 'utf8');
+
+      const stop = await runCliProcess(['stop', 'basic.deck.html'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+
+      // `open` refuses while this host is registered but unverified, so advice
+      // to start one is wrong; a retry or `stop --all` is the way out.
+      expect(stop.code).toBe(1);
+      expect(stop.stderr).toContain(
+        'A registered editor for this deck could not be verified'
+      );
+      expect(stop.stderr).toContain('htmlppt stop --all');
+      expect(stop.stderr).not.toContain('Start one with');
+      expect(stop.stderr).not.toContain('Stopped editor');
+      expect(await readFile(sessionFilePath(workspace, aliasDeck), 'utf8')).toBe(
+        raw
+      );
+      expect(await readFile(credentialPath, 'utf8')).toBe(credentialBefore);
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+    } finally {
+      host.kill();
+    }
+  });
+
   it('stops every live editor with --all', async () => {
     const workspace = await createCliWorkspace();
     const directories = ['one', 'two'];
@@ -2729,6 +2790,48 @@ describe('htmlppt cli as a real process', () => {
         raw
       );
       expect(await sessionCount(workspace)).toBe(1);
+    } finally {
+      open?.kill();
+      host.kill();
+    }
+  });
+
+  it('refuses to replace a host whose retry is rejected as unauthorized', async () => {
+    const workspace = await createCliWorkspace();
+    await copyFixture('basic.deck.html', workspace.cwd);
+    const deckPath = join(workspace.cwd, 'basic.deck.html');
+    // The retry answers health with a 401, so the process no longer proves it
+    // owns this deck and must not be signalled.
+    const host = await scriptedHost(['stale-build', 'stale-build', 'unhealthy']);
+    let open: CliProcess | undefined;
+
+    try {
+      const raw = await writeStaleSession(workspace, deckPath, {
+        pid: host.pid,
+        port: host.port
+      });
+      open = new CliProcess(['open', 'basic.deck.html', '--no-browser'], {
+        cwd: workspace.cwd,
+        env: cliEnvironment(workspace)
+      });
+      const code = await open.waitForExit(10_000);
+
+      expect(code).toBe(1);
+      expect(open.stderr).toContain(
+        'appears to be running but is not responding'
+      );
+      expect(open.stdout).not.toContain('HTMLPPT_URL=');
+      // Positive control: the entry names a live pid, so the refusal is what
+      // kept it, not a dead-process prune.
+      expect(() => process.kill(host.pid, 0)).not.toThrow();
+      expect(await readFile(sessionFilePath(workspace, deckPath), 'utf8')).toBe(
+        raw
+      );
+      expect(await sessionCount(workspace)).toBe(1);
+      // The refusal used the 401 leg: one probe from findLiveSession and one
+      // from the direct lookup precede the retry.
+      const probes = await fetch(`http://127.0.0.1:${host.port}/probes`);
+      expect(await probes.json()).toEqual({ count: 3 });
     } finally {
       open?.kill();
       host.kill();

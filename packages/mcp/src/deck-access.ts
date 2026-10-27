@@ -118,13 +118,13 @@ function spawnedEditorFailure(
   if (status.exitCode !== null && status.exitCode !== 0) {
     return new ToolError(
       'editor-failed',
-      `The editor host process exited with code ${status.exitCode} before publishing a session for ${filePath}. Run "htmlppt open ${filePath} --no-browser" in a terminal to see the error.`
+      `The editor host process exited with code ${status.exitCode} before publishing a session for ${filePath}. Run "htmlppt open <path> --no-browser" in a terminal to see the error.`
     );
   }
   if (status.signalCode !== null) {
     return new ToolError(
       'editor-failed',
-      `The editor host process was terminated by ${status.signalCode} before publishing a session for ${filePath}. Run "htmlppt open ${filePath} --no-browser" in a terminal to see the error.`
+      `The editor host process was terminated by ${status.signalCode} before publishing a session for ${filePath}. Run "htmlppt open <path> --no-browser" in a terminal to see the error.`
     );
   }
   return null;
