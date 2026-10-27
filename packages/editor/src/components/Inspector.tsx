@@ -328,6 +328,18 @@ function numeric(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// An HTML border needs both a width and a colour. The two fields commit on
+// their own, so the half the user did not touch falls back to a visible
+// default; otherwise core's width-or-colour-empty rule clears the border the
+// other field just created. An emptied field stays an intentional clear.
+const DEFAULT_STROKE_COLOR = '#000000';
+const DEFAULT_STROKE_WIDTH = 1;
+
+function visibleStrokeWidth(value: string): number {
+  const width = parseFloat(value);
+  return Number.isFinite(width) && width > 0 ? width : DEFAULT_STROKE_WIDTH;
+}
+
 export function Inspector({
   pendingActions,
   slide,
@@ -909,9 +921,21 @@ export function Inspector({
                     value={style.appearance.stroke}
                     disabled={styleDisabled}
                     placeholder="#000000"
-                    onCommit={(value) =>
-                      onSetAppearance({ stroke: value.trim() || null })
-                    }
+                    onCommit={(value) => {
+                      const stroke = value.trim() || null;
+                      // The SVG panel reads the width from the first paint
+                      // target only, while core maps one width onto every
+                      // target; re-sending it on a colour edit would collapse
+                      // per-target widths. The SVG branch keeps the width on a
+                      // colour-only patch, so only HTML needs the merged half.
+                      if (style.svg) return onSetAppearance({ stroke });
+                      return onSetAppearance({
+                        stroke,
+                        strokeWidth: visibleStrokeWidth(
+                          style.appearance.strokeWidth
+                        )
+                      });
+                    }}
                   />
                   <StyleField
                     pendingActions={pendingActions}
@@ -924,7 +948,19 @@ export function Inspector({
                     onCommit={(value) => {
                       const parsed = numeric(value);
                       if (value.trim() && parsed === null) return false;
-                      return onSetAppearance({ strokeWidth: parsed ?? 0 });
+                      const width = parsed ?? 0;
+                      // An existing colour is already on the element and core
+                      // keeps it on a width-only patch, so re-sending it would
+                      // only re-validate a value the panel merely echoes (an
+                      // SVG gradient reference is not accepted as a colour).
+                      // A missing colour is the half that needs the default.
+                      if (style.appearance.stroke.trim()) {
+                        return onSetAppearance({ strokeWidth: width });
+                      }
+                      return onSetAppearance({
+                        strokeWidth: width,
+                        stroke: width > 0 ? DEFAULT_STROKE_COLOR : null
+                      });
                     }}
                   />
                   {!style.svg && (

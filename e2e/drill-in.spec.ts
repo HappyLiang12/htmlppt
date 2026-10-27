@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,12 +41,15 @@ interface Harness {
   frame: FrameLocator;
 }
 
-async function openWrappedDeck(page: Page): Promise<Harness> {
+async function openDeckHtml(
+  page: Page,
+  html: string,
+  file: string
+): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), 'htmlppt-drill-in-e2e-'));
-  const file = 'wrapped.deck.html';
   let host: Harness['host'] | null = null;
   try {
-    await copyFile(fixturePath, join(directory, file));
+    await writeFile(join(directory, file), html);
     host = await startCliHost(cliPath, directory, file);
     await page.goto(host.url);
     const frame = page.frameLocator(FRAME_SELECTOR);
@@ -58,6 +61,51 @@ async function openWrappedDeck(page: Page): Promise<Harness> {
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function openWrappedDeck(page: Page): Promise<Harness> {
+  return openDeckHtml(
+    page,
+    await readFile(fixturePath, 'utf8'),
+    'wrapped.deck.html'
+  );
+}
+
+// One deck carries every wrapper that owns its subtree: a locked wrapper with
+// an image child, a top-level group, and an unlocked image for a positive
+// control. The shared wrapped fixture has no image under a locked wrapper.
+const TINY_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const GUARDED_DECK_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Guarded wrappers</title>
+  <style>
+    .slide { width: 1600px; height: 900px; position: relative; overflow: hidden; background: #fff; }
+    .locked { position: absolute; left: 80px; top: 80px; width: 600px; }
+    .locked img { display: block; width: 320px; height: 180px; }
+    .group { position: absolute; left: 80px; top: 400px; width: 600px; }
+    .free { position: absolute; left: 800px; top: 80px; width: 320px; height: 180px; }
+  </style>
+</head>
+<body>
+  <main data-ppt-deck>
+    <section class="slide" data-slide-id="g1" data-width="1600" data-height="900">
+      <div class="locked" data-ppt-el="e1" data-ppt-locked="true">
+        <img alt="Locked pixel" src="${TINY_PNG}">
+      </div>
+      <div class="group" data-ppt-el="e2" data-ppt-group>
+        <p>Grouped text</p>
+      </div>
+      <img class="free" data-ppt-el="e3" alt="Free pixel" src="${TINY_PNG}">
+    </section>
+  </main>
+</body>
+</html>`;
+
+async function openGuardedDeck(page: Page): Promise<Harness> {
+  return openDeckHtml(page, GUARDED_DECK_HTML, 'guarded.deck.html');
 }
 
 async function close(harness: Harness): Promise<void> {
@@ -750,6 +798,231 @@ test('drags a grid child without changing the grid parent', { tag: '@feature:nes
     await expect(cover).toHaveCSS('display', 'grid');
     expect(await cover.getAttribute('style')).toBeNull();
     await expect(cover.locator('p')).toContainText('Body copy');
+  } finally {
+    await close(editor);
+  }
+});
+
+// The wrapped fixture has no SVG descendant, so the "no panel for an SVG
+// child" case lives in the appearance-kind unit tests instead of this spec.
+test('styles a nested paragraph through the appearance panel and persists it', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await enterPad(page);
+    const pad = editor.frame.locator('.pad');
+    const foot = editor.frame.locator('.pad .foot');
+    await foot.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      '2.1'
+    );
+
+    // Positive control: a paragraph two levels down gets the shape panel, not
+    // the read-only hint that nested selections showed before DE3.
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('image-alt')).toHaveCount(0);
+    // The footer authors no border, so the border edits below have to create
+    // one from an empty style instead of relying on a starting declaration.
+    expect(await foot.getAttribute('style')).toBeNull();
+
+    const fill = page.getByTestId('style-fill');
+    // The suite runs under the zh-TW pin, so this is the real field label.
+    await expect(fill).toHaveAttribute('aria-label', '填色');
+    await fill.fill('#ffeeaa');
+    await fill.press('Enter');
+
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('background-color: rgb(255, 238, 170)');
+    await expect(foot).toHaveCSS('background-color', 'rgb(255, 238, 170)');
+
+    // Border: the panel exposes width and colour as separate fields, and each
+    // commit must carry both halves of the stroke. Setting the width first has
+    // to default the missing colour, or the width-only patch clears the border.
+    const strokeWidth = page.getByTestId('style-stroke-width');
+    await strokeWidth.fill('3');
+    await strokeWidth.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('border-width: 3px');
+    await expect(foot).toHaveCSS('border-top-width', '3px');
+    await expect(foot).toHaveCSS('border-top-style', 'solid');
+    await expect(foot).toHaveCSS('border-top-color', 'rgb(0, 0, 0)');
+
+    const stroke = page.getByTestId('style-stroke');
+    await stroke.fill('#334455');
+    await stroke.press('Enter');
+    // Both edits landed on the empty style: the inline declaration carries the
+    // full border trio, not just a colour that a width patch would clear.
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain(
+        'border-style: solid; border-width: 3px; border-color: rgb(51, 68, 85)'
+      );
+    await expect(foot).toHaveCSS('border-top-width', '3px');
+    await expect(foot).toHaveCSS('border-top-style', 'solid');
+    await expect(foot).toHaveCSS('border-top-color', 'rgb(51, 68, 85)');
+
+    const radius = page.getByTestId('style-radius');
+    await radius.fill('12');
+    await radius.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('border-radius: 12px');
+    await expect(foot).toHaveCSS('border-top-left-radius', '12px');
+
+    const opacity = page.getByTestId('style-opacity');
+    await opacity.fill('0.8');
+    await opacity.press('Enter');
+    await expect
+      .poll(async () => (await foot.getAttribute('style')) ?? '')
+      .toContain('opacity: 0.8');
+    await expect(foot).toHaveCSS('opacity', '0.8');
+
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    // The edits land on the selected child, not on its container.
+    expect(await pad.getAttribute('style')).toBeNull();
+
+    // The saved deck carries every declaration on the same element, not only a
+    // live iframe change.
+    const saved = await readFile(join(editor.directory, editor.file), 'utf8');
+    expect(saved).toMatch(
+      /<p class="foot" style="background-color: rgb\(255, 238, 170\); border-style: solid; border-width: 3px; border-color: rgb\(51, 68, 85\); border-radius: 12px; opacity: 0\.8;"/
+    );
+
+    await page.reload();
+    const reloadedFrame = page.frameLocator(FRAME_SELECTOR);
+    await expect(reloadedFrame.locator('[data-slide-id]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    const reloadedFoot = reloadedFrame.locator('.pad .foot');
+    await expect(reloadedFoot).toHaveAttribute(
+      'style',
+      /background-color: rgb\(255, 238, 170\); border-style: solid; border-width: 3px; border-color: rgb\(51, 68, 85\); border-radius: 12px; opacity: 0\.8;/
+    );
+    await expect(reloadedFoot).toHaveCSS(
+      'background-color',
+      'rgb(255, 238, 170)'
+    );
+    await expect(reloadedFoot).toHaveCSS('border-top-width', '3px');
+    await expect(reloadedFoot).toHaveCSS('border-top-style', 'solid');
+    await expect(reloadedFoot).toHaveCSS('border-top-color', 'rgb(51, 68, 85)');
+    await expect(reloadedFoot).toHaveCSS('border-top-left-radius', '12px');
+    await expect(reloadedFoot).toHaveCSS('opacity', '0.8');
+  } finally {
+    await close(editor);
+  }
+});
+
+test('keeps the appearance panel disabled for a child inside a locked wrapper', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openWrappedDeck(page);
+  try {
+    await page.getByTestId('thumbnail').nth(1).click();
+    await expect(editor.frame.locator('[data-slide-id="s2"]')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    const outline = page.getByTestId('selection-outline');
+    const lockedChild = editor.frame
+      .locator('[data-slide-id="s2"] .locked p')
+      .first();
+
+    // Alt-click drills through the locked wrapper. The panel renders for the
+    // child, but the wrapper owns its subtree, so every field must be inert
+    // instead of accepting an edit that the handler then rejects.
+    await lockedChild.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '3.0');
+    await expect(outline).toHaveAttribute('data-readonly', 'true');
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('style-fill')).toBeDisabled();
+    await expect(page.getByTestId('style-stroke')).toBeDisabled();
+    await expect(page.getByTestId('style-opacity')).toBeDisabled();
+
+    // Positive control: the same panel is editable for a nested shape whose
+    // top-level wrapper is unlocked, so the fields are not always disabled.
+    const unlockedHeading = editor.frame.locator(
+      '[data-slide-id="s2"] .pad h1'
+    );
+    await unlockedHeading.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '2.0.0');
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('style-fill')).toBeEnabled();
+  } finally {
+    await close(editor);
+  }
+});
+
+test('keeps the appearance panel disabled for a selected group wrapper', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openGuardedDeck(page);
+  try {
+    const groupRow = page.locator(
+      '[data-testid="object-row"][data-object-id="e2"]'
+    );
+    await groupRow.click();
+    await expect(groupRow).toHaveAttribute('aria-current', 'true');
+    // The group is the selection and the panel renders; only the fields are
+    // inert because a group wrapper owns its subtree.
+    await expect(page.getByTestId('object-style')).toBeVisible();
+    await expect(page.getByTestId('style-fill')).toBeDisabled();
+    await expect(page.getByTestId('style-opacity')).toBeDisabled();
+
+    // Positive control: another object in this deck keeps its controls.
+    const freeRow = page.locator(
+      '[data-testid="object-row"][data-object-id="e3"]'
+    );
+    await freeRow.click();
+    await expect(freeRow).toHaveAttribute('aria-current', 'true');
+    await expect(page.getByTestId('image-alt')).toBeEnabled();
+  } finally {
+    await close(editor);
+  }
+});
+
+test('rejects an image upload into a locked wrapper child', { tag: '@feature:nested-appearance' }, async ({
+  page
+}) => {
+  const editor = await openGuardedDeck(page);
+  try {
+    const outline = page.getByTestId('selection-outline');
+    const lockedImage = editor.frame.locator(
+      '[data-slide-id="g1"] .locked img'
+    );
+    const originalSrc = await lockedImage.getAttribute('src');
+    if (!originalSrc) throw new Error('Locked image has no src.');
+
+    await lockedImage.click({ modifiers: ['Alt'] });
+    await expect(outline).toHaveAttribute('data-selected-path', '0.0');
+    await expect(outline).toHaveAttribute('data-readonly', 'true');
+    await expect(page.getByTestId('object-style')).toBeVisible();
+
+    // The upload reads the file asynchronously before it applies, so the
+    // top-level guard must be re-checked at apply time. The hidden file input
+    // stays enabled while the panel is disabled, which is the bypass here.
+    const replacement = {
+      name: 'replacement.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from('replacement-image-bytes')
+    };
+    await page.getByTestId('image-replace-input').setInputFiles(replacement);
+    await expect(page.getByTestId('editor-error')).toContainText(
+      '無法更換圖片'
+    );
+    await expect(lockedImage).toHaveAttribute('src', originalSrc);
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    // Positive control: the same input path rewrites an unlocked image, so the
+    // assertions above cannot pass on a dead upload handler.
+    const freeImage = editor.frame.locator('[data-slide-id="g1"] .free');
+    const freeSrc = await freeImage.getAttribute('src');
+    await freeImage.click();
+    await expect(outline).toHaveAttribute('data-selected-path', '2');
+    await page.getByTestId('image-replace-input').setInputFiles(replacement);
+    await expect.poll(() => freeImage.getAttribute('src')).not.toBe(freeSrc);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
   } finally {
     await close(editor);
   }

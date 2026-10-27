@@ -65,6 +65,7 @@ import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { useI18n, type Translator } from './i18n';
 import { describeSelection, describeSlide } from './announcements';
+import { appearanceKindFor } from './appearance-kind';
 import {
   DeckAuthError,
   DeckOpenError,
@@ -380,6 +381,22 @@ function blockedTopLevelAncestor(
   return isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
     ? top
     : null;
+}
+
+/**
+ * A locked, hidden, or group top-level target owns its subtree, so every edit
+ * that targets a path inside it must be rejected. Path-based callers that
+ * capture their path across an await (image uploads) cannot rely on the
+ * selection guards, so the check also runs at apply time.
+ */
+function topLevelBlocksEdit(
+  slide: Element,
+  path: readonly number[]
+): boolean {
+  const top = elementAtPath(slide, [path[0] ?? -1]);
+  return (
+    !top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)
+  );
 }
 
 function objectActionStateFor(
@@ -1203,6 +1220,7 @@ export function App() {
           master,
           (draft) => {
             const target = findSlide(draft, slideId);
+            if (topLevelBlocksEdit(target.element, path)) return false;
             const element = elementAtPath(target.element, [...path]);
             if (!element) return false;
             mutate(element);
@@ -1230,8 +1248,7 @@ export function App() {
       ) {
         return false;
       }
-      const top = elementAtPath(slideInfo.element, [selection.path[0] ?? -1]);
-      if (!top || isLockedElement(top) || isHiddenElement(top) || isGroupElement(top)) {
+      if (topLevelBlocksEdit(slideInfo.element, selection.path)) {
         return false;
       }
       return applyPathEdit(slideInfo.id, selection.path, mutate);
@@ -3511,27 +3528,20 @@ export function App() {
     ? { ...objectActions, ...nestedActions }
     : objectActions;
   const styleState: InspectorStyleState | null = (() => {
-    if (
-      !activeSlide ||
-      !selection ||
-      selections.length !== 1 ||
-      selection.path.length > 1
-    ) {
+    if (!activeSlide || !selection || selections.length !== 1) {
       return null;
     }
     const element = elementAtPath(activeSlide.element, selection.path);
     if (!element) return null;
-    const tag = element.tagName.toLowerCase();
-    const kind = tag === 'img' ? 'image' : tag === 'svg' || tag === 'div' ? 'shape' : null;
+    const kind = appearanceKindFor(element);
     if (!kind) return null;
+    const tag = element.tagName.toLowerCase();
     return {
       kind,
       svg: tag === 'svg',
       appearance: readShapeAppearance(element),
       text:
-        kind === 'shape' && tag === 'svg'
-          ? element.querySelector('text')?.textContent ?? ''
-          : '',
+        tag === 'svg' ? element.querySelector('text')?.textContent ?? '' : '',
       alt: element.getAttribute('alt') ?? '',
       crop: imageCropOf(element) ?? { top: 0, right: 0, bottom: 0, left: 0 }
     };
@@ -3995,7 +4005,10 @@ export function App() {
             style={styleState}
             chart={chartState}
             styleDisabled={
-              inspectorObjectActions.locked || inspectorObjectActions.hidden
+              blockedByAncestor ||
+              inspectorObjectActions.locked ||
+              inspectorObjectActions.hidden ||
+              inspectorObjectActions.group
             }
             objectActions={inspectorObjectActions}
             onSelectObject={handleSelectObject}
