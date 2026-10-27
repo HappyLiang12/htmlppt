@@ -64,7 +64,11 @@ import { TableToolbar } from './components/TableToolbar';
 import { ChartDialog } from './components/ChartDialog';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { useI18n, type Translator } from './i18n';
-import { describeSelection, describeSlide } from './announcements';
+import {
+  describeContextLevel,
+  describeSelection,
+  describeSlide
+} from './announcements';
 import { appearanceKindFor } from './appearance-kind';
 import {
   DeckAuthError,
@@ -96,6 +100,13 @@ import {
   type StandaloneSession
 } from './standalone';
 import { StandaloneLauncher } from './components/StandaloneLauncher';
+import {
+  EDIT_HINT_KEYS,
+  textEditBlockFor,
+  TEXT_EDITABLE_SELECTOR,
+  topLevelBlockFor,
+  type EditHintReason
+} from './text-edit-block';
 import {
   planConflictResolution,
   type ConflictResolution
@@ -209,8 +220,14 @@ import {
   type DeckControllerState
 } from './use-deck-controller';
 
-const TEXT_EDITABLE_SELECTOR =
-  'h1, h2, h3, p, li, span, td, th, blockquote, figcaption, div';
+const EDIT_HINT_TIMEOUT_MS = 6_000;
+
+interface EditHintState {
+  reason: EditHintReason;
+  // A new gesture mints a new state object, so repeating the same failure
+  // restarts the dismissal timer instead of leaving the old one running.
+  gesture: number;
+}
 
 // Div shapes and text boxes are leaf objects; a layout div with element
 // children keeps its original semantic text target rather than becoming the
@@ -593,11 +610,19 @@ export function App() {
   } | null>(null);
   const transitionPreviewSequence = useRef(0);
   const [containerPath, setContainerPath] = useState<number[]>([]);
+  const containerPathKey = containerPath.join('.');
   // The preview frame's dblclick and keydown listeners register once per frame
   // load and would otherwise close over the path from that render, so the
   // handlers read the current value through this mirror.
   const containerPathRef = useRef(containerPath);
   containerPathRef.current = containerPath;
+  // Last announced context level. A slide switch resets the path from an
+  // effect, and that reset must not talk over the slide announcement.
+  const previousContextRef = useRef({
+    key: containerPathKey,
+    slideId: activeSlide?.id,
+    resetBySlide: false
+  });
   const [selectionBoxes, setSelectionBoxes] = useState<SelectionBox[]>([]);
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
@@ -630,6 +655,15 @@ export function App() {
     master: Document | null;
     slides: SlideInfo[];
   } | null>(null);
+  // A rejected double-click names its reason here; a started text edit or a
+  // container entry never sets it. The hint is advisory, so it takes no focus
+  // and no canvas space.
+  const [editHint, setEditHint] = useState<EditHintState | null>(null);
+  const editHintGestureRef = useRef(0);
+  const showEditHint = useCallback((reason: EditHintReason): void => {
+    editHintGestureRef.current += 1;
+    setEditHint({ reason, gesture: editHintGestureRef.current });
+  }, []);
 
   const showPinNotice = useCallback((pinned: boolean): void => {
     if (!shouldNotifyPin(pinned, pinNoticeShownRef.current)) return;
@@ -656,6 +690,17 @@ export function App() {
       setPinNotice(false);
     }
   }, [master, pinNotice, slides]);
+
+  // The hint is informational only: it leaves on its own timer so a rejected
+  // gesture never leaves a panel behind.
+  useEffect(() => {
+    if (editHint === null) return;
+    const timer = window.setTimeout(
+      () => setEditHint(null),
+      EDIT_HINT_TIMEOUT_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [editHint]);
 
   // A container path only means something within one slide of one deck:
   // navigating or reloading starts again from the slide level. Deleting the
@@ -2393,6 +2438,9 @@ export function App() {
   );
 
   const beginTextEditing = useCallback((editable: HTMLElement) => {
+    // A started text edit is the success path for a previously rejected
+    // gesture, so the advisory hint leaves at once.
+    setEditHint(null);
     const document = editable.ownerDocument;
     const range = currentTextRange(document);
     editingElementRef.current = editable;
@@ -3104,39 +3152,39 @@ export function App() {
       while (top.parentElement && top.parentElement !== slideRoot) {
         top = top.parentElement;
       }
-      if (
-        isLockedElement(top) ||
-        isHiddenElement(top) ||
-        isGroupElement(top)
-      ) {
+      // The guard refuses both edit paths. It is checked before container
+      // entry, so a locked container names the lock instead of silently
+      // ignoring the gesture or entering anyway.
+      const topBlock = topLevelBlockFor(top);
+      if (topBlock) {
+        showEditHint(topBlock);
         return;
       }
       // Text leaves stay first: when the double-click can start an in-place
-      // text edit it consumes the gesture and never enters a container.
-      const editable = target.closest(TEXT_EDITABLE_SELECTOR) as HTMLElement | null;
-      if (editable && isLeafTextElement(editable)) {
-        // Empty semantic elements stay inert; div shapes and table cells
-        // accept a first text entry, so these rules are not reordered.
-        if (
-          editable.textContent?.trim() ||
-          editable.tagName === 'DIV' ||
-          editable.tagName === 'TD' ||
-          editable.tagName === 'TH'
-        ) {
-          event.preventDefault();
-          if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
-            textBaselineRef.current.set(editable, editable.innerHTML);
-          }
-          editable.setAttribute('contenteditable', 'true');
-          editable.setAttribute(EDITING_ATTRIBUTE, 'true');
-          editable.focus();
-          beginTextEditing(editable);
-          return;
+      // text edit it consumes the gesture and never enters a container. The
+      // reason is kept for the case where no path applies at all.
+      const block = textEditBlockFor(target);
+      if (block === null) {
+        // The block check resolved a text tag for this same target, so the
+        // selector result here cannot be null.
+        const editable = target.closest(
+          TEXT_EDITABLE_SELECTOR
+        ) as HTMLElement;
+        event.preventDefault();
+        if (!editable.hasAttribute(EDITING_ATTRIBUTE)) {
+          textBaselineRef.current.set(editable, editable.innerHTML);
         }
+        editable.setAttribute('contenteditable', 'true');
+        editable.setAttribute(EDITING_ATTRIBUTE, 'true');
+        editable.focus();
+        beginTextEditing(editable);
+        return;
       }
       // No text edit started, so a double-click on a container inside the
       // active context drills in. The path is read from the ref because this
-      // listener was registered on load and closes over that render.
+      // listener was registered on load and closes over that render. A
+      // successful entry is a real action, so only a rejected gesture — where
+      // neither path applies — names its reason.
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
       const frameSlide = slideInfo
@@ -3144,7 +3192,19 @@ export function App() {
         : null;
       if (!frameSlide) return;
       const next = contextEntry(frameSlide, target, containerPathRef.current);
-      if (!next) return;
+      if (!next) {
+        // A double-click on the entered container's own padding asks to
+        // enter the level the user is already at. Neither "enter the
+        // container" nor the text contract names a gesture that could start
+        // an edit here, so the hint stays away. A descendant such as a
+        // button still explains itself.
+        const activeContainer =
+          containerPathRef.current.length > 0
+            ? elementAtPath(frameSlide, containerPathRef.current)
+            : null;
+        if (activeContainer !== target) showEditHint(block);
+        return;
+      }
       event.preventDefault();
       setContainerPath(next);
       actionsRef.current.clearSelection();
@@ -3280,7 +3340,14 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
-  }, [beginTextEditing, clearOverlay, commit, endTextEditing, finishTextEditing]);
+  }, [
+    beginTextEditing,
+    clearOverlay,
+    commit,
+    endTextEditing,
+    finishTextEditing,
+    showEditHint
+  ]);
 
   const applyTextToolbarCommand = useCallback(
     (command: TextCommand) => {
@@ -3521,6 +3588,38 @@ export function App() {
     if (slides.length === 0) return;
     setAnnouncement(describeSlide(activeIndex, slides.length, t));
   }, [activeIndex, activeSlide?.id, slides.length, t]);
+
+  // Entering, leaving, and jumping between contexts changes the level the
+  // canvas shows, so it announces through the existing polite region rather
+  // than adding a second one. A slide switch resets the path from an effect;
+  // the slide announcement owns that transition, so the reset is silent.
+  useEffect(() => {
+    const previous = previousContextRef.current;
+    const slideChanged = previous.slideId !== activeSlide?.id;
+    previous.slideId = activeSlide?.id;
+    if (slideChanged) {
+      previous.resetBySlide = containerPath.length > 0;
+      setEditHint(null);
+    }
+    if (previous.key === containerPathKey) return;
+    previous.key = containerPathKey;
+    if (slideChanged) {
+      previous.resetBySlide = false;
+      return;
+    }
+    if (previous.resetBySlide) {
+      previous.resetBySlide = false;
+      if (containerPathKey === '') return;
+    }
+    // A successful entry or leave ends a rejected-gesture hint; the hint
+    // itself never takes focus, and neither does this announcement.
+    setEditHint(null);
+    const container =
+      containerPath.length > 0 && activeSlide
+        ? elementAtPath(activeSlide.element, containerPath)
+        : null;
+    setAnnouncement(describeContextLevel(container, t));
+  }, [activeSlide, containerPath, containerPathKey, t]);
 
   const objectActions = objectActionStateFor(activeSlide, selections, activeIndex);
   const nestedActions = nestedElementState(activeSlide, selections, activeIndex);
@@ -3834,7 +3933,8 @@ export function App() {
         >
           <button
             type="button"
-            className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+            aria-label={t('editor.context.slide')}
+            className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onClick={() => changeContext([])}
           >
             {t('editor.context.slide')}
@@ -3842,17 +3942,19 @@ export function App() {
           {containerPath.map((_, depth) => {
             const path = containerPath.slice(0, depth + 1);
             const element = elementAtPath(activeSlide.element, path);
+            const label = element
+              ? describeContextSegment(element)
+              : t('editor.context.unknown');
             return (
               <Fragment key={path.join('.')}>
                 <span aria-hidden="true">›</span>
                 <button
                   type="button"
-                  className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink"
+                  aria-label={t('editor.context.goTo', { name: label })}
+                  className="rounded px-1.5 py-0.5 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                   onClick={() => changeContext(path)}
                 >
-                  {element
-                    ? describeContextSegment(element)
-                    : t('editor.context.unknown')}
+                  {label}
                 </button>
               </Fragment>
             );
@@ -3984,6 +4086,43 @@ export function App() {
                     aria-label={t('editor.notice.dismiss')}
                     className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
                     onClick={() => setPinNotice(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+            {/* The hint's live region stays mounted so the first reason is
+                announced; mounting the region and its text together is missed
+                by some screen readers. The visible panel below carries no
+                live semantics, so the same reason is never announced twice. */}
+            <span
+              data-testid="edit-hint-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {editHint ? t(EDIT_HINT_KEYS[editHint.reason]) : ''}
+            </span>
+            {/* The hint overlays the canvas like the pin notice, so showing a
+                reason never reflows the slide. It sits at the bottom centre so
+                both notices can be visible at once. */}
+            {editHint && (
+              <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
+                <div
+                  data-testid="edit-hint"
+                  className="pointer-events-auto flex max-w-lg flex-wrap items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs text-muted shadow-[0_12px_32px_var(--editor-shadow-panel)]"
+                >
+                  <span className="min-w-0 flex-1">
+                    {t(EDIT_HINT_KEYS[editHint.reason])}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="edit-hint-dismiss"
+                    aria-label={t('editor.notice.dismiss')}
+                    className="rounded border border-line px-2 py-0.5 text-muted transition-colors hover:bg-hover hover:text-ink"
+                    onClick={() => setEditHint(null)}
                   >
                     ×
                   </button>

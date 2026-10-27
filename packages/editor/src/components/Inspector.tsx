@@ -432,6 +432,10 @@ export function Inspector({
       : slide?.element ?? null;
   const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
+  // Structural commands stay top-level only, so a nested selection still
+  // needs an explanation even though its position, size, and appearance are
+  // now editable.
+  const nested = selection !== null && selection.path.length > 1;
   const readOnly = multi;
   const selectedTopPath = selection?.path.slice(contextBase.length)[0];
   const geometryLocked =
@@ -1032,9 +1036,9 @@ export function Inspector({
                 {t('inspector.groupHint')}
               </p>
             ) : (
-              readOnly && (
+              nested && (
                 <p className="text-[11px] text-muted">
-                  {t('inspector.nestedHint')}
+                  {t('inspector.nestedStructuralHint')}
                 </p>
               )
             )}
