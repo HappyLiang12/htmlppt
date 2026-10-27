@@ -84,4 +84,92 @@ test.describe('text entry @feature:text-entry', () => {
       await deck.close();
     }
   });
+
+  test('Edit text enters inline editing and saves', async ({ page }) => {
+    const deck = await openDeck(page);
+    try {
+      await deck.frame.locator('[data-ppt-el="title"]').click();
+      await page.getByTestId('inspector-tab-text').click();
+      const edit = page.getByTestId('inspector-edit-text');
+      await expect(edit).toBeVisible();
+      await edit.click();
+      await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+        'data-mode',
+        'editing'
+      );
+      const editable = deck.frame.locator('h1[contenteditable="true"]');
+      await expect(editable).toBeVisible();
+      await page.keyboard.press('End');
+      await page.keyboard.type(' edited');
+      const save = waitForDeckSave(page);
+      await deck.frame.locator('body').click({ position: { x: 5, y: 5 } });
+      expect((await save).ok()).toBeTruthy();
+      await expect
+        .poll(() => readFile(deck.path, 'utf8'))
+        .toContain('Heading edited');
+    } finally {
+      await deck.close();
+    }
+  });
+
+  test('keyboard-only selection opens Edit text and commits', async ({ page }) => {
+    const deck = await openDeck(page);
+    try {
+      const row = page.locator(
+        '[data-testid="object-row"][data-object-id="title"]'
+      );
+      await row.focus();
+      await page.keyboard.press('Enter');
+      await expect(row).toHaveAttribute('aria-current', 'true');
+
+      const tab = page.getByTestId('inspector-tab-text');
+      await tab.focus();
+      await page.keyboard.press('Enter');
+
+      const edit = page.getByTestId('inspector-edit-text');
+      await expect(edit).toBeVisible();
+      await edit.focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+        'data-mode',
+        'editing'
+      );
+
+      await page.keyboard.press('ControlOrMeta+a');
+      await page.keyboard.type('Keyboard heading');
+      const save = waitForDeckSave(page);
+      await page.keyboard.press('Escape');
+      expect((await save).ok()).toBeTruthy();
+      await expect
+        .poll(() => readFile(deck.path, 'utf8'))
+        .toContain('Keyboard heading');
+    } finally {
+      await deck.close();
+    }
+  });
+
+  test('wrapper objects resolve their first editable leaf', async ({ page }) => {
+    const deck = await openDeck(page);
+    try {
+      await deck.frame.locator('[data-ppt-el="wrapper"]').click();
+      await expect(page.getByTestId('text-toolbar')).toBeVisible();
+      await page.getByTestId('inspector-tab-text').click();
+      await expect(page.getByTestId('inspector-text-hint')).toContainText(
+        'First'
+      );
+
+      const save = waitForDeckSave(page);
+      await page.getByTestId('text-bold').click();
+      expect((await save).ok()).toBeTruthy();
+      const html = await readFile(deck.path, 'utf8');
+      expect(html).toMatch(
+        /<span style="[^"]*font-weight:\s*bold[^"]*">First<\/span>/
+      );
+      expect(html).not.toMatch(
+        /<span style="[^"]*font-weight[^"]*">Second<\/span>/
+      );
+    } finally {
+      await deck.close();
+    }
+  });
 });

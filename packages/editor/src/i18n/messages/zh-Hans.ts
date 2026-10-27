@@ -167,7 +167,6 @@ export const zhHans: Record<MessageKey, string> = {
   'inspector.speakerNotes': '演讲者备注',
   'inspector.notesPlaceholder': '输入备注…',
   'inspector.notesHint': '备注以隐藏的区块存储在幻灯片内。',
-  'inspector.textHint': '选择文字后，使用上方的浮动工具栏调整格式。',
   'inspector.textIdle': '在幻灯片上选择文本对象。',
   'inspector.textSelected': '格式应用于：{text}',
   'inspector.textEmpty': '此文本框为空，请使用“编辑文字”输入。',

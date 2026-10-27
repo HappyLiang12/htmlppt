@@ -167,7 +167,6 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.speakerNotes': '講者備註',
   'inspector.notesPlaceholder': '輸入備註…',
   'inspector.notesHint': '備註以隱藏的區塊儲存在投影片內。',
-  'inspector.textHint': '選取文字後，使用上方的浮動工具列調整格式。',
   'inspector.textIdle': '在投影片上選取文字物件。',
   'inspector.textSelected': '格式套用至：{text}',
   'inspector.textEmpty': '這個文字方塊是空的，請使用「編輯文字」輸入。',

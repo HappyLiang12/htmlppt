@@ -171,8 +171,6 @@ export const en = {
   'inspector.notesPlaceholder': 'Enter notes…',
   'inspector.notesHint':
     'Notes are stored in a hidden block inside the slide.',
-  'inspector.textHint':
-    'Select text, then use the floating toolbar above to change its formatting.',
   'inspector.textIdle': 'Select a text object on the slide.',
   'inspector.textSelected': 'Formatting applies to: {text}',
   'inspector.textEmpty': 'This text box is empty. Use Edit text to type.',

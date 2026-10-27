@@ -196,6 +196,7 @@ import {
   Inspector,
   type InspectorChartState,
   type InspectorStyleState,
+  type InspectorTextAction,
   type ObjectActionState
 } from './components/Inspector';
 import {
@@ -232,14 +233,6 @@ interface EditHintState {
   // A new gesture mints a new state object, so repeating the same failure
   // restarts the dismissal timer instead of leaving the old one running.
   gesture: number;
-}
-
-// Div shapes and text boxes are leaf objects; a layout div with element
-// children keeps its original semantic text target rather than becoming the
-// edit surface itself.
-function isLeafTextElement(element: HTMLElement): boolean {
-  if (element.tagName !== 'DIV') return true;
-  return Array.from(element.children).every((child) => child.tagName === 'BR');
 }
 
 const SNAP_THRESHOLD_SCREEN_PX = 6;
@@ -2714,39 +2707,16 @@ export function App() {
     if (current.selections.length !== 1 || !current.selection) return false;
     if (current.selection.slideIndex !== current.activeIndex) return false;
     if (current.selection.path.length < 1) return false;
-    const slideInfo = current.slides[current.activeIndex];
     const frameDocument = frame.current?.contentDocument;
-    if (!slideInfo || !frameDocument) return false;
-    const slide = frameSlideElement(slideInfo, frameDocument);
-    if (!slide) return false;
-    const top = elementAtPath(slide, [current.selection.path[0] ?? -1]);
-    if (
-      !top ||
-      isLockedElement(top) ||
-      isHiddenElement(top) ||
-      isGroupElement(top)
-    ) {
-      return false;
-    }
-    const selected = elementAtPath(slide, current.selection.path);
-    if (!selected) return false;
+    if (!frameDocument) return false;
+    const resolved = resolveTextTargetAt(
+      frameDocument,
+      current.slides[current.activeIndex],
+      current.selection.path
+    );
+    if (!resolved || resolved.status !== 'editable') return false;
 
-    const textElement = selected.matches(TEXT_EDITABLE_SELECTOR)
-      ? selected
-      : selected.querySelector(TEXT_EDITABLE_SELECTOR);
-    const editable = textElement as HTMLElement | null;
-    if (!editable || !isLeafTextElement(editable)) return false;
-    // Empty div shapes and table cells accept a first text entry; other
-    // semantic elements require existing content so Enter cannot inject text.
-    if (
-      !editable.textContent?.trim() &&
-      editable.tagName !== 'DIV' &&
-      editable.tagName !== 'TD' &&
-      editable.tagName !== 'TH'
-    ) {
-      return false;
-    }
-
+    const editable = resolved.leaf;
     textBaselineRef.current.set(editable, editable.innerHTML);
     editable.setAttribute('contenteditable', 'true');
     editable.setAttribute(EDITING_ATTRIBUTE, 'true');
@@ -3878,6 +3848,43 @@ export function App() {
         ? 'rotate'
         : 'all';
 
+  const inspectorTextAction = useMemo<InspectorTextAction>(() => {
+    if (state.selections.length > 1) {
+      return { status: 'multi', canEdit: false, canFormat: false };
+    }
+    if (
+      state.selections.length !== 1 ||
+      !state.selection ||
+      state.selection.slideIndex !== state.activeIndex
+    ) {
+      return { status: 'idle', canEdit: false, canFormat: false };
+    }
+    const resolved = resolveTextTargetAt(
+      frame.current?.contentDocument,
+      state.slides[state.activeIndex],
+      state.selection.path
+    );
+    if (!resolved) return { status: 'idle', canEdit: false, canFormat: false };
+    if (resolved.status === 'blocked') {
+      return {
+        status: 'blocked',
+        canEdit: false,
+        canFormat: false,
+        reason: resolved.reason
+      };
+    }
+    const fullText =
+      resolved.leaf.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const text =
+      fullText.length > 40 ? `${fullText.slice(0, 40)}…` : fullText;
+    return {
+      status: 'editable',
+      canEdit: true,
+      canFormat: !resolved.empty,
+      text
+    };
+  }, [state, frameEpoch]);
+
   if (mode === 'standalone' && !master) {
     return (
       <StandaloneLauncher
@@ -4373,6 +4380,10 @@ export function App() {
             onSetBackground={handleBackgroundChange}
             onClearBackground={handleClearBackground}
             onSetNotes={handleNotesChange}
+            textAction={inspectorTextAction}
+            onEditText={() => {
+              void startTextEditing();
+            }}
           />
         </div>
       )}

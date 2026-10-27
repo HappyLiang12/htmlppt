@@ -19,6 +19,7 @@ import {
   type SelectionTarget
 } from '../selection';
 import type { DeckControllerActions } from '../use-deck-controller';
+import { EDIT_HINT_KEYS, type EditHintReason } from '../text-edit-block';
 import {
   backgroundOf,
   formatGeometryValue,
@@ -64,6 +65,25 @@ export interface InspectorChartState {
   title: string;
 }
 
+/**
+ * The Text tab's view of the current selection. `reason` only covers reasons
+ * the resolver emits; "no selection" maps to idle, never to a rejected
+ * gesture, so the panel can index the hint table without a fallback.
+ */
+export interface InspectorTextAction {
+  status: 'idle' | 'editable' | 'blocked' | 'multi';
+  canEdit: boolean;
+  canFormat: boolean;
+  reason?: EditHintReason;
+  text?: string;
+}
+
+const IDLE_TEXT_ACTION: InspectorTextAction = {
+  status: 'idle',
+  canEdit: false,
+  canFormat: false
+};
+
 export interface InspectorProps {
   pendingActions: PendingActions;
   slide: SlideInfo | undefined;
@@ -99,10 +119,12 @@ export interface InspectorProps {
   onSetBackground: (background: SlideBackground) => boolean;
   onClearBackground: () => boolean;
   onSetNotes: (notes: string) => void;
+  textAction?: InspectorTextAction;
+  onEditText?: () => void;
 }
 
 const ACTION_CLASS =
-  'rounded border border-line-strong px-2 py-1 text-[11px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40';
+  'rounded border border-line-strong px-2 py-1 text-[11px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
 function ActionButton({
   testId,
@@ -368,7 +390,9 @@ export function Inspector({
   onSetTransition,
   onSetBackground,
   onClearBackground,
-  onSetNotes
+  onSetNotes,
+  textAction = IDLE_TEXT_ACTION,
+  onEditText = () => undefined
 }: InspectorProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<InspectorTab>('design');
@@ -714,6 +738,9 @@ export function Inspector({
                 onClick={() => onObjectCommand({ type: 'order', direction: 'back' })}
               />
             </div>
+            <h4 className="text-[11px] text-muted">
+              {t('inspector.alignObject')}
+            </h4>
             <div className="grid grid-cols-3 gap-1">
               {(
                 [
@@ -1229,9 +1256,35 @@ export function Inspector({
       >
         <div className={SECTION_CLASS}>
           <h3 className={HEADING_CLASS}>{t('inspector.text')}</h3>
-          <p data-testid="text-placeholder" className="text-xs text-muted">
-            {t('inspector.textHint')}
-          </p>
+          {textAction.status === 'idle' && (
+            <p data-testid="inspector-text-idle" className="text-xs text-muted">
+              {t('inspector.textIdle')}
+            </p>
+          )}
+          {textAction.status === 'multi' && (
+            <p data-testid="inspector-text-multi" className="text-xs text-muted">
+              {t('inspector.textMulti')}
+            </p>
+          )}
+          {textAction.status === 'blocked' && (
+            <p data-testid="inspector-text-blocked" className="text-xs text-muted">
+              {t(EDIT_HINT_KEYS[textAction.reason ?? 'not-text'])}
+            </p>
+          )}
+          {textAction.status === 'editable' && (
+            <>
+              <ActionButton
+                testId="inspector-edit-text"
+                label={t('inspector.editText')}
+                onClick={onEditText}
+              />
+              <p data-testid="inspector-text-hint" className="text-xs text-muted">
+                {textAction.text
+                  ? t('inspector.textSelected', { text: textAction.text })
+                  : t('inspector.textEmpty')}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
