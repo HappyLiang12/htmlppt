@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   measureElementBox,
+  measureSlideBox,
   parseFitMode,
   readFitMode,
   sameBox,
@@ -8,6 +9,7 @@ import {
   writeFitMode,
   PLAY_FIT_STORAGE_KEY
 } from './play-fit';
+import { PREVIEW_SLIDE_ATTRIBUTE } from './slide-doc';
 
 const box = { left: 0, top: 0, width: 1200, height: 900 };
 const viewport = { width: 1440, height: 900 };
@@ -87,5 +89,33 @@ describe('sameBox', () => {
     expect(sameBox(box, { ...box, width: 1201 })).toBe(false);
     expect(sameBox(null, null)).toBe(true);
     expect(sameBox(box, null)).toBe(false);
+  });
+});
+
+describe('measureSlideBox', () => {
+  it('uses the preview marker and iframe viewport', () => {
+    const root = {
+      getBoundingClientRect: () => ({
+        left: 100,
+        top: 0,
+        width: 800,
+        height: 600,
+        right: 900,
+        bottom: 600
+      })
+    } as unknown as Element;
+    const doc = {
+      querySelector: (selector: string) =>
+        selector.includes(PREVIEW_SLIDE_ATTRIBUTE) ? root : null,
+      documentElement: { clientWidth: 1200, clientHeight: 600 },
+      body: root
+    } as unknown as Document;
+
+    expect(measureSlideBox(doc)).toEqual({
+      left: 100,
+      top: 0,
+      width: 800,
+      height: 600
+    });
   });
 });

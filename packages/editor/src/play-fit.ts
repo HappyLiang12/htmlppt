@@ -1,3 +1,5 @@
+import { PREVIEW_SLIDE_ATTRIBUTE } from './slide-doc';
+
 export type PlayFitMode = 'fit' | 'fill';
 
 export interface SlideBox {
@@ -104,4 +106,15 @@ export function measureElementBox(
     width: rect.width,
     height: rect.height
   };
+}
+
+export function measureSlideBox(frameDocument: Document): SlideBox | null {
+  const root =
+    frameDocument.querySelector(`[${PREVIEW_SLIDE_ATTRIBUTE}]`) ??
+    frameDocument.body;
+  const viewport = {
+    width: frameDocument.documentElement?.clientWidth ?? 0,
+    height: frameDocument.documentElement?.clientHeight ?? 0
+  };
+  return measureElementBox(root, viewport);
 }
