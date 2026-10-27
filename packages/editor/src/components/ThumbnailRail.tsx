@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { SlideInfo } from '@htmlppt/core';
+import { revealPreviewSlide } from '../frame-reveal';
 import { useI18n } from '../i18n';
 import { buildSlideSrcDoc } from '../slide-doc';
 
@@ -48,6 +49,10 @@ export function SlideMiniature({
           sandbox="allow-same-origin"
           srcDoc={srcDoc}
           tabIndex={-1}
+          onLoad={(event) => {
+            const frameDocument = event.currentTarget.contentDocument;
+            if (frameDocument) revealPreviewSlide(frameDocument);
+          }}
           className="pointer-events-none absolute left-0 top-0 border-0"
           style={{
             width: slide.width,
