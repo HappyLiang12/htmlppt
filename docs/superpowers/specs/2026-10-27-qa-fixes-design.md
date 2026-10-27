@@ -337,9 +337,15 @@ Rules:
   its top-level ancestor, including the selected element itself. This closes
   the current nested-guard gap and makes Enter, Edit text, and the selection
   toolbar agree.
-- Resolve the primary leaf exactly as `startTextEditing` does today: the
-  selected element when it matches `TEXT_EDITABLE_SELECTOR`, otherwise its
-  first matching descendant, requiring `isLeafTextElement`.
+- Resolve the primary leaf as follows: use the selected element when it is a
+  leaf text element matching `TEXT_EDITABLE_SELECTOR`; otherwise scan the
+  selected subtree in document order for the first matching
+  `TEXT_EDITABLE_SELECTOR` descendant that is a leaf text element and is not
+  inside a guarded subtree. This lets a wrapper object resolve its first
+  editable leaf.
+- Skip candidate leaves whose ancestor chain within the top-level ancestor is
+  locked, hidden, or grouped. If no candidate remains, return the last guard
+  reason, otherwise `textEditBlockFor(selected)` or `not-text`.
 - When no leaf is found, return `blocked` with the reason from
   `textEditBlockFor(selected)` or `not-text`.
 - `empty` is true when the leaf's trimmed `textContent` is empty.
@@ -347,9 +353,11 @@ Rules:
   callers do and map those cases to the Text panel's UI-only states
   (`multi` / `idle`) before calling it.
 
-`startTextEditing` is refactored to use this resolver. Its current tag,
-leaf, and empty-text rules stay; nested guards now reject the edit. Empty
-`DIV`, `TD`, and `TH` remain editable; other empty semantic elements are not.
+`startTextEditing` is refactored to use this resolver, so Enter, the Text tab
+button, and the selection toolbar target the same leaf. Enter on a wrapper
+object now edits its first editable leaf instead of rejecting the gesture; the
+Text tab names that leaf. Nested guards reject the edit. Empty `DIV`, `TD`, and
+`TH` remain editable; other empty semantic elements are not.
 
 ### 5.2 Selection formatting toolbar
 
@@ -366,8 +374,11 @@ The toolbar is visible when all of these hold:
 - The resolver returns `editable`.
 - `empty` is false.
 
-It appears without moving focus. The toolbar is removed when the selection is
-cleared, multi-selected, guarded, edited in place, or the slide changes.
+It appears without moving focus. The selection strip renders as an overlay
+pinned above the canvas, so showing it cannot reflow the stage between the two
+clicks of a double-click; the editing strip keeps its current in-flow row. The
+toolbar is removed when the selection is cleared, multi-selected, guarded,
+edited in place, or the slide changes.
 
 Selection-mode state is derived with
 `readTextToolbarState(frameDocument, leaf, null)`: no range means the leaf
@@ -485,6 +496,9 @@ a text target is active:
   formatting toolbar.
 - **F3-AC8** The Text tab no longer shows a placeholder that points at an
   invisible toolbar; every state has actionable or explanatory copy.
+- **F3-AC9** Given a wrapper object containing multiple text leaves, selecting
+  it shows the toolbar for the first editable leaf, the Text tab names that
+  leaf, and formatting changes only that leaf.
 
 ## 6. Testing
 
@@ -497,9 +511,9 @@ a text target is active:
 - `frame-reveal.test.ts`: covered where jsdom's computed style supports it
   (`hidden`, inline hiding); class-rule and CSSOM neutralization are covered by
   E2E because they need real cascade/layout.
-- `text-target.test.ts`: primary leaf resolution, wrapper with a single leaf,
-  nested guard, top-level guard, empty DIV/TD/TH versus empty semantic tags,
-  and no leaf. The caller's multi/idle states are covered by E2E.
+- `text-target.test.ts`: primary leaf resolution, wrapper with one and multiple
+  leaves, nested guard, top-level guard, empty DIV/TD/TH versus empty semantic
+  tags, and no leaf. The caller's multi/idle states are covered by E2E.
 - `play-fit.test.ts`: Fit/Fill scale math, invalid boxes, and storage
   parsing/defaults.
 - `shortcuts.test.ts`: B/I/U mapping with Ctrl and Meta, rejection with
@@ -562,7 +576,7 @@ Build and verify run sequentially.
 | `.active` triggers an authored transition on the preview | Reveal is clone-only; tests cover the QA fixture and manual decks |
 | Measured box causes a resize feedback loop | Never resize the iframe viewport from measured content; crop/translate only |
 | Measured box overflows the iframe | Fall back to metadata when the box exceeds the iframe viewport |
-| Selection toolbar formats the wrong leaf in a wrapper | Resolver reuses the Enter path; Text tab states the target; wrapper scope is documented |
+| Selection toolbar formats the wrong leaf in a wrapper | Resolver and Enter share one primary-leaf rule; Text tab names the target; wrapper scope is tested |
 | Nested guards previously editable via Enter | Resolver rejects them; add an E2E case and update any affected tests |
 | Native contenteditable handles Ctrl+B twice | `preventDefault` on handled shortcuts; test both modes |
 | localStorage unavailable | `try/catch`, default Fit |
