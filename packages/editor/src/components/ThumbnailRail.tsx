@@ -39,6 +39,7 @@ export function SlideMiniature({
 
   return (
     <div
+      data-testid="slide-miniature"
       className={`relative overflow-hidden bg-white ${className}`}
       style={{ width, height }}
       aria-hidden="true"
