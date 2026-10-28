@@ -89,8 +89,11 @@ Non-goals:
   shortcut to the deepest node and uses the same SVG geometry when it lands
   inside an SVG.
 - **D8 — SVG drag uses a transform.** Drag writes a translate in SVG user units,
-  pre-multiplied onto any authored `transform`; resize and rotate are not
-  offered for SVG internals, and snapping is disabled for them.
+  appended after any authored `transform` (post-multiplied). The delta is
+  mapped through the inverse screen CTM into the element's local user space,
+  which is the space a post-multiplied translate acts in, so the shape follows
+  the pointer even when its own transform rotates or scales it. Resize and
+  rotate are not offered for SVG internals, and snapping is disabled for them.
 - **D9 — Tables.** A cell is selectable by click (the table toolbar needs it) but
   table-internal selections have no geometry gestures; a drag on a cell shows a
   hint naming the table. The table itself is selectable through its border,
@@ -162,8 +165,10 @@ the display/position/atomic rules without a browser.
   entry, existing threshold and coordinates.
 - SVG-internal components use a separate geometry mode:
   - at gesture start capture the element's authored `transform` and the inverse
-    of its `getScreenCTM()`; convert the design-pixel delta to user units and
-    write `translate(dx dy) <authored transform>`;
+    of its `getScreenCTM()`; convert the design-pixel delta to local user units
+    through the inverse matrix coefficients and write
+    `<authored transform> translate(dx dy)` (an empty or `none` authored
+    transform becomes just the translate);
   - the selection outline follows the stored start rect plus the design delta;
   - snapping, resize, and rotate are disabled;
   - no `left/top/width/height` styles are written.
@@ -314,8 +319,10 @@ Unit (Vitest, `packages/editor`):
 - component resolver: inline span folds into its block text box; block target;
   `display: contents`; positioned inline; atomic media/svg/table; guarded
   wrapper; slide root null; raw path; context direct-child mode.
-- SVG math: screen/design delta to user units under scale, rotation, viewBox;
-  transform pre-multiplication keeps authored transforms; zero/rounding.
+- SVG math: screen/design delta to local user units under scale, rotation,
+  viewBox; post-multiplication keeps authored transforms and pointer direction
+  under a rotated/scaled element; `none` authored transform; repeated writes
+  do not accumulate; zero/rounding.
 - selection normalization: ancestor/descendant collapse, cross-depth
   multi-selection, same-slide constraint.
 - object ops: nested collect/delete/duplicate/paste, id refresh, SVG namespace
