@@ -77,7 +77,7 @@ machine (6 cores, 16 GB RAM), not a projection:
 | Whole editor package | `npm run test -w @htmlppt/editor` | 13.5 s |
 | Unit gate | `npm run test:unit` | 25.0 s |
 | One integration lane | `npm run test -w @htmlppt/host` | 10.5–42.7 s (load dependent) |
-| Integration gate, four lanes | `npm run test:integration` | 175.5 s and 203.8 s, against 348.4 s and 402.6 s serial for the same 16 test files |
+| Integration gate, four lanes | `npm run test:integration` | 175.5 s, 203.8 s and 193.0 s, against 348.4 s and 402.6 s serial for the same 16 test files |
 | Types, incremental + parallel | `npm run loop -- types` | 4.4 s warm, 9.5 s cold cache |
 | Types gate | `npm run typecheck` | 25.6 s (and 30.6 s again immediately: it caches nothing) |
 | One E2E spec, no rebuild | `npm run loop -- e2e e2e/recovery.spec.ts` | 8.4 s |

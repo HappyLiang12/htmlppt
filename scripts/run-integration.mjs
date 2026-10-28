@@ -16,16 +16,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-// Longest first (measured serial cost), so a short lane never delays the
-// critical path when the concurrency cap is below the lane count.
+// Longest first (measured serial cost), so the critical path starts earliest
+// and its output is at the top of the summary.
 const lanes = [
   { name: 'cli', pkg: '@htmlppt/cli' },
   { name: 'renderer', pkg: '@htmlppt/renderer' },
   { name: 'mcp', pkg: '@htmlppt/mcp' },
   { name: 'host', pkg: '@htmlppt/host' }
 ];
-
-const concurrency = lanes.length;
 
 function prefixPipe(stream, tag, sink) {
   let pending = '';
@@ -62,19 +60,8 @@ function runLane(lane, index) {
   });
 }
 
-const results = [];
-const queue = lanes.map((lane, index) => ({ lane, index }));
-
-async function worker() {
-  for (;;) {
-    const next = queue.shift();
-    if (!next) return;
-    results.push(await runLane(next.lane, next.index));
-  }
-}
-
 const wall = Date.now();
-await Promise.all(Array.from({ length: Math.min(concurrency, lanes.length) }, worker));
+const results = await Promise.all(lanes.map((lane, index) => runLane(lane, index)));
 const elapsed = (Date.now() - wall) / 1000;
 
 results.sort((a, b) => b.seconds - a.seconds);
