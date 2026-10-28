@@ -92,8 +92,15 @@ Non-goals:
   appended after any authored `transform` (post-multiplied). The delta is
   mapped through the inverse screen CTM into the element's local user space,
   which is the space a post-multiplied translate acts in, so the shape follows
-  the pointer even when its own transform rotates or scales it. Resize and
-  rotate are not offered for SVG internals, and snapping is disabled for them.
+  the pointer even when its own transform rotates or scales it. A nested
+  `<svg>` root is the exception: its transform acts in the parent's user space,
+  outside its own `x`/`y`/`viewBox` mapping, so the delta converts through the
+  parent's screen CTM composed with the authored transform instead of the
+  element's own CTM. SVG internals whose transform is owned by CSS — a computed
+  `transform`, the individual `translate`/`rotate`/`scale` properties, or an
+  inline style — stay selectable but are drag-inert, because the presentation
+  attribute cannot compose with that styling. Resize and rotate are not offered
+  for SVG internals, and snapping is disabled for them.
 - **D9 — Tables.** A cell is selectable by click (the table toolbar needs it) but
   table-internal selections have no geometry gestures; a drag on a cell shows a
   hint naming the table. The table itself is selectable through its border,
@@ -164,9 +171,12 @@ the display/position/atomic rules without a browser.
   drag threshold, snap to siblings/slide bounds (Alt bypasses), one history
   entry, existing threshold and coordinates.
 - SVG-internal components use a separate geometry mode:
-  - at gesture start capture the element's authored `transform` and the inverse
-    of its `getScreenCTM()`; convert the design-pixel delta to local user units
-    through the inverse matrix coefficients and write
+  - at gesture start capture the element's authored `transform` and the matrix
+    the appended translate acts through: the inverse of its `getScreenCTM()`
+    for a shape, or the parent's screen CTM composed with the authored
+    transform for a nested `<svg>` root, whose own CTM also carries its
+    viewport mapping; convert the design-pixel delta to that space through the
+    inverse matrix coefficients and write
     `<authored transform> translate(dx dy)` (an empty or `none` authored
     transform becomes just the translate);
   - the selection outline follows the stored start rect plus the design delta;
@@ -320,9 +330,11 @@ Unit (Vitest, `packages/editor`):
   `display: contents`; positioned inline; atomic media/svg/table; guarded
   wrapper; slide root null; raw path; context direct-child mode.
 - SVG math: screen/design delta to local user units under scale, rotation,
-  viewBox; post-multiplication keeps authored transforms and pointer direction
-  under a rotated/scaled element; `none` authored transform; repeated writes
-  do not accumulate; zero/rounding.
+  viewBox; a nested `<svg>` viewport root maps through the parent space, not
+  its own viewBox; post-multiplication keeps authored transforms and pointer
+  direction under a rotated/scaled element; `none` authored transform; repeated
+  writes do not accumulate; zero/rounding; CSS-owned shapes (computed
+  transform, individual transform properties) stay inert.
 - selection normalization: ancestor/descendant collapse, cross-depth
   multi-selection, same-slide constraint.
 - object ops: nested collect/delete/duplicate/paste, id refresh, SVG namespace
@@ -333,7 +345,9 @@ E2E (`e2e/component-dragging.spec.ts`, tag `@feature:component-dragging`):
 - new fixture `test-utils/fixtures/component.deck.html` with a wrapped pad,
   text blocks, a flex chip row, cards, tabs, an icon SVG, a chart figure/SVG,
   an SVG flow with arrow, a table, a group, and locked/hidden objects;
-- CD-AC1 through CD-AC9, plus save/undo/reload and clean-HTML assertions.
+- CD-AC1 through CD-AC9, plus save/undo/reload, clean-HTML assertions, a
+  nested SVG viewport root drag and nudge, and CSS-owned shapes staying
+  selectable but inert.
 
 Existing suites to audit and update where the contract changed: `skeleton`,
 `editor`, `drill-in`, `tables`, `charts`, `text-entry`, `insertion`,
