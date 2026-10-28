@@ -585,6 +585,34 @@ async function frameScale(page: Page): Promise<number> {
   });
 }
 
+/**
+ * Slide-level clicks select the innermost component, so these tests select the
+ * template's top-level wrapper from its own padding instead of the nested
+ * heading that resolved to the wrapper under the superseded rule.
+ */
+async function selectSlideInner(
+  page: Page,
+  frame: FrameLocator
+): Promise<void> {
+  await frame.locator('.slide-inner').click({ position: { x: 4, y: 4 } });
+  await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+    'data-selected-path',
+    '0'
+  );
+}
+
+/**
+ * A screen point in the wrapper's own padding, clear of the selection handles
+ * that straddle its corners. A gesture from here moves the wrapper itself.
+ */
+async function slideInnerDragStart(
+  frame: FrameLocator
+): Promise<{ x: number; y: number }> {
+  const box = await frame.locator('.slide-inner').boundingBox();
+  if (!box) throw new Error('Slide inner has no bounding box.');
+  return { x: box.x + 20, y: box.y + 20 };
+}
+
 function styleDeclaration(style: string, property: string): string | null {
   for (const part of style.split(';')) {
     const separator = part.indexOf(':');
@@ -746,7 +774,7 @@ async function transformOriginOf(
 }
 
 test(
-  'clicking inside the heading selects its top-level object with eight handles',
+  'clicking inside the heading selects the heading with eight handles',
   { tag: '@feature:editor-core' },
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
@@ -755,8 +783,8 @@ test(
 
       const outline = page.getByTestId('selection-outline');
       await expect(outline).toBeVisible();
-      await expect(outline).toHaveAttribute('data-selected-path', '0');
-      expect(await outline.getAttribute('data-selected-id')).not.toBe('e1');
+      await expect(outline).toHaveAttribute('data-selected-path', '0.1');
+      await expect(outline).toHaveAttribute('data-selected-id', 'e1');
       await expect(outline).not.toHaveAttribute('data-readonly', 'true');
       await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(8);
       await expect(page.getByTestId('handle-e')).toBeVisible();
@@ -1048,26 +1076,17 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      const heading = editor.frame.locator('h1');
-      const box = await heading.boundingBox();
-      if (!box) throw new Error('Heading has no bounding box.');
       const scale = await frameScale(page);
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
-
-      await heading.click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
+      await selectSlideInner(page, editor.frame);
+      const start = await slideInnerDragStart(editor.frame);
 
       const save = waitForDeckSave(page);
-      await page.mouse.move(startX, startY);
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
       // A small move stays inside the snap threshold and renders a guide.
-      await page.mouse.move(startX + 3, startY + 1);
+      await page.mouse.move(start.x + 3, start.y + 1);
       await expect(page.getByTestId('guide-x')).toBeVisible();
-      await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+      await page.mouse.move(start.x + 100, start.y + 50, { steps: 5 });
       await page.mouse.up();
       await expect(page.getByTestId('guide-x')).toHaveCount(0);
       expect((await save).ok()).toBeTruthy();
@@ -1102,18 +1121,9 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      const heading = editor.frame.locator('h1');
-      const box = await heading.boundingBox();
-      if (!box) throw new Error('Heading has no bounding box.');
       const scale = await frameScale(page);
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
-
-      await heading.click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
+      await selectSlideInner(page, editor.frame);
+      const start = await slideInnerDragStart(editor.frame);
 
       const saveRequests: Request[] = [];
       const countSave = (request: Request) => {
@@ -1122,9 +1132,9 @@ test(
       page.on('request', countSave);
       try {
         const save = waitForDeckSave(page);
-        await page.mouse.move(startX, startY);
+        await page.mouse.move(start.x, start.y);
         await page.mouse.down();
-        await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+        await page.mouse.move(start.x + 100, start.y + 50, { steps: 5 });
         // A live keyboard handler would nudge and commit mid-gesture, adding a
         // second save and another design pixel of offset.
         await page.keyboard.press('ArrowRight');
@@ -1152,7 +1162,7 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      await editor.frame.locator('h1').click();
+      await selectSlideInner(page, editor.frame);
       const east = page.getByTestId('handle-e');
       await expect(east).toBeVisible();
 
@@ -1203,7 +1213,7 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      await editor.frame.locator('h1').click();
+      await selectSlideInner(page, editor.frame);
       const rotate = page.getByTestId('rotate-handle');
       await expect(rotate).toBeVisible();
       const elementBox = await editor.frame.locator('.slide-inner').boundingBox();
@@ -1347,24 +1357,16 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      const heading = editor.frame.locator('h1');
-      await heading.click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
-      const box = await heading.boundingBox();
-      if (!box) throw new Error('Heading has no bounding box.');
       const scale = await frameScale(page);
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
+      await selectSlideInner(page, editor.frame);
+      const start = await slideInnerDragStart(editor.frame);
 
       const save = waitForDeckSave(page);
-      await page.mouse.move(startX, startY);
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
       // Alt is held during the move, which must bypass snapping.
       await page.keyboard.down('Alt');
-      await page.mouse.move(startX + 3, startY + 3, { steps: 2 });
+      await page.mouse.move(start.x + 3, start.y + 3, { steps: 2 });
       await expect(page.getByTestId('guide-x')).toHaveCount(0);
       await expect(page.getByTestId('guide-y')).toHaveCount(0);
       await page.mouse.up();
@@ -1463,16 +1465,12 @@ test(
   async ({ page }) => {
     const editor = await openTemplateDeck(page);
     try {
-      const heading = editor.frame.locator('h1');
-      const box = await heading.boundingBox();
-      if (!box) throw new Error('Heading has no bounding box.');
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
+      const start = await slideInnerDragStart(editor.frame);
 
       const save = waitForDeckSave(page);
-      await page.mouse.move(startX, startY);
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
-      await page.mouse.move(startX + 60, startY + 30, { steps: 4 });
+      await page.mouse.move(start.x + 60, start.y + 30, { steps: 4 });
       await page.mouse.up();
       expect((await save).ok()).toBeTruthy();
       await expect(page.getByTestId('save-status')).toHaveText('已儲存');
@@ -1566,18 +1564,14 @@ test(
       const outline = page.getByTestId('selection-outline');
       const frameHandle = page.locator(FRAME_SELECTOR);
       const heading = editor.frame.locator('h1');
-      const box = await heading.boundingBox();
-      if (!box) throw new Error('Heading has no bounding box.');
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
+      const start = await slideInnerDragStart(editor.frame);
 
       // Escape cancels: live inline styles are replaced from the master.
-      await heading.click();
-      await expect(outline).toHaveAttribute('data-selected-path', '0');
+      await selectSlideInner(page, editor.frame);
       await expectNoDeckSave(page, async () => {
-        await page.mouse.move(startX, startY);
+        await page.mouse.move(start.x, start.y);
         await page.mouse.down();
-        await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
+        await page.mouse.move(start.x + 100, start.y + 50, { steps: 4 });
         await expect
           .poll(async () => (await slideInnerGeometry(editor.frame)).position)
           .toBe('absolute');
@@ -1593,8 +1587,7 @@ test(
       await expect(page.getByTestId('save-status')).toHaveText('已同步');
 
       // pointercancel uses the same cancellation path.
-      await heading.click();
-      await expect(outline).toHaveAttribute('data-selected-path', '0');
+      await selectSlideInner(page, editor.frame);
       await frameHandle.evaluate((iframe) => {
         const view = (
           iframe as unknown as {
@@ -1612,7 +1605,7 @@ test(
       });
 
       await expectNoDeckSave(page, async () => {
-        await page.mouse.move(startX, startY);
+        await page.mouse.move(start.x, start.y);
         await page.mouse.down();
         const pointerId = await frameHandle.evaluate((iframe) => {
           const view = (
@@ -1623,7 +1616,7 @@ test(
           return view?.__pptPointerId ?? -1;
         });
         expect(pointerId).toBeGreaterThan(0);
-        await page.mouse.move(startX + 100, startY + 50, { steps: 4 });
+        await page.mouse.move(start.x + 100, start.y + 50, { steps: 4 });
         await expect
           .poll(async () => (await slideInnerGeometry(editor.frame)).position)
           .toBe('absolute');
@@ -2660,16 +2653,12 @@ test(
       expect((await redoTextSave).ok()).toBeTruthy();
       await expect(editor.frame.locator('h1')).toHaveText('Changed heading');
 
-      const wrapper = editor.frame.locator('.slide-inner');
-      const box = await wrapper.boundingBox();
-      if (!box) throw new Error('Slide wrapper has no bounding box.');
-      const startX = box.x + box.width / 2;
-      const startY = box.y + box.height / 2;
+      const start = await slideInnerDragStart(editor.frame);
 
       const dragSave = waitForDeckSave(page);
-      await page.mouse.move(startX, startY);
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
-      await page.mouse.move(startX + 100, startY + 50, { steps: 5 });
+      await page.mouse.move(start.x + 100, start.y + 50, { steps: 5 });
       await page.mouse.up();
       expect((await dragSave).ok()).toBeTruthy();
       await expect
@@ -3112,11 +3101,7 @@ test(
     const editor = await openTemplateDeck(page);
     let held: HeldDeckSave | null = null;
     try {
-      await editor.frame.locator('h1').click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
+      await selectSlideInner(page, editor.frame);
 
       held = await holdNextDeckSave(page);
       await page.keyboard.press('Control+d');
@@ -3158,11 +3143,7 @@ test(
     const editor = await openTemplateDeck(page);
     let held: HeldDeckSave | null = null;
     try {
-      await editor.frame.locator('h1').click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
+      await selectSlideInner(page, editor.frame);
 
       held = await holdNextDeckSave(page);
       await page.keyboard.press('Delete');
@@ -3172,11 +3153,7 @@ test(
       await expect(editor.frame.locator('h1')).toHaveText(
         'Untitled deck — 2'
       );
-      await editor.frame.locator('h1').click();
-      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
-        'data-selected-path',
-        '0'
-      );
+      await selectSlideInner(page, editor.frame);
 
       held.release();
       expect((await held.response).ok()).toBe(true);

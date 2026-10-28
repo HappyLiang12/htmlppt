@@ -21,6 +21,7 @@ import {
   type DeckRevisionEvent
 } from './live-sync';
 import { topLevelObjects, type SelectionTarget } from './selection';
+import { normalizeSelectionPaths } from './component-target';
 import {
   collectObjectHtml,
   deleteObjectPaths,
@@ -640,7 +641,17 @@ export function useDeckController(
           unique.push(target);
         }
       }
-      update({ selection: unique[0] ?? null, selections: unique });
+      // Ancestor/descendant pairs collapse to the highest selected node, so a
+      // cross-depth multi-selection never moves the same subtree twice.
+      const uniquePaths = normalizeSelectionPaths(
+        unique.map((target) => target.path)
+      );
+      const normalized = uniquePaths
+        .map((path) =>
+          unique.find((target) => target.path.join('.') === path.join('.'))
+        )
+        .filter((target): target is SelectionTarget => target !== undefined);
+      update({ selection: normalized[0] ?? null, selections: normalized });
     },
     [settlePendingEdits, update]
   );
@@ -664,16 +675,7 @@ export function useDeckController(
       const current = stateRef.current;
       const base = current.selections;
       const sameSlide = base[0]?.slideIndex === target.slideIndex;
-      const baseIsTopLevel =
-        base.length > 0 &&
-        base.every((candidate) => candidate.path.length === 1);
-      if (
-        target.path.length !== 1 ||
-        !baseIsTopLevel ||
-        !sameSlide
-      ) {
-        // Multi-selection is top-level only: a nested target, or a nested
-        // base, collapses to the incoming target instead of mixing levels.
+      if (!sameSlide) {
         // A target on another slide starts a fresh selection rather than
         // mixing slides.
         applySelections([target]);

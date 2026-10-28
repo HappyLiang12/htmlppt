@@ -103,7 +103,10 @@ async function editCell(
     .nth(row)
     .locator('td, th')
     .nth(column);
-  await cell.dblclick();
+  // The first click selects the cell, so its resize handles straddle the cell
+  // corners. Click inside the left padding, clear of the handles, so the second
+  // click reaches the cell and starts the text edit.
+  await cell.dblclick({ position: { x: 20, y: 7 } });
   await expect(cell).toHaveAttribute('contenteditable', 'true');
   await cell.evaluate((element) => {
     const range = element.ownerDocument.createRange();

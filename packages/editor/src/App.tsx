@@ -131,6 +131,7 @@ import {
   topLevelObjects,
   type SelectionTarget
 } from './selection';
+import { componentPath, resolveComponent } from './component-target';
 import {
   buildSlideSrcDoc,
   commitSlide,
@@ -2844,6 +2845,25 @@ export function App() {
   );
 
   /**
+   * Enters the single selected component when it has object children. Enter
+   * works at any depth, not only for a direct child of the active context.
+   */
+  const enterSelectedComponent = useCallback((): boolean => {
+    const current = stateRef.current;
+    const selected = current.selection;
+    if (!selected || current.selections.length !== 1) return false;
+    if (selected.slideIndex !== current.activeIndex) return false;
+    const slide = frameSlideNow();
+    if (!slide) return false;
+    const element = elementAtPath(slide, selected.path);
+    if (!element || !isEnterableContainer(element)) return false;
+    setContainerPath([...selected.path]);
+    actionsRef.current.clearSelection();
+    clearOverlay();
+    return true;
+  }, [clearOverlay, frameSlideNow]);
+
+  /**
    * Enter and Escape for the drill-in context. The same callback is registered
    * on the parent document and on the preview frame document: a keydown inside
    * the iframe never bubbles to the parent. Capture phase gives the context
@@ -2890,29 +2910,13 @@ export function App() {
       const target = eventElement(event.target);
       if (target?.closest('button, a, [role="button"], [role="tab"]')) return;
 
-      const current = stateRef.current;
-      const selected = current.selection;
-      if (!selected || current.selections.length !== 1) return;
-      if (selected.slideIndex !== current.activeIndex) return;
-      // Only the active context's direct child can be entered; any other
-      // selection falls through to the shortcut layer.
-      if (
-        selected.path.length !== path.length + 1 ||
-        !path.every((index, depth) => selected.path[depth] === index)
-      ) {
-        return;
-      }
-      const slide = frameSlideNow();
-      if (!slide) return;
-      const element = elementAtPath(slide, selected.path);
-      if (!element || !isEnterableContainer(element)) return;
+      // Enter enters the selected component at any depth, not only a direct
+      // child of the active context (D6).
+      if (!enterSelectedComponent()) return;
       event.preventDefault();
       event.stopPropagation();
-      setContainerPath([...selected.path]);
-      actionsRef.current.clearSelection();
-      clearOverlay();
     },
-    [chartEditor, clearOverlay, frameSlideNow, shortcutsOpen]
+    [chartEditor, clearOverlay, enterSelectedComponent, shortcutsOpen]
   );
   contextKeyDownRef.current = handleContextKeyDown;
 
@@ -3193,6 +3197,41 @@ export function App() {
     ]
   );
 
+  /**
+   * Resolves a slide-level pointer down to the component a click should select.
+   * An entered context keeps its direct-child rule, and Alt keeps the
+   * deepest-node shortcut. Only a plain slide-level click changes granularity:
+   * it targets the innermost visible component instead of the top-level object.
+   */
+  const componentSelection = useCallback(
+    (target: Element, slide: Element, altKey: boolean): SelectionTarget | null => {
+      const current = stateRef.current;
+      const contextPath = containerPathRef.current;
+      if (contextPath.length > 0) {
+        return selectionFromEvent(target, slide, {
+          slideIndex: current.activeIndex,
+          altKey,
+          containerPath: contextPath
+        });
+      }
+      if (altKey) {
+        return selectionFromEvent(target, slide, {
+          slideIndex: current.activeIndex,
+          altKey: true
+        });
+      }
+      const component = resolveComponent(slide, target);
+      const path = component ? componentPath(slide, component) : null;
+      if (!component || !path) return null;
+      return {
+        slideIndex: current.activeIndex,
+        path,
+        elementId: component.getAttribute('data-ppt-el')?.trim() || null
+      };
+    },
+    []
+  );
+
   const handleFramePointerDown = useCallback(
     (event: PointerEvent, frameDocument: Document) => {
       if (event.button !== 0) return;
@@ -3206,11 +3245,7 @@ export function App() {
       if (isEditableTarget(target)) return;
       if (!actionsRef.current.settlePendingEdits()) return;
 
-      const selected = selectionFromEvent(target, frameSlide, {
-        slideIndex: current.activeIndex,
-        altKey: event.altKey,
-        containerPath
-      });
+      const selected = componentSelection(target, frameSlide, event.altKey);
       if (!selected) {
         // A click inside the entered container keeps the context, including a
         // click on the container's own padding. A click outside it leaves the
@@ -3237,19 +3272,19 @@ export function App() {
         sameSelection(candidate, selected)
       );
       if (!existing) actionsRef.current.select(selected);
-      // A nested path resolves to the child object itself, so a single
+      // A component selection resolves to the child object itself, so a
       // nested selection drags like a top-level one.
-      const clickedTop = elementAtPath(frameSlide, selected.path);
+      const clicked = elementAtPath(frameSlide, selected.path);
       if (
-        !clickedTop ||
-        isLockedElement(clickedTop) ||
-        isHiddenElement(clickedTop) ||
+        !clicked ||
+        isLockedElement(clicked) ||
+        isHiddenElement(clicked) ||
         blockedPathAncestor(frameSlide, selected.path) !== null
       ) {
         // Locked objects stay selectable but inert: no native text selection
         // drag, and no editor transform session. The same holds for a child
         // of a locked, hidden, or group top-level wrapper.
-        if (clickedTop) event.preventDefault();
+        if (clicked) event.preventDefault();
         return;
       }
 
@@ -3282,7 +3317,7 @@ export function App() {
         event.altKey
       );
     },
-    [beginDragSession, clearOverlay, containerPath]
+    [beginDragSession, clearOverlay, componentSelection, containerPath]
   );
 
   keyDownRef.current = handleKeyDown;
@@ -3404,7 +3439,17 @@ export function App() {
         ? frameSlideElement(slideInfo, frameDocument)
         : null;
       if (!frameSlide) return;
-      const next = contextEntry(frameSlide, target, containerPathRef.current);
+      // An entered context enters its direct children; at slide level the same
+      // component resolution as a click decides the container, so a
+      // double-click on a card or an svg enters it without a hotkey.
+      const next =
+        containerPathRef.current.length > 0
+          ? contextEntry(frameSlide, target, containerPathRef.current)
+          : (() => {
+              const component = resolveComponent(frameSlide, target);
+              if (!component || !isEnterableContainer(component)) return null;
+              return componentPath(frameSlide, component);
+            })();
       if (!next) {
         // A double-click on the entered container's own padding asks to
         // enter the level the user is already at. Neither "enter the
@@ -4059,15 +4104,6 @@ export function App() {
         />
       )}
 
-      {tableState && (
-        <TableToolbar
-          state={tableState}
-          disabled={objectActions.locked || objectActions.hidden}
-          onAction={handleTableAction}
-          onCellStyle={handleTableCellStyle}
-        />
-      )}
-
       {chartEditor && (
         <ChartDialog
           json={chartEditor.json}
@@ -4271,6 +4307,19 @@ export function App() {
                     onLink={applySelectionTextLink}
                   />
                 </div>
+              </div>
+            )}
+            {/* The table toolbar floats over the canvas instead of taking
+                flow space: selecting a cell must not move the stage between
+                the two clicks of the double-click that starts text editing. */}
+            {tableState && (
+              <div className="absolute inset-x-0 top-0 z-30">
+                <TableToolbar
+                  state={tableState}
+                  disabled={objectActions.locked || objectActions.hidden}
+                  onAction={handleTableAction}
+                  onCellStyle={handleTableCellStyle}
+                />
               </div>
             )}
             {activeSlide && stageCrop ? (

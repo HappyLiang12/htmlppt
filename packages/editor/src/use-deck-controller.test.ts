@@ -189,7 +189,7 @@ describe('useDeckController', () => {
     expect(controller.state.selection).toBeNull();
   });
 
-  it('replaces a multi selection when toggling a nested or cross-slide target', async () => {
+  it('drops a nested toggle under a selected ancestor and replaces across slides', async () => {
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -201,6 +201,8 @@ describe('useDeckController', () => {
         path: [1],
         elementId: 'e2'
       });
+      // Selection normalization drops a descendant of an already selected
+      // ancestor: moving both would move the same subtree twice.
       controller.actions.toggleSelect({
         slideIndex: 0,
         path: [0, 0],
@@ -208,7 +210,8 @@ describe('useDeckController', () => {
       });
     });
     expect(controller.state.selections).toEqual([
-      { slideIndex: 0, path: [0, 0], elementId: null }
+      { slideIndex: 0, path: [0], elementId: 'e1' },
+      { slideIndex: 0, path: [1], elementId: 'e2' }
     ]);
 
     act(() => {
@@ -223,7 +226,7 @@ describe('useDeckController', () => {
     ]);
   });
 
-  it('collapses a nested base when a top-level target is shift-clicked', async () => {
+  it('keeps unrelated nested and top-level targets in a multi selection', async () => {
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -241,9 +244,10 @@ describe('useDeckController', () => {
       });
     });
     expect(controller.state.selections).toEqual([
+      { slideIndex: 0, path: [0, 0], elementId: null },
       { slideIndex: 0, path: [1], elementId: 'e2' }
     ]);
-    expect(controller.state.selection?.path).toEqual([1]);
+    expect(controller.state.selection?.path).toEqual([0, 0]);
   });
 
   it('selects every top-level object on the active slide', async () => {

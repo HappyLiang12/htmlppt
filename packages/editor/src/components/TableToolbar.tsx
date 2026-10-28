@@ -47,7 +47,7 @@ export function TableToolbar({
       data-testid="table-toolbar"
       role="toolbar"
       aria-label={t('table.tools')}
-      className="flex flex-wrap items-center gap-1 border-b border-line bg-surface px-3 py-2"
+      className="flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-line bg-surface px-3 py-2"
     >
       <span className="mr-1 font-mono text-[11px] text-muted">
         {t('table.position', {

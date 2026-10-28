@@ -831,10 +831,14 @@ test('a mixed selection cannot move a locked wrapper child', { tag: '@feature:ne
     const saved = await readFile(join(editor.directory, editor.file), 'utf8');
     expect(saved).toContain('<p>Locked heading</p>');
 
-    // The new multi-select contract: a nested base collapses to the incoming
-    // top-level target instead of forming a mixed selection.
-    await expect(outline).toHaveCount(1);
-    await expect(outline).toHaveAttribute('data-selected-path', '2');
+    // Mixed-depth multi-selection is allowed (D11): the shift-click adds the
+    // heading, and normalization keeps both unrelated paths. The locked child
+    // stays in the selection but remains inert.
+    await expect(outline).toHaveCount(2);
+    const paths = await outline.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('data-selected-path'))
+    );
+    expect(paths.sort()).toEqual(['2.0.0', '3.0']);
   } finally {
     await close(editor);
   }
