@@ -12,7 +12,29 @@ export interface SelectionFromEventOptions {
   containerPath?: readonly number[];
 }
 
+export const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
 const NON_OBJECT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META']);
+
+// SVG elements that are never rendered objects: paint servers, references,
+// and metadata. The svg root itself stays an object; rendered shapes such as
+// g, path, circle, line, rect, text, and use remain objects.
+const SVG_NON_OBJECT_TAGS = new Set([
+  'DEFS',
+  'TITLE',
+  'DESC',
+  'METADATA',
+  'SYMBOL',
+  'CLIPPATH',
+  'MASK',
+  'PATTERN',
+  'MARKER',
+  'LINEARGRADIENT',
+  'RADIALGRADIENT',
+  'FILTER',
+  'TSPAN',
+  'TEXTPATH'
+]);
 
 // Mirrors the editor's TEXT_EDITABLE_SELECTOR text tags: these stand alone as
 // text edit targets even when they wrap inline element children.
@@ -29,18 +51,24 @@ const TEXT_LEAF_TAGS = new Set([
   'FIGCAPTION'
 ]);
 
-function isObjectElement(element: Element): boolean {
-  return (
-    !NON_OBJECT_TAGS.has(element.tagName.toUpperCase()) &&
-    !element.hasAttribute('data-ppt-notes')
-  );
+/** True for an authored object: not notes, scripts, or a non-rendered SVG node. */
+export function isObjectElement(element: Element): boolean {
+  if (NON_OBJECT_TAGS.has(element.tagName.toUpperCase())) return false;
+  if (element.closest('[data-ppt-notes]')) return false;
+  if (
+    element.namespaceURI === SVG_NAMESPACE &&
+    SVG_NON_OBJECT_TAGS.has(element.tagName.toUpperCase())
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function hasObjectChild(element: Element): boolean {
   return Array.from(element.children).some(isObjectElement);
 }
 
-function isGuardedElement(element: Element): boolean {
+export function isGuardedElement(element: Element): boolean {
   // Mirrors the editor's isLockedElement / isHiddenElement / isGroupElement
   // predicates without importing the command layer into this pure module.
   return (
@@ -160,7 +188,7 @@ export function describeContextSegment(element: Element): string {
   return firstClass ? `.${firstClass}` : element.tagName.toLowerCase();
 }
 
-function pathTo(element: Element, root: Element): number[] | null {
+export function pathTo(element: Element, root: Element): number[] | null {
   const path: number[] = [];
   let current: Element = element;
   while (current !== root) {
