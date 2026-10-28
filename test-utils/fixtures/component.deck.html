@@ -13,8 +13,8 @@
   .card .icon { width: 48px; height: 48px; display: grid; place-items: center; }
   .flow { position: absolute; left: 520px; top: 340px; display: flex; gap: 16px; }
   .step { width: 140px; padding: 12px; border: 1px solid #333; }
-  /* The chart and decor sit right of the 700px lead so no component overlaps
-     another; the plan's 520/1100 px would put both under the lead's line box. */
+  /* The chart clears the 700px lead's line box and the decor clears the
+     chart's 500px width; the plan's origins would overlap each of them. */
   .chart-card { position: absolute; left: 900px; top: 80px; width: 500px; margin: 0; }
   .chart-card svg { display: block; width: 100%; height: 220px; }
   .arrow { position: absolute; right: 60px; top: 520px; width: 240px; }

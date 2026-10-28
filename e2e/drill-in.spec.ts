@@ -833,10 +833,9 @@ test('a mixed selection cannot move a locked wrapper child', { tag: '@feature:ne
     // moved, and its parent pad keeps its box.
     expect(await lockedChild.getAttribute('style')).toBeNull();
     const headingAfter = await padHeading.boundingBox();
-    // Snapping may adjust the gesture by a few pixels; the move itself is the
-    // contract, not an exact offset.
-    expect(headingAfter!.x - box.x).toBeGreaterThan(80);
-    expect(headingAfter!.y - box.y).toBeGreaterThan(30);
+    // Snapping may pull the gesture a few pixels toward a guide.
+    expect(Math.abs(headingAfter!.x - box.x - 100)).toBeLessThanOrEqual(5);
+    expect(Math.abs(headingAfter!.y - box.y - 50)).toBeLessThanOrEqual(5);
     const padAfter = await pad.boundingBox();
     expect(Math.abs(padAfter!.x - padBefore.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(padAfter!.y - padBefore.y)).toBeLessThanOrEqual(1);

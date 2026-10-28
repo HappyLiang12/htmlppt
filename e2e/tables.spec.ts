@@ -132,8 +132,7 @@ test.describe('table editing @feature:tables', () => {
       await expect(table.locator('tr')).toHaveCount(3);
       await expect(table.locator('th')).toHaveCount(2);
 
-      // A plain click selects the cell and opens the table toolbar; the
-      // table is the object that drags, not the cell.
+      // A plain click selects the cell and opens the table toolbar.
       const plainCell = table.locator('tr').nth(1).locator('td, th').first();
       await plainCell.click({ position: { x: 20, y: 7 } });
       await expect(page.getByTestId('table-toolbar')).toBeVisible();
