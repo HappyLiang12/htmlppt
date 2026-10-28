@@ -38,6 +38,17 @@ const DECLARED = CSS_ONLY.replace(
   )
   .replace('width: 1200px; height: 900px;', 'width: 1600px; height: 900px;');
 
+// Default body margins put the slide root below the frame origin, so the crop
+// and the selection overlay no longer share an origin.
+const MARGINED = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Offset slide root</title>
+<style>.slide { display: none; width: 800px; height: 600px; background: #f7f5ef; } .slide.active { display: block; }</style>
+</head><body>
+<main data-ppt-deck>
+  <section class="slide active" data-slide-id="s1"><h1>Offset heading</h1></section>
+</main>
+</body></html>`;
+
 interface Box {
   left: number;
   top: number;
@@ -205,6 +216,51 @@ test.describe('editor canvas fit @feature:editor-canvas-fit', () => {
           .toBeLessThanOrEqual(1);
         expect(Math.round(slide.width)).toBe(1600);
         expect(Math.round(slide.height)).toBe(900);
+      } finally {
+        await deck.close();
+      }
+    });
+
+    test('aligns the overlay when the slide root is offset', async ({ page }) => {
+      const deck = await openDeck(page, MARGINED);
+      try {
+        const heading = deck.frame.getByRole('heading', {
+          name: 'Offset heading'
+        });
+        await heading.click();
+        const headingBox = await heading.boundingBox();
+        const rotate = await page.getByTestId('rotate-handle').boundingBox();
+        const handle = await page.getByTestId('handle-n').boundingBox();
+        if (!headingBox || !rotate || !handle) {
+          throw new Error('Overlay handles are missing.');
+        }
+        // The north handle sits on the element's top edge; a crop-origin
+        // mistake lands it halfway down the element and eats the next click.
+        // The 2 px allowance is the selection outline's own border.
+        expect(
+          Math.abs(handle.x + handle.width / 2 - (headingBox.x + headingBox.width / 2))
+        ).toBeLessThanOrEqual(2);
+        expect(Math.abs(handle.y + handle.height / 2 - headingBox.y)).toBeLessThanOrEqual(2);
+        expect(rotate.y + rotate.height).toBeLessThanOrEqual(handle.y);
+
+        await heading.dblclick();
+        const editable = deck.frame.locator('h1[contenteditable="true"]');
+        await expect(editable).toBeVisible();
+        await page.keyboard.press('End');
+        await page.keyboard.type(' edited');
+        const save = page.waitForResponse(
+          (response) =>
+            response.request().method() === 'PUT' &&
+            new URL(response.url()).pathname === '/api/deck'
+        );
+        await page.keyboard.press('Escape');
+        expect((await save).ok()).toBeTruthy();
+        await expect
+          .poll(() => readFile(deck.path, 'utf8'))
+          .toContain('Offset heading edited');
+        const html = await readFile(deck.path, 'utf8');
+        expect(html).not.toContain('data-ppt-preview-slide');
+        expect(html).not.toContain('data-ppt-frame-slide');
       } finally {
         await deck.close();
       }

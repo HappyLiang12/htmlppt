@@ -4302,17 +4302,30 @@ export function App() {
                     }}
                   />
                 </div>
-                <CanvasOverlay
-                  boxes={selectionBoxes}
-                  guides={guides}
-                  scale={scale}
-                  readOnly={
-                    selectionBoxes.length > 1 || blockedAncestor !== null
-                  }
-                  handles={overlayHandles}
-                  onResizeStart={beginResizeSession}
-                  onRotateStart={beginRotateSession}
-                />
+                {/* Selection boxes and guides are measured in iframe
+                    coordinates (slide-relative plus the slide offset), so the
+                    overlay anchors to the frame origin, not the crop origin. */}
+                <div
+                  className="pointer-events-none absolute z-10"
+                  style={{
+                    left: stageCrop.translateX,
+                    top: stageCrop.translateY,
+                    width: activeSlide.width * scale,
+                    height: activeSlide.height * scale
+                  }}
+                >
+                  <CanvasOverlay
+                    boxes={selectionBoxes}
+                    guides={guides}
+                    scale={scale}
+                    readOnly={
+                      selectionBoxes.length > 1 || blockedAncestor !== null
+                    }
+                    handles={overlayHandles}
+                    onResizeStart={beginResizeSession}
+                    onRotateStart={beginRotateSession}
+                  />
+                </div>
                 {transitionPreview && (
                   <div
                     key={transitionPreview.id}
