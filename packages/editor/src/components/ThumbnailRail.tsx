@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SlideInfo } from '@htmlppt/core';
+import { miniatureCrop } from '../canvas-fit';
 import { revealPreviewSlide } from '../frame-reveal';
 import { useI18n } from '../i18n';
+import { measureSlideBox, sameBox, type SlideBox } from '../play-fit';
 import { buildSlideSrcDoc } from '../slide-doc';
 
 /** Slides without a heading still need a readable label in editor chrome. */
@@ -34,13 +36,22 @@ export function SlideMiniature({
       master ? buildSlideSrcDoc(master, slide, { markFrame: false }) : '',
     [master, slide]
   );
-  const scale = width / slide.width;
-  const height = Math.round(slide.height * scale);
+  // The preview measures its own slide box so CSS-sized decks crop instead of
+  // showing the metadata fallback as a band; metadata covers the first paint.
+  const [measured, setMeasured] = useState<SlideBox | null>(null);
+  const box: SlideBox = measured ?? {
+    left: 0,
+    top: 0,
+    width: slide.width,
+    height: slide.height
+  };
+  const crop = miniatureCrop(box, width);
 
   return (
     <div
+      data-testid="slide-miniature"
       className={`relative overflow-hidden bg-white ${className}`}
-      style={{ width, height }}
+      style={{ width, height: Math.round(crop.height) }}
       aria-hidden="true"
     >
       {srcDoc && (
@@ -51,13 +62,20 @@ export function SlideMiniature({
           tabIndex={-1}
           onLoad={(event) => {
             const frameDocument = event.currentTarget.contentDocument;
-            if (frameDocument) revealPreviewSlide(frameDocument);
+            if (!frameDocument) return;
+            revealPreviewSlide(frameDocument);
+            const next = measureSlideBox(frameDocument);
+            if (next) {
+              setMeasured((previous) =>
+                sameBox(previous, next) ? previous : next
+              );
+            }
           }}
           className="pointer-events-none absolute left-0 top-0 border-0"
           style={{
             width: slide.width,
             height: slide.height,
-            transform: `scale(${scale})`,
+            transform: `translate(${crop.translateX}px, ${crop.translateY}px) scale(${crop.scale})`,
             transformOrigin: 'top left'
           }}
         />

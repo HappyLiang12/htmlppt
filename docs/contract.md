@@ -86,6 +86,10 @@ Rules:
   (`invalid-canvas-size`).
 - Slides with different canvas sizes produce the `mixed-canvas-sizes` warning.
   Keep one canvas size per deck. PDF export uses the first slide's size.
+- The editor canvas, thumbnail rail, and sorter crop to the slide's measured
+  content box, so a deck whose CSS size differs from its declared (or default)
+  size shows no inner band; the crop is a view detail and never rewrites the
+  file. Decks whose declared size matches their content are unchanged.
 
 ## Objects
 

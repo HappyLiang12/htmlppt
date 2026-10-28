@@ -139,6 +139,13 @@ import {
   frameSlideElement
 } from './slide-doc';
 import { revealPreviewSlide } from './frame-reveal';
+import { measureSlideBox } from './play-fit';
+import {
+  canvasCrop,
+  sameMeasuredBox,
+  stageBoxFor,
+  type MeasuredBox
+} from './canvas-fit';
 import {
   resolveSelectedTextTarget,
   type TextTargetResult
@@ -687,6 +694,15 @@ export function App() {
     useState<GeometryValues | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
   const [frameEpoch, setFrameEpoch] = useState(0);
+  const [measuredBox, setMeasuredBox] = useState<MeasuredBox | null>(null);
+  const measuredBoxRef = useRef<MeasuredBox | null>(null);
+  measuredBoxRef.current = measuredBox;
+  // The stage frames the measured slide box once the preview has loaded; the
+  // slide metadata is the fallback until then and for decks that declare it.
+  const stageBox = activeSlide
+    ? stageBoxFor(activeSlide, measuredBox)
+    : null;
+  const stageCrop = stageBox ? canvasCrop(stageBox, scale) : null;
   const [slideOpError, setSlideOpError] = useState('');
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [mode, setMode] = useState<'unknown' | 'host' | 'standalone'>(
@@ -1912,9 +1928,10 @@ export function App() {
     const current = stateRef.current;
     const slide = current.slides[current.activeIndex];
     if (!slide) return;
+    const box = stageBoxFor(slide, measuredBoxRef.current);
     const bounds = canvas.current.getBoundingClientRect();
-    const widthScale = Math.max(0.1, (bounds.width - 96) / slide.width);
-    const heightScale = Math.max(0.1, (bounds.height - 96) / slide.height);
+    const widthScale = Math.max(0.1, (bounds.width - 96) / box.width);
+    const heightScale = Math.max(0.1, (bounds.height - 96) / box.height);
     actionsRef.current.setScale(Math.min(widthScale, heightScale, 1));
   }, []);
 
@@ -1940,14 +1957,15 @@ export function App() {
   }, [view, playing]);
 
   useEffect(() => {
-    // Fit only when the slide identity or the canvas size changes. Depending
-    // on the SlideInfo object would refit after every commit, because commits
-    // re-detect the slide list and a user zoom would be lost.
+    // Fit only when the slide identity, its measured box, or the canvas size
+    // changes. Depending on the SlideInfo object would refit after every
+    // commit, because commits re-detect the slide list and a user zoom would
+    // be lost.
     computeFitScale();
   }, [
     activeSlide?.id,
-    activeSlide?.width,
-    activeSlide?.height,
+    stageBox?.width,
+    stageBox?.height,
     canvasSize.width,
     canvasSize.height,
     computeFitScale,
@@ -3316,6 +3334,17 @@ export function App() {
     revealPreviewSlide(frameDocument);
     setFrameEpoch((value) => value + 1);
 
+    // The stage crops to the measured box so CSS-sized decks do not show the
+    // metadata fallback as an inner band. The measurement is session-only.
+    const measured = measureSlideBox(frameDocument);
+    const activeId = stateRef.current.slides[stateRef.current.activeIndex]?.id;
+    if (measured && activeId) {
+      const next = { id: activeId, box: measured };
+      setMeasuredBox((previous) =>
+        sameMeasuredBox(previous, next) ? previous : next
+      );
+    }
+
     frameDocument.addEventListener('dblclick', (event) => {
       const target = eventElement(event.target);
       if (!target || !frameDocument.body.contains(target)) return;
@@ -4244,40 +4273,59 @@ export function App() {
                 </div>
               </div>
             )}
-            {activeSlide ? (
+            {activeSlide && stageCrop ? (
               <div
+                data-testid="canvas-stage"
                 className="relative shadow-[0_24px_80px_var(--editor-shadow-stage)]"
                 style={{
-                  width: activeSlide.width * scale,
-                  height: activeSlide.height * scale
+                  width: stageCrop.width,
+                  height: stageCrop.height
                 }}
               >
-                <iframe
-                  key={state.documentEpoch}
-                  ref={frame}
-                  title={t('rail.preview')}
-                  sandbox="allow-same-origin"
-                  srcDoc={srcDoc}
-                  onLoad={onFrameLoad}
-                  className="absolute left-0 top-0 border-0 bg-white"
+                {/* Only the frame is clipped: handles that reach past the
+                    slide edge (the rotate handle sits above it) must stay
+                    clickable. */}
+                <div className="absolute inset-0 overflow-hidden">
+                  <iframe
+                    key={state.documentEpoch}
+                    ref={frame}
+                    title={t('rail.preview')}
+                    sandbox="allow-same-origin"
+                    srcDoc={srcDoc}
+                    onLoad={onFrameLoad}
+                    className="absolute left-0 top-0 border-0 bg-white"
+                    style={{
+                      width: activeSlide.width,
+                      height: activeSlide.height,
+                      transform: `translate(${stageCrop.translateX}px, ${stageCrop.translateY}px) scale(${scale})`,
+                      transformOrigin: 'top left'
+                    }}
+                  />
+                </div>
+                {/* Selection boxes and guides are measured in iframe
+                    coordinates (slide-relative plus the slide offset), so the
+                    overlay anchors to the frame origin, not the crop origin. */}
+                <div
+                  className="pointer-events-none absolute z-10"
                   style={{
-                    width: activeSlide.width,
-                    height: activeSlide.height,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left'
+                    left: stageCrop.translateX,
+                    top: stageCrop.translateY,
+                    width: activeSlide.width * scale,
+                    height: activeSlide.height * scale
                   }}
-                />
-                <CanvasOverlay
-                  boxes={selectionBoxes}
-                  guides={guides}
-                  scale={scale}
-                  readOnly={
-                    selectionBoxes.length > 1 || blockedAncestor !== null
-                  }
-                  handles={overlayHandles}
-                  onResizeStart={beginResizeSession}
-                  onRotateStart={beginRotateSession}
-                />
+                >
+                  <CanvasOverlay
+                    boxes={selectionBoxes}
+                    guides={guides}
+                    scale={scale}
+                    readOnly={
+                      selectionBoxes.length > 1 || blockedAncestor !== null
+                    }
+                    handles={overlayHandles}
+                    onResizeStart={beginResizeSession}
+                    onRotateStart={beginRotateSession}
+                  />
+                </div>
                 {transitionPreview && (
                   <div
                     key={transitionPreview.id}
