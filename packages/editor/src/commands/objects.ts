@@ -55,6 +55,53 @@ export function isHiddenElement(element: Element | null | undefined): boolean {
   return (element as HTMLElement | null)?.style?.display === 'none';
 }
 
+/**
+ * A locked, hidden, or group ancestor along a selection path owns that
+ * subtree, so an Alt-drilled child inside one must stay inert. Nested authored
+ * guards count: checking only `path[0]` would miss a group, lock, or hidden
+ * wrapper deeper inside an unlocked top-level object. The target itself is
+ * judged by each caller, whose rules differ (a group rotates but does not
+ * resize).
+ */
+export function blockedPathAncestor(
+  slide: Element,
+  path: readonly number[]
+): Element | null {
+  for (let depth = 1; depth < path.length; depth += 1) {
+    const element = elementAtPath(slide, path.slice(0, depth));
+    if (!element) return null;
+    if (
+      isLockedElement(element) ||
+      isHiddenElement(element) ||
+      isGroupElement(element)
+    ) {
+      return element;
+    }
+  }
+  return null;
+}
+
+/**
+ * The nearest guarded element on the path, including the target. Callers that
+ * mutate a whole subtree — appearance, table structure, chart data — must
+ * reject a guarded target as well as a guarded ancestor.
+ */
+export function guardedPathElement(
+  slide: Element,
+  path: readonly number[]
+): Element | null {
+  const target = elementAtPath(slide, path);
+  if (!target) return null;
+  if (
+    isLockedElement(target) ||
+    isHiddenElement(target) ||
+    isGroupElement(target)
+  ) {
+    return target;
+  }
+  return blockedPathAncestor(slide, path);
+}
+
 function geometryCommand(command: ObjectCommand): boolean {
   return (
     command.type === 'group' ||

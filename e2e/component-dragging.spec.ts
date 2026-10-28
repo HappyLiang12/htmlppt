@@ -910,3 +910,102 @@ test('drags a nested svg root with a transform', { tag: '@feature:component-drag
     await deck.close();
   }
 });
+
+test('duplicates and deletes a nested component inside its parent', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    const heading = deck.frame.locator('#headline');
+    await heading.click();
+    const sourceBox = await heading.boundingBox();
+    if (!sourceBox) throw new Error('No box for #headline');
+
+    const duplicateSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+d');
+    await duplicateSave;
+
+    // The copy lands inside #pad, right after its source.
+    await expect(deck.frame.locator('#pad h1')).toHaveCount(2);
+    const clone = deck.frame.locator('#pad h1').nth(1);
+    expect(await clone.evaluate((element) => element.previousElementSibling?.id)).toBe('headline');
+    const cloneBox = await clone.boundingBox();
+    if (!cloneBox) throw new Error('No box for the duplicate');
+    const slideBox = await deck.frame.locator('[data-slide-id]').boundingBox();
+    if (!slideBox) throw new Error('No box for the slide');
+    // The copy offset is 20 design px; the canvas scales the 1600 px slide.
+    const scale = slideBox.width / 1600;
+    expect((cloneBox.x - sourceBox.x) / scale).toBeCloseTo(20, 0);
+    expect((cloneBox.y - sourceBox.y) / scale).toBeCloseTo(20, 0);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // Undo removes the copy and clears the selection.
+    const undoSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+z');
+    await undoSave;
+    await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
+
+    // Select the source again (undo clears selections), then delete it.
+    await heading.click();
+    const deleteSave = waitForDeckSave(page);
+    await page.keyboard.press('Delete');
+    await deleteSave;
+    await expect(deck.frame.locator('#headline')).toHaveCount(0);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('shows the nested structural hint and refuses a nested multi-selection', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // A single nested selection explains why structural commands are off.
+    await deck.frame.locator('#headline').click();
+    await expect(page.getByTestId('inspector-nested-structural')).toBeVisible();
+
+    // A nested multi-selection renders the multi hint instead (the Inspector
+    // branches on multi before nested) and refuses duplicate without saving.
+    await deck.frame.locator('#chip-one').click({ modifiers: ['Shift'] });
+    await expect(page.getByTestId('selection-outline')).toHaveCount(2);
+    await page.keyboard.press('Control+d');
+    await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('copies and pastes a nested component as its sibling', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    const heading = deck.frame.locator('#headline');
+    await heading.click();
+    await page.keyboard.press('Control+c');
+    const sourceBox = await heading.boundingBox();
+    if (!sourceBox) throw new Error('No box for #headline');
+
+    await deck.frame.locator('#lead').click();
+    const pasteSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+v');
+    await pasteSave;
+
+    // The paste is a sibling of the anchor inside #pad, immediately after it,
+    // and keeps the source geometry plus the 20 px copy offset. (#lead sits at
+    // y=180, so an absolute y comparison against it cannot prove nesting.)
+    await expect(deck.frame.locator('#pad h1')).toHaveCount(2);
+    const clone = deck.frame.locator('#pad h1').nth(1);
+    expect(await clone.evaluate((element) => element.previousElementSibling?.id)).toBe('lead');
+    expect(await clone.evaluate((element) => element.parentElement?.id)).toBe('pad');
+    const cloneBox = await clone.boundingBox();
+    if (!cloneBox) throw new Error('No box for the pasted copy');
+    const slideBox = await deck.frame.locator('[data-slide-id]').boundingBox();
+    if (!slideBox) throw new Error('No box for the slide');
+    // The copy offset is 20 design px; the canvas scales the 1600 px slide.
+    const scale = slideBox.width / 1600;
+    expect((cloneBox.x - sourceBox.x) / scale).toBeCloseTo(20, 0);
+    expect((cloneBox.y - sourceBox.y) / scale).toBeCloseTo(20, 0);
+    expect(await clone.getAttribute('data-ppt-el')).not.toBe('headline');
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+  } finally {
+    await deck.close();
+  }
+});

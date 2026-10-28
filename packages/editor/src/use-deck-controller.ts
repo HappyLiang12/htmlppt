@@ -20,14 +20,17 @@ import {
   type Autosave,
   type DeckRevisionEvent
 } from './live-sync';
-import { topLevelObjects, type SelectionTarget } from './selection';
-import { normalizeSelectionPaths } from './component-target';
+import { elementAtPath, topLevelObjects, type SelectionTarget } from './selection';
+import { isTableInternal, normalizeSelectionPaths } from './component-target';
 import {
   collectObjectHtml,
+  deleteComponentPaths,
   deleteObjectPaths,
+  pasteComponentNode,
   pasteObjectHtml,
   type PastedObjectMeasure
 } from './object-ops';
+import { blockedPathAncestor } from './commands/objects';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
 import { clampSlideIndex } from './slide-index';
 import type { MessageKey, Translator } from './i18n';
@@ -101,6 +104,12 @@ export interface SlideMutationOptions {
 export interface PendingEdit {
   apply(): boolean;
   discard(): void;
+}
+
+interface ClipboardComponent {
+  node: Element;
+  parentTag: string;
+  svg: boolean;
 }
 
 export interface DeckControllerActions {
@@ -244,7 +253,7 @@ export function useDeckController(
   const pendingEditsRef = useRef(new Map<string, PendingEdit>());
   const settlingRef = useRef(false);
   const historyRef = useRef(new History<string, number>());
-  const clipboardRef = useRef<string[]>([]);
+  const clipboardRef = useRef<ClipboardComponent[]>([]);
   const persistenceRef = useRef<DeckPersistence>(
     options.persistence ?? hostPersistence()
   );
@@ -823,15 +832,25 @@ export function useDeckController(
   );
 
   const copySelection = useCallback(() => {
+    const targets = stateRef.current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
+    );
+    if (targets.length === 0) return;
     const slide = slidesRef.current[activeIndexRef.current];
     if (!slide) return;
-    const html = collectObjectHtml(
-      slide.element,
-      stateRef.current.selections
-        .filter((target) => target.slideIndex === activeIndexRef.current)
-        .map((target) => target.path)
-    );
-    if (html.length > 0) clipboardRef.current = html;
+    const components: ClipboardComponent[] = [];
+    for (const target of targets) {
+      const element = elementAtPath(slide.element, target.path);
+      if (!element || isTableInternal(element)) continue;
+      const parent = element.parentElement;
+      if (!parent) continue;
+      components.push({
+        node: element.cloneNode(true) as Element,
+        parentTag: parent.tagName.toLowerCase(),
+        svg: element.namespaceURI === 'http://www.w3.org/2000/svg'
+      });
+    }
+    if (components.length > 0) clipboardRef.current = components;
   }, []);
 
   const pasteHtml = useCallback(
@@ -858,43 +877,111 @@ export function useDeckController(
     [applySelections, commitMaster]
   );
 
-  const pasteObjects = useCallback(
-    () => pasteHtml(clipboardRef.current),
-    [pasteHtml]
-  );
-
-  const duplicateSelection = useCallback(async () => {
+  const pasteObjects = useCallback(async () => {
+    const components = clipboardRef.current;
+    if (components.length === 0) return;
+    const current = stateRef.current;
     const slide = slidesRef.current[activeIndexRef.current];
     if (!slide) return;
-    const html = collectObjectHtml(
-      slide.element,
-      stateRef.current.selections
-        .filter((target) => target.slideIndex === activeIndexRef.current)
-        .map((target) => target.path)
+    const selected = current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
     );
-    if (html.length > 0) await pasteHtml(html);
-  }, [pasteHtml]);
+    // A multi-selection has no unambiguous insertion anchor.
+    if (selected.length > 1) return;
+    await commitMaster((master) => {
+      const targets: SelectionTarget[] = [];
+      for (const component of components) {
+        const anchor = selected[0] ?? null;
+        if (anchor && anchor.path.length > 1) {
+          const parentPath = anchor.path.slice(0, -1);
+          const parent = elementAtPath(slide.element, parentPath);
+          const compatible =
+            parent !== null &&
+            (component.svg
+              ? parent.namespaceURI === 'http://www.w3.org/2000/svg'
+              : parent.tagName.toLowerCase() === component.parentTag);
+          if (compatible) {
+            const pasted = pasteComponentNode(
+              master,
+              activeIndexRef.current,
+              component.node,
+              parentPath,
+              anchor.path,
+              measurePastedRef.current
+            );
+            if (pasted) targets.push(pasted);
+            continue;
+          }
+          if (component.svg) continue;
+          // An HTML component copied elsewhere still pastes at slide level.
+        }
+        if (component.svg) continue;
+        const pasted = pasteComponentNode(
+          master,
+          activeIndexRef.current,
+          component.node,
+          [],
+          null,
+          measurePastedRef.current
+        );
+        if (pasted) targets.push(pasted);
+      }
+      if (targets.length > 0) applySelections(targets);
+    });
+  }, [applySelections, commitMaster]);
+
+  const duplicateSelection = useCallback(async () => {
+    const current = stateRef.current;
+    const slide = slidesRef.current[activeIndexRef.current];
+    if (!slide) return;
+    const targets = current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
+    );
+    if (targets.length !== 1 || targets[0].path.length < 2) {
+      // Top-level single and every multi-selection keep the string path.
+      const html = collectObjectHtml(
+        slide.element,
+        targets.map((target) => target.path)
+      );
+      if (html.length > 0) await pasteHtml(html);
+      return;
+    }
+    const target = targets[0];
+    const element = elementAtPath(slide.element, target.path);
+    if (!element || !element.parentElement || isTableInternal(element)) return;
+    if (blockedPathAncestor(slide.element, target.path) !== null) return;
+    await commitMaster((master) => {
+      const pasted = pasteComponentNode(
+        master,
+        activeIndexRef.current,
+        element,
+        target.path.slice(0, -1),
+        target.path,
+        measurePastedRef.current
+      );
+      if (pasted) applySelections([pasted]);
+    });
+  }, [applySelections, commitMaster, pasteHtml]);
 
   const deleteSelection = useCallback(async () => {
     const current = stateRef.current;
     const slideIndex = activeIndexRef.current;
     const slide = slidesRef.current[slideIndex];
     if (!slide) return;
-    const objects = new Set(topLevelObjects(slide.element));
-    const paths = current.selections
-      .filter(
-        (target) =>
-          target.slideIndex === slideIndex &&
-          target.path.length === 1 &&
-          objects.has(slide.element.children[target.path[0] ?? -1] as Element)
-      )
-      .map((target) => target.path);
-    if (paths.length === 0) return;
-
-    // Clear the selection inside the mutation, before the save is awaited, so
-    // a slow save cannot clear a newer selection made after a slide switch.
+    const targets = current.selections.filter(
+      (target) => target.slideIndex === slideIndex
+    );
+    if (targets.length === 0) return;
+    const nested = targets.some((target) => target.path.length > 1);
+    if (targets.length > 1 && nested) return;
+    if (targets.length === 1 && targets[0].path.length > 1) {
+      const element = elementAtPath(slide.element, targets[0].path);
+      if (!element || isTableInternal(element) || blockedPathAncestor(slide.element, targets[0].path)) return;
+    }
     await commitMaster((master) => {
-      const removed = deleteObjectPaths(master, slideIndex, paths);
+      const removed = nested
+        ? deleteComponentPaths(master, slideIndex, targets.map((target) => target.path))
+        : deleteObjectPaths(master, slideIndex, targets.map((target) => target.path));
       if (removed > 0 && activeIndexRef.current === slideIndex) {
         applySelections([]);
       }

@@ -159,6 +159,8 @@ import {
 import type { PastedObjectGeometry } from './object-ops';
 import {
   applyObjectCommand,
+  blockedPathAncestor,
+  guardedPathElement,
   isGroupElement,
   isHiddenElement,
   isLockedElement,
@@ -458,53 +460,6 @@ function selectionElements(
 }
 
 /**
- * A locked, hidden, or group ancestor along a selection path owns that
- * subtree, so an Alt-drilled child inside one must stay inert. Nested authored
- * guards count: checking only `path[0]` would miss a group, lock, or hidden
- * wrapper deeper inside an unlocked top-level object. The target itself is
- * judged by each caller, whose rules differ (a group rotates but does not
- * resize).
- */
-function blockedPathAncestor(
-  slide: Element,
-  path: readonly number[]
-): Element | null {
-  for (let depth = 1; depth < path.length; depth += 1) {
-    const element = elementAtPath(slide, path.slice(0, depth));
-    if (!element) return null;
-    if (
-      isLockedElement(element) ||
-      isHiddenElement(element) ||
-      isGroupElement(element)
-    ) {
-      return element;
-    }
-  }
-  return null;
-}
-
-/**
- * The nearest guarded element on the path, including the target. Callers that
- * mutate a whole subtree — appearance, table structure, chart data — must
- * reject a guarded target as well as a guarded ancestor.
- */
-function guardedPathElement(
-  slide: Element,
-  path: readonly number[]
-): Element | null {
-  const target = elementAtPath(slide, path);
-  if (!target) return null;
-  if (
-    isLockedElement(target) ||
-    isHiddenElement(target) ||
-    isGroupElement(target)
-  ) {
-    return target;
-  }
-  return blockedPathAncestor(slide, path);
-}
-
-/**
  * A locked, hidden, or group wrapper owns its subtree, so every edit that
  * targets a path inside it must be rejected. Path-based callers that capture
  * their path across an await (image uploads) cannot rely on the selection
@@ -613,18 +568,24 @@ export function App() {
   /**
    * Measures a pasted copy in the rendered preview. The master document is
    * inert, so class-supplied positioning and coordinates only resolve here.
-   * The staging clone is removed in the same synchronous task.
+   * A nested paste is staged inside its live destination parent, because an
+   * offset parent's padding box is the containing block. The staging clone is
+   * removed in the same synchronous task.
    */
   const measurePastedObject = useCallback(
-    (element: Element): PastedObjectGeometry | null => {
+    (element: Element, parentPath?: readonly number[]): PastedObjectGeometry | null => {
       const frameDocument = frame.current?.contentDocument;
       if (!frameDocument) return null;
       const liveSlide: Element | null =
         frameDocument.querySelector(`[${FRAME_SLIDE_ATTRIBUTE}]`) ??
         frameDocument.body;
       if (!liveSlide) return null;
+      const liveParent =
+        parentPath && parentPath.length > 0
+          ? elementAtPath(liveSlide, parentPath) ?? liveSlide
+          : liveSlide;
       const clone = liveSlide.ownerDocument.importNode(element, true) as Element;
-      liveSlide.appendChild(clone);
+      liveParent.appendChild(clone);
       try {
         const view = liveSlide.ownerDocument.defaultView;
         const position = view?.getComputedStyle(clone).position ?? '';

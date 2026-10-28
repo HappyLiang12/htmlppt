@@ -1117,7 +1117,10 @@ export function Inspector({
               </p>
             ) : (
               nested && (
-                <p className="text-[11px] text-muted">
+                <p
+                  data-testid="inspector-nested-structural"
+                  className="text-[11px] text-muted"
+                >
                   {t('inspector.nestedStructuralHint')}
                 </p>
               )
