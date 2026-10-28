@@ -132,6 +132,16 @@ test.describe('table editing @feature:tables', () => {
       await expect(table.locator('tr')).toHaveCount(3);
       await expect(table.locator('th')).toHaveCount(2);
 
+      // A plain click selects the cell and opens the table toolbar; the
+      // table is the object that drags, not the cell.
+      const plainCell = table.locator('tr').nth(1).locator('td, th').first();
+      await plainCell.click({ position: { x: 20, y: 7 } });
+      await expect(page.getByTestId('table-toolbar')).toBeVisible();
+      await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+        'data-selected-path',
+        '1.0.1.0'
+      );
+
       await editCell(page, harness.frame, 1, 0, 'Revenue');
       await expect(
         harness.frame.locator('table[data-ppt-el] tr').nth(1).locator('td').first()
@@ -139,6 +149,14 @@ test.describe('table editing @feature:tables', () => {
 
       await selectCell(page, harness.frame, 1, 0);
       await expect(page.getByTestId('table-toolbar')).toBeVisible();
+      // A non-empty cell shows the text selection toolbar too; the table bar
+      // must not paint over it.
+      const tableBar = await page.getByTestId('table-toolbar').boundingBox();
+      const textBar = await page.getByTestId('text-toolbar').boundingBox();
+      if (!tableBar || !textBar) {
+        throw new Error('Expected both the table and text toolbars.');
+      }
+      expect(tableBar.y + tableBar.height).toBeLessThanOrEqual(textBar.y);
       await page.getByTestId('table-row-below').click();
       await waitForSaved(page);
       await expect(table.locator('tr')).toHaveCount(4);

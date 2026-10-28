@@ -131,11 +131,9 @@ test('selects chips, steps, icons, cards, chart figures and the outer arrow', { 
     for (const [selector, id, expectedSelector, position] of cases) {
       const target = deck.frame.locator(selector);
       if (selector === '#arrow-path') {
-        // The authored arrow is a zero-area line: it paints nothing, so
-        // Playwright's visibility check refuses a locator click even though its
-        // endpoint is hit-testable. Clicking the endpoint still exercises the
-        // slide-level rule; the endpoint and the svg root resolve to the same
-        // arrow component.
+        // The authored arrow is a zero-area line, so Playwright's visibility
+        // check refuses a locator click. Clicking the svg's endpoint area still
+        // exercises the slide-level rule: the svg root resolves to the arrow.
         const pathBox = await target.boundingBox();
         if (!pathBox) throw new Error('Arrow path has no box');
         await page.mouse.click(pathBox.x + pathBox.width, pathBox.y);
@@ -218,11 +216,15 @@ test('shift-click builds a multi-selection across depths', { tag: '@feature:comp
     await expect(page.getByTestId('selection-outline')).toHaveCount(2);
     const headline = await deck.frame.locator('#headline').boundingBox();
     const chip = await deck.frame.locator('#chip-one').boundingBox();
+    const save = waitForDeckSave(page);
     await page.mouse.move(headline!.x + headline!.width / 2, headline!.y + headline!.height / 2);
     await page.mouse.down();
     await page.mouse.move(headline!.x + headline!.width / 2 + 40, headline!.y + headline!.height / 2, { steps: 5 });
     await page.mouse.up();
+    await save;
+    const movedHeadline = await deck.frame.locator('#headline').boundingBox();
     const movedChip = await deck.frame.locator('#chip-one').boundingBox();
+    expect(Math.abs(movedHeadline!.x - headline!.x - 40)).toBeLessThanOrEqual(2);
     expect(Math.abs(movedChip!.x - chip!.x - 40)).toBeLessThanOrEqual(2);
   } finally {
     await deck.close();

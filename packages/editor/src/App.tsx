@@ -322,6 +322,13 @@ function eventElement(target: EventTarget | null): Element | null {
   return node && node.nodeType === 1 ? (node as Element) : null;
 }
 
+/** The container path a slide-level double-click enters, or null. */
+function slideEntryPath(slide: Element, target: Element): number[] | null {
+  const component = resolveComponent(slide, target);
+  if (!component || !isEnterableContainer(component)) return null;
+  return componentPath(slide, component);
+}
+
 function resolveTextTargetAt(
   frameDocument: Document | null | undefined,
   slideInfo: SlideInfo | undefined,
@@ -3445,11 +3452,7 @@ export function App() {
       const next =
         containerPathRef.current.length > 0
           ? contextEntry(frameSlide, target, containerPathRef.current)
-          : (() => {
-              const component = resolveComponent(frameSlide, target);
-              if (!component || !isEnterableContainer(component)) return null;
-              return componentPath(frameSlide, component);
-            })();
+          : slideEntryPath(frameSlide, target);
       if (!next) {
         // A double-click on the entered container's own padding asks to
         // enter the level the user is already at. Neither "enter the
@@ -4295,7 +4298,13 @@ export function App() {
             className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-12"
           >
             {selectionToolbar && !textToolbar && (
-              <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center">
+              // A selected table cell shows both bars; the text bar moves
+              // below the table bar instead of painting under it.
+              <div
+                className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center ${
+                  tableState ? 'top-16' : 'top-2'
+                }`}
+              >
                 <div className="pointer-events-auto overflow-hidden rounded-md border border-line-strong shadow-[0_16px_40px_var(--editor-shadow-panel)]">
                   <TextToolbar
                     mode="selection"

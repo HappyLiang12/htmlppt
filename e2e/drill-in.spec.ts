@@ -810,10 +810,13 @@ test('a mixed selection cannot move a locked wrapper child', { tag: '@feature:ne
     await expect(outline).toHaveAttribute('data-selected-path', '3.0');
     await expect(outline).toHaveAttribute('data-readonly', 'true');
 
-    // Shift-clicking the top-level pad used to append it to the nested base,
-    // and dragging that mixed selection moved the locked wrapper's child.
+    // Shift-clicking the heading used to append it to the nested base, and
+    // dragging that mixed selection moved the locked wrapper's child.
     await padHeading.click({ modifiers: ['Shift'] });
 
+    const pad = editor.frame.locator('[data-slide-id="s2"] .pad');
+    const padBefore = await pad.boundingBox();
+    if (!padBefore) throw new Error('Pad has no bounding box.');
     const box = await padHeading.boundingBox();
     if (!box) throw new Error('Pad heading has no bounding box.');
     const startX = box.x + box.width / 2;
@@ -826,8 +829,17 @@ test('a mixed selection cannot move a locked wrapper child', { tag: '@feature:ne
     expect((await save).ok()).toBe(true);
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
 
-    // The locked child stays inert; the top-level pad is the object that moved.
+    // The locked child stays inert; the clicked heading is the object that
+    // moved, and its parent pad keeps its box.
     expect(await lockedChild.getAttribute('style')).toBeNull();
+    const headingAfter = await padHeading.boundingBox();
+    // Snapping may adjust the gesture by a few pixels; the move itself is the
+    // contract, not an exact offset.
+    expect(headingAfter!.x - box.x).toBeGreaterThan(80);
+    expect(headingAfter!.y - box.y).toBeGreaterThan(30);
+    const padAfter = await pad.boundingBox();
+    expect(Math.abs(padAfter!.x - padBefore.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(padAfter!.y - padBefore.y)).toBeLessThanOrEqual(1);
     const saved = await readFile(join(editor.directory, editor.file), 'utf8');
     expect(saved).toContain('<p>Locked heading</p>');
 
