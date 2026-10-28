@@ -24,6 +24,7 @@
   .group { position: absolute; left: 1100px; top: 620px; padding: 12px; border: 1px solid #333; }
   .locked { position: absolute; left: 1300px; top: 620px; padding: 12px; border: 1px solid #333; }
   .decor { position: absolute; left: 1400px; top: 80px; width: 160px; height: 160px; border-radius: 50%; background: #ddd; }
+  .editable { position: absolute; left: 1100px; top: 400px; padding: 8px; border: 1px dashed #999; }
   .contents { display: contents; }
 </style></head>
 <body>
@@ -54,6 +55,7 @@
       <div class="locked" id="locked" data-ppt-el="locked" data-ppt-locked="true"><p id="locked-child">Locked child</p></div>
       <div class="contents"><p id="contents-child" data-ppt-el="contents-child">Contents child</p></div>
       <div class="decor" id="decor"></div>
+      <div class="editable" id="editable" contenteditable="true">Authored editable</div>
     </div>
     <svg class="arrow" id="arrow" viewBox="0 0 100 50" data-ppt-el="arrow"><path id="arrow-path" d="M0 25h80"/></svg>
     <aside data-ppt-notes="notes"></aside>

@@ -724,6 +724,9 @@ export function App() {
   const hoverKeyRef = useRef('');
   const hoverFrameRef = useRef<number | null>(null);
   const hoverPointRef = useRef<Point | null>(null);
+  // Read at sample time, not at enqueue time: an Alt press between a queued
+  // pointer sample and its frame must not be overwritten by the older sample.
+  const hoverAltRef = useRef(false);
   // Re-resolves the last pointer sample when Alt changes, because Alt changes
   // the click granularity (deepest node) without moving the pointer.
   const hoverResampleRef = useRef<((altKey: boolean) => void) | null>(null);
@@ -3770,21 +3773,24 @@ export function App() {
 
     const updateHover = (event: PointerEvent) => {
       hoverPointRef.current = { x: event.clientX, y: event.clientY };
+      hoverAltRef.current = event.altKey;
       // Coalesce pointer moves into one sample per frame.
       if (hoverFrameRef.current !== null) return;
       const point = hoverPointRef.current;
-      const altKey = event.altKey;
       hoverFrameRef.current = window.requestAnimationFrame(() => {
         hoverFrameRef.current = null;
-        sampleHover(point, altKey);
+        sampleHover(point, hoverAltRef.current);
       });
     };
     const resampleForAlt = (event: KeyboardEvent) => {
       if (event.key !== 'Alt' || !hoverPointRef.current) return;
+      hoverAltRef.current = event.altKey;
       sampleHover(hoverPointRef.current, event.altKey);
     };
     hoverResampleRef.current = (altKey) => {
-      if (hoverPointRef.current) sampleHover(hoverPointRef.current, altKey);
+      if (!hoverPointRef.current) return;
+      hoverAltRef.current = altKey;
+      sampleHover(hoverPointRef.current, altKey);
     };
     frameDocument.addEventListener('pointermove', updateHover);
     frameDocument.addEventListener('pointerleave', clearHover);

@@ -284,9 +284,23 @@ test('hover previews the component a click will select', { tag: '@feature:compon
     await expect(page.getByTestId('hover-label')).toHaveText('div.locked');
     expect(await deck.frame.locator('#locked-child').evaluate((el) => getComputedStyle(el).cursor)).toBe('default');
 
-    // Leaving the frame drops the preview; nothing is left on the editor.
+    // An authored editable keeps its own caret: a click neither selects nor
+    // drags it, so hover shows nothing.
+    await deck.frame.locator('#editable').hover();
+    await expect(outline).toHaveCount(0);
+
+    // Leaving the frame drops the preview and the attribute.
+    await deck.frame.locator('#headline').hover();
+    await expect(outline).toBeVisible();
     await page.mouse.move(5, 5);
     await expect(outline).toHaveCount(0);
+    expect(
+      await deck.frame
+        .locator('#headline')
+        .evaluate((el) =>
+          el.ownerDocument.documentElement.hasAttribute('data-ppt-hover')
+        )
+    ).toBe(false);
 
     // Alt deepens the click target, so the preview follows it without the
     // pointer moving; the parent document owns focus in this flow.
