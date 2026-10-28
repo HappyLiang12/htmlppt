@@ -68,6 +68,29 @@ async function openDeck(page: Page) {
   };
 }
 
+/**
+ * Reads the raw child-index path the editor uses for a selection. Hardcoding
+ * the fixture path would silently break whenever an unrelated sibling is
+ * inserted ahead of the target.
+ */
+async function pathOf(
+  deck: { frame: ReturnType<Page['frameLocator']> },
+  selector: string
+): Promise<string> {
+  return deck.frame.locator(selector).evaluate((element) => {
+    const path: number[] = [];
+    let current: Element | null = element;
+    const slide = element.closest('[data-slide-id]');
+    while (current && slide && current !== slide) {
+      const parent: Element | null = current.parentElement;
+      if (!parent) break;
+      path.unshift(Array.from(parent.children).indexOf(current));
+      current = parent;
+    }
+    return path.join('.');
+  });
+}
+
 test('selects and drags the heading, not the wrapper', { tag: '@feature:component-dragging' }, async ({ page }) => {
   const deck = await openDeck(page);
   try {
@@ -338,6 +361,92 @@ test('hover previews the component a click will select', { tag: '@feature:compon
     await expect(page.getByTestId('hover-label')).toHaveText('path');
     await page.keyboard.up('Alt');
     await expect(page.getByTestId('hover-label')).toHaveText('svg');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('enters an SVG and drags a circle with a transform', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The chart figure is atomic: the first double-click enters the figure,
+    // the second enters its svg, and then the circle is a direct child.
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('chart-card');
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('svg');
+    await deck.frame.locator('#dot').click();
+
+    const outline = page.getByTestId('selection-outline');
+    await expect(outline).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#dot')
+    );
+    // SVG internals move through their transform, so absolute geometry
+    // handles would lie about what the gesture writes.
+    await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
+    await expect(page.getByTestId('rotate-handle')).toHaveCount(0);
+    await expect(page.getByTestId('field-x')).toBeDisabled();
+
+    const box = await deck.frame.locator('#dot').boundingBox();
+    if (!box) throw new Error('No box for #dot');
+    const save = waitForDeckSave(page);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2 + 20, { steps: 5 });
+    await page.mouse.up();
+    await save;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).toMatch(/id="dot"[^>]*transform="translate\([^)]*\)"/);
+    expect(html).not.toMatch(/id="dot"[^>]*position: absolute/);
+  } finally {
+    await deck.close();
+  }
+});
+
+test('keeps a CSS-transformed SVG shape inert', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The svg root carries a class, and the breadcrumb prefers that class over
+    // the tag, so the entered context is named .css-shape.
+    await deck.frame.locator('#css-shape').dblclick();
+    await expect(page.getByTestId('edit-context')).toContainText('.css-shape');
+
+    const dot = deck.frame.locator('#css-dot');
+    // CSS owns the transform, so the attribute is inert: the hover preview
+    // must not promise a move even though the shape stays selectable.
+    await dot.hover();
+    await expect
+      .poll(() => dot.evaluate((element) => getComputedStyle(element).cursor))
+      .toBe('default');
+
+    await dot.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#css-dot')
+    );
+
+    const before = await dot.boundingBox();
+    if (!before) throw new Error('No box for #css-dot');
+    await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(before.x + before.width / 2 + 40, before.y + before.height / 2 + 20, { steps: 5 });
+    await page.mouse.up();
+    // A guarded gesture never writes; give a wrong background save time to
+    // surface before asserting the untouched status.
+    await page.waitForTimeout(250);
+
+    const after = await dot.boundingBox();
+    if (!after) throw new Error('No box for #css-dot after the drag');
+    expect(
+      deviation(fromBoundingBox(after), fromBoundingBox(before))
+    ).toBeLessThanOrEqual(1);
+    expect(await dot.getAttribute('transform')).toBeNull();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).not.toMatch(/id="css-dot"[^>]*transform=/);
+    expect(html).not.toMatch(/id="css-dot"[^>]*position: absolute/);
   } finally {
     await deck.close();
   }

@@ -12,6 +12,7 @@ import {
   rotationFromPointer,
   rotationOf,
   snapAngle,
+  svgCssTransformOverride,
   svgUserDelta,
   type TransformTarget
 } from './transform.js';
@@ -464,5 +465,52 @@ describe('applySvgTranslate', () => {
     const written = shape.getAttribute('transform') ?? '';
     expect(written).toBe('rotate(45 12 12) translate(10 8)');
     expect(written.match(/translate\(/g)?.length).toBe(1);
+  });
+});
+
+describe('svgCssTransformOverride', () => {
+  it('reports an inline style transform as an override', () => {
+    const { svg, shape } = svgShape();
+    (shape as SVGElement).setAttribute('style', 'transform: rotate(45deg)');
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    svg.remove();
+  });
+
+  it('keeps the presentation attribute authoritative when unopposed', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'translate(10 10)');
+
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    svg.remove();
+  });
+
+  it('reports no override when neither source declares a transform', () => {
+    const { svg, shape } = svgShape();
+
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    svg.remove();
+  });
+
+  it('reports an inline style even when the attribute says none', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'none');
+    (shape as SVGElement).setAttribute('style', 'transform: rotate(45deg)');
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    svg.remove();
+  });
+
+  it('trims the presentation attribute before judging it', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', '  translate(10 10)  ');
+
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    svg.remove();
   });
 });

@@ -48,6 +48,23 @@ export function refreshCharts(root: Element): void {
   }
 }
 
+/**
+ * Re-renders the chart figure the element itself is, plus every chart figure
+ * nested inside it. A shape or svg inside a figure must not refresh its owner:
+ * that re-render replaces the svg and discards the shape's authored or dragged
+ * transform. A container that holds a chart still refreshes the chart.
+ */
+export function refreshOwnedCharts(element: Element): void {
+  if (chartFigure(element) === element) {
+    try {
+      refreshChart(element);
+    } catch {
+      // Invalid authored chart JSON keeps its existing rendering.
+    }
+  }
+  refreshCharts(element);
+}
+
 export function withChartData(
   element: Element,
   json: string

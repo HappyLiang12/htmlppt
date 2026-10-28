@@ -51,8 +51,7 @@ import {
 import {
   chartFigure,
   chartJson,
-  refreshChart,
-  refreshCharts,
+  refreshOwnedCharts,
   withChartData
 } from './commands/charts';
 import {
@@ -134,6 +133,7 @@ import {
 import {
   componentLabel,
   componentPath,
+  isSvgInternal,
   isTableInternal,
   resolveComponent
 } from './component-target';
@@ -169,6 +169,7 @@ import {
   angleDelta,
   applyRect,
   applyRotation,
+  applySvgTranslate,
   centerOf,
   containingBlockOffset,
   moveTargets,
@@ -178,6 +179,8 @@ import {
   rotationFromPointer,
   rotationOf,
   snapAngle,
+  svgCssTransformOverride,
+  svgUserDelta,
   type TransformTarget
 } from './transform';
 import {
@@ -286,6 +289,10 @@ interface DragTarget extends TransformTarget {
   path: number[];
   elementId: string | null;
   rotation: number;
+  /** SVG-internal shapes move through their transform, HTML through geometry. */
+  mode: 'html' | 'svg';
+  /** Authored transform captured at gesture start; empty for HTML targets. */
+  authoredTransform: string;
 }
 
 interface HoverTarget {
@@ -1304,7 +1311,7 @@ export function App() {
               : null;
             if (element) {
               try {
-                refreshChart(element);
+                refreshOwnedCharts(element);
               } catch {
                 // Invalid authored chart JSON does not block geometry edits.
               }
@@ -2266,11 +2273,15 @@ export function App() {
       session.moved = true;
       if (session.kind === 'drag') {
         // Detect before the first write: this is the inline position the pin
-        // is about to replace.
-        session.pinned = willAnyPinToAbsolute(
-          session.targets.map((target) => target.element)
+        // is about to replace. SVG-internal shapes keep their transform, so
+        // only HTML targets take part in the pin.
+        const htmlTargets = session.targets.filter(
+          (target) => target.mode === 'html'
         );
-        session.targets.forEach((target) =>
+        session.pinned = willAnyPinToAbsolute(
+          htmlTargets.map((target) => target.element)
+        );
+        htmlTargets.forEach((target) =>
           pinToAbsolute(target.element, target.start, session.slide)
         );
       } else {
@@ -2308,7 +2319,11 @@ export function App() {
       let dy = point.y - session.start.y;
       let nextGuides: Guide[] = [];
       const primary = session.targets[0];
-      if (!noSnap && primary) {
+      // Snap guides are authored in slide space; an SVG shape moves in its own
+      // user space, so a mixed or SVG-only drag stays unsnapped.
+      const allowSnap =
+        !noSnap && session.targets.every((target) => target.mode === 'html');
+      if (allowSnap && primary) {
         const moved: Rect = {
           ...primary.start,
           x: primary.start.x + dx,
@@ -2327,7 +2342,16 @@ export function App() {
       const rects = moveTargets(session.targets, { x: dx, y: dy });
       rects.forEach((rect, index) => {
         const target = session.targets[index];
-        if (target) applyRect(target.element, rect, session.slide);
+        if (!target) return;
+        if (target.mode === 'svg') {
+          applySvgTranslate(
+            target.element,
+            target.authoredTransform,
+            svgUserDelta(target.element, { x: dx, y: dy })
+          );
+        } else {
+          applyRect(target.element, rect, session.slide);
+        }
       });
       setSelectionBoxes(
         session.targets.map((target, index) => ({
@@ -2408,7 +2432,7 @@ export function App() {
       refreshOverlay();
       return;
     }
-    if (session.kind === 'resize') refreshCharts(session.slide);
+    if (session.kind === 'resize') refreshOwnedCharts(session.target.element);
     void commitFrame().then((committed) => {
       if (committed) showPinNotice(session.pinned);
     });
@@ -2487,13 +2511,20 @@ export function App() {
         pinned: false,
         slide,
         slideOffset: slideOffsetOf(slide),
-        targets: items.map((item) => ({
-          element: item.element,
-          start: rectOf(item.element, slide),
-          rotation: rotationOf(item.element),
-          path: item.selection.path,
-          elementId: item.selection.elementId
-        })),
+        targets: items.map((item) => {
+          const svg = isSvgInternal(item.element);
+          return {
+            element: item.element,
+            start: rectOf(item.element, slide),
+            rotation: rotationOf(item.element),
+            path: item.selection.path,
+            elementId: item.selection.elementId,
+            mode: svg ? 'svg' : 'html',
+            authoredTransform: svg
+              ? item.element.getAttribute('transform') ?? ''
+              : ''
+          };
+        }),
         siblingRects: siblingRectsOf(
           slide,
           items.map((item) => item.element)
@@ -3369,11 +3400,19 @@ export function App() {
       // A component selection resolves to the child object itself, so a
       // nested selection drags like a top-level one.
       const clicked = elementAtPath(frameSlide, selected.path);
+      // A CSS transform owns an SVG shape's rendering, so the presentation
+      // attribute this editor writes would stay inert. The shape remains
+      // selectable, but the gesture cannot move it.
+      const cssOwnedShape =
+        clicked !== null &&
+        isSvgInternal(clicked) &&
+        svgCssTransformOverride(clicked);
       if (
         !clicked ||
         isLockedElement(clicked) ||
         isHiddenElement(clicked) ||
-        blockedPathAncestor(frameSlide, selected.path) !== null
+        blockedPathAncestor(frameSlide, selected.path) !== null ||
+        cssOwnedShape
       ) {
         // Locked objects stay selectable but inert: no native text selection
         // drag, and no editor transform session. The same holds for a child
@@ -3394,7 +3433,11 @@ export function App() {
             item.element !== null &&
             !isLockedElement(item.element) &&
             !isHiddenElement(item.element) &&
-            blockedPathAncestor(frameSlide, item.selection.path) === null
+            blockedPathAncestor(frameSlide, item.selection.path) === null &&
+            !(
+              isSvgInternal(item.element) &&
+              svgCssTransformOverride(item.element)
+            )
         )
         .sort((a, b) => {
           if (sameSelection(a.selection, selected)) return -1;
@@ -3756,6 +3799,7 @@ export function App() {
       hoverKeyRef.current = key;
       const draggable =
         !isTableInternal(element) &&
+        !(isSvgInternal(element) && svgCssTransformOverride(element)) &&
         !isLockedElement(element) &&
         blockedPathAncestor(frameSlide, resolved.path) === null;
       setHoverTarget({
@@ -4162,8 +4206,14 @@ export function App() {
       : null;
   const blockedByAncestor =
     selection !== null && selection.path.length > 1 && blockedAncestor !== null;
+  // SVG shapes and table cells move through their own mechanisms; overlay
+  // resize/rotate handles and numeric geometry would write the wrong contract.
+  const svgInternal = primaryObject ? isSvgInternal(primaryObject) : false;
+  const tableInternal = primaryObject ? isTableInternal(primaryObject) : false;
   const overlayHandles =
     blockedAncestor !== null ||
+    svgInternal ||
+    tableInternal ||
     (primaryObject && isLockedElement(primaryObject))
       ? 'none'
       : primaryObject && isGroupElement(primaryObject)
@@ -4708,6 +4758,7 @@ export function App() {
             selection={selection}
             selectionCount={selections.length}
             blockedByAncestor={blockedByAncestor}
+            geometryUnavailable={svgInternal || tableInternal}
             contextPath={containerPath}
             onEnterContext={changeContext}
             geometry={selectionGeometry}

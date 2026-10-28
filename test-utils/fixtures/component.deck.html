@@ -25,6 +25,7 @@
   .locked { position: absolute; left: 1300px; top: 620px; padding: 12px; border: 1px solid #333; }
   .decor { position: absolute; left: 1400px; top: 80px; width: 160px; height: 160px; border-radius: 50%; background: #ddd; }
   .editable { position: absolute; left: 1100px; top: 400px; padding: 8px; border: 1px dashed #999; }
+  .css-shape { position: absolute; left: 700px; top: 720px; width: 120px; height: 120px; }
   .contents { display: contents; }
 </style></head>
 <body>
@@ -56,6 +57,7 @@
       <div class="contents"><p id="contents-child" data-ppt-el="contents-child">Contents child</p></div>
       <div class="decor" id="decor"></div>
       <div class="editable" id="editable" contenteditable="true">Authored editable</div>
+      <svg class="css-shape" id="css-shape" viewBox="0 0 100 100"><circle id="css-dot" cx="50" cy="50" r="30" style="transform: rotate(45deg)"/></svg>
     </div>
     <svg class="arrow" id="arrow" viewBox="0 0 100 50" data-ppt-el="arrow"><path id="arrow-path" d="M0 25h80"/></svg>
     <aside data-ppt-notes="notes"></aside>

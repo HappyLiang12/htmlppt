@@ -96,6 +96,12 @@ export interface InspectorProps {
    * The ancestor owns the subtree, so every geometry field stays disabled.
    */
   blockedByAncestor?: boolean;
+  /**
+   * The selection moves through a mechanism other than absolute geometry,
+   * such as an SVG shape's transform or a table cell's own layout. Numeric
+   * x/y/width/height/rotation would write the wrong contract.
+   */
+  geometryUnavailable?: boolean;
   /** Entered container path; absent means the slide is listed. */
   contextPath?: readonly number[];
   onEnterContext?: (path: number[]) => void;
@@ -369,6 +375,7 @@ export function Inspector({
   selection,
   selectionCount = selection ? 1 : 0,
   blockedByAncestor = false,
+  geometryUnavailable = false,
   contextPath,
   onEnterContext,
   geometry,
@@ -467,6 +474,7 @@ export function Inspector({
   const geometryLocked =
     readOnly ||
     blockedByAncestor ||
+    geometryUnavailable ||
     objectActions.locked ||
     objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;

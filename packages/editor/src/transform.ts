@@ -161,6 +161,23 @@ export function svgUserDelta(element: Element, delta: Point): Point {
 }
 
 /**
+ * True when CSS owns the element's transform, so the presentation attribute
+ * is inert. An inline style always wins; otherwise the attribute governs while
+ * it names something other than `none`, and a computed transform only counts
+ * when it is actually applied. jsdom reports an empty computed transform for
+ * an unstyled element, which means the same thing as `none`.
+ */
+export function svgCssTransformOverride(element: Element): boolean {
+  const inline = styleOf(element)?.transform?.trim() ?? '';
+  if (inline !== '') return true;
+  const authored = element.getAttribute('transform')?.trim() ?? '';
+  if (authored !== '' && authored.toLowerCase() !== 'none') return false;
+  const computed =
+    element.ownerDocument.defaultView?.getComputedStyle(element).transform ?? '';
+  return computed.trim() !== '' && computed !== 'none';
+}
+
+/**
  * Post-multiplies a translate onto the authored transform captured at gesture
  * start. The delta arrives in the element's local user units (`svgUserDelta`),
  * and a trailing translate is applied in that same local space, so a rotated
