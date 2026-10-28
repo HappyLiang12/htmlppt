@@ -11,7 +11,7 @@
     "lint:deps": "depcruise packages --config dependency-cruiser.cjs",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.json --noEmit",
     "test:unit": "npm run test -w @htmlppt/core && npm run test -w @htmlppt/editor",
-    "test:integration": "npm run build && npm run test -w @htmlppt/renderer && npm run test -w @htmlppt/host && npm run test -w @htmlppt/mcp && npm run test -w @htmlppt/cli",
+    "test:integration": "npm run build && node scripts/run-integration.mjs",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
     "test:package": "npm run build && node scripts/package-smoke.mjs",
