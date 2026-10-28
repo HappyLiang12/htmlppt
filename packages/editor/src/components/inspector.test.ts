@@ -367,13 +367,27 @@ describe('inspector nested structural hint', () => {
   const geometry = { x: 120, y: 160, width: 240, height: 120, rotation: 0 };
   const nestedSelection = { slideIndex: 0, path: [0, 0], elementId: null };
   const COPY =
-    'Position, size, appearance, and text apply to this object. Duplicate, delete, and reorder act on top-level objects only.';
+    'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.';
 
   it('explains which edits a nested selection still supports', async () => {
     await render({ selection: nestedSelection, geometry }, 'en');
 
     expect(container.textContent).toContain(COPY);
     expect(container.textContent).not.toContain('read-only');
+  });
+
+  it('keeps the structural hint in a nested multi-selection', async () => {
+    await render(
+      {
+        selection: nestedSelection,
+        selectionCount: 2,
+        nestedSelectionCount: 1,
+        geometry
+      },
+      'en'
+    );
+
+    expect(container.textContent).toContain(COPY);
   });
 
   it('does not show the structural hint for a top-level selection', async () => {

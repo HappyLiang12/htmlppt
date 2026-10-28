@@ -219,6 +219,7 @@ describe('EDIT_HINT_KEYS', () => {
       'hidden',
       'locked',
       'not-text',
+      'paste-kind',
       'table-cell'
     ]);
     for (const key of Object.values(EDIT_HINT_KEYS)) {
@@ -236,6 +237,13 @@ describe('EDIT_HINT_KEYS', () => {
 
   it('maps the table-cell reason to its copy key', () => {
     expect(EDIT_HINT_KEYS['table-cell']).toBe('editor.hint.table-cell-move');
+  });
+
+  it('maps the paste-kind reason to its copy key', () => {
+    expect(EDIT_HINT_KEYS['paste-kind']).toBe('editor.hint.paste-kind');
+    expect(en[EDIT_HINT_KEYS['paste-kind']]).toBe(
+      'This SVG component can only be pasted inside an SVG.'
+    );
   });
 
   it('pins the required English copy for the guard reasons', () => {

@@ -3267,7 +3267,12 @@ export function App() {
           return;
         case 'paste':
           event.preventDefault();
-          void actionsRef.current.pasteObjects().catch(() => undefined);
+          void actionsRef.current
+            .pasteObjects()
+            .then((outcome) => {
+              if (outcome === 'kind-mismatch') showEditHint('paste-kind');
+            })
+            .catch(() => undefined);
           return;
         case 'duplicate':
           if (current.selections.length === 0) return;
@@ -4835,6 +4840,9 @@ export function App() {
             slide={activeSlide}
             selection={selection}
             selectionCount={selections.length}
+            nestedSelectionCount={
+              selections.filter((target) => target.path.length > 1).length
+            }
             blockedByAncestor={blockedByAncestor}
             geometryUnavailable={svgInternal || tableInternal}
             contextPath={containerPath}

@@ -129,7 +129,7 @@ export const zhHans: Record<MessageKey, string> = {
   'inspector.multiHint': '已选择 {count} 个对象；可对齐、分布、编组，或拖动移动。',
   'inspector.groupHint': '编组仅支持移动与旋转；取消编组后可调整大小。',
   'inspector.nestedStructuralHint':
-    '位置、大小、外观与文字会应用到该对象；复制、删除与排序只作用于顶层对象。',
+    '位置、大小、外观与文字会应用到该对象；排序与编组只作用于顶层对象。',
   'inspector.appearance': '外观',
   'inspector.objectAppearance': '对象外观',
   'inspector.image': '图片',
@@ -324,6 +324,7 @@ export const zhHans: Record<MessageKey, string> = {
   'editor.hint.hidden': '这个对象已隐藏。请先显示，再编辑其内容。',
   'editor.hint.group': '编组会作为单个对象编辑。请先取消编组，再编辑其中的组件。',
   'editor.hint.table-cell-move': '这是表格单元格，请选取整个表格再移动。',
+  'editor.hint.paste-kind': '这个 SVG 组件只能粘贴到 SVG 内。',
   'standalone.title': '独立编辑模式',
   'standalone.description': '未连接本地 host。打开或拖入一份 HTML 演示文稿即可编辑；支持 File System Access 的浏览器会直接写回原文件，其他浏览器可下载导出的 HTML。',
   'standalone.open': '打开 HTML…',

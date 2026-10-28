@@ -9,7 +9,8 @@ import { parseDeck } from './slide-doc.js';
 import {
   hasEditorArtifacts,
   useDeckController,
-  type DeckController
+  type DeckController,
+  type PasteOutcome
 } from './use-deck-controller.js';
 import type { MessageKey, Translator } from './i18n';
 import { zhHant } from './i18n/messages/zh-Hant';
@@ -367,8 +368,79 @@ describe('useDeckController', () => {
     expect(slide()?.querySelectorAll('h1')).toHaveLength(2);
   });
 
-  it('applies slide mutations and restores them through undo and redo', async () => {
+  it('pastes an all-top-level multi-selection at slide level', async () => {
     await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.copySelection();
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    expect(controller.state.selections.map((target) => target.path)).toEqual([
+      [0],
+      [1]
+    ]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('pasted');
+    const slide = () => controller.state.slides[0]?.element;
+    const headings = slide() ? Array.from(slide()!.querySelectorAll('h1')) : [];
+    expect(headings).toHaveLength(2);
+    // A multi-selection keeps the historical slide-level destination.
+    expect(headings[1]?.parentElement).toBe(slide());
+    expect(controller.state.selection?.path).toEqual([2]);
+    expect(controller.state.dirty).toBe(true);
+  });
+
+  it('refuses a multi-selection with a nested path without committing', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: [0, 0],
+        elementId: null
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([[0, 0], [1]]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('refused');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+
+    // No history entry was pushed, so undo cannot change the deck.
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('applies slide mutations and restores them through undo and redo', async () => {    await act(async () => {
       await controller.actions.load(DECK);
     });
 

@@ -13,7 +13,8 @@ export type EditHintReason =
   | 'locked'
   | 'hidden'
   | 'group'
-  | 'table-cell';
+  | 'table-cell'
+  | 'paste-kind';
 
 /** Guard reasons only; table-cell is a movement hint, not a guard. */
 export type TopLevelBlock = 'locked' | 'hidden' | 'group';
@@ -29,7 +30,8 @@ export const EDIT_HINT_KEYS: Record<EditHintReason, MessageKey> = {
   locked: 'editor.hint.locked',
   hidden: 'editor.hint.hidden',
   group: 'editor.hint.group',
-  'table-cell': 'editor.hint.table-cell-move'
+  'table-cell': 'editor.hint.table-cell-move',
+  'paste-kind': 'editor.hint.paste-kind'
 };
 
 /**

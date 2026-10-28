@@ -962,13 +962,31 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
     await deck.frame.locator('#headline').click();
     await expect(page.getByTestId('inspector-nested-structural')).toBeVisible();
 
-    // A nested multi-selection renders the multi hint instead (the Inspector
-    // branches on multi before nested) and refuses duplicate without saving.
+    // A nested multi-selection renders the multi hint and keeps the nested
+    // structural explanation, then refuses duplicate without writing.
     await deck.frame.locator('#chip-one').click({ modifiers: ['Shift'] });
     await expect(page.getByTestId('selection-outline')).toHaveCount(2);
-    await page.keyboard.press('Control+d');
-    await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
-    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    await expect(page.getByTestId('inspector-nested-structural')).toBeVisible();
+    const deckPuts: string[] = [];
+    const recordDeckPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        deckPuts.push(request.url());
+      }
+    };
+    page.on('request', recordDeckPut);
+    try {
+      await page.keyboard.press('Control+d');
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(deckPuts).toEqual([]);
+      await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
+    } finally {
+      page.off('request', recordDeckPut);
+    }
   } finally {
     await deck.close();
   }
@@ -1005,6 +1023,122 @@ test('copies and pastes a nested component as its sibling', { tag: '@feature:com
     expect((cloneBox.y - sourceBox.y) / scale).toBeCloseTo(20, 0);
     expect(await clone.getAttribute('data-ppt-el')).not.toBe('headline');
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // The copy is a real sibling in the saved deck, not only an in-memory
+    // preview: it survives a reload (CD-AC7 persistence).
+    await page.reload();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    await expect(deck.frame.locator('#pad h1')).toHaveCount(2);
+    expect(
+      await deck.frame
+        .locator('#pad h1')
+        .nth(1)
+        .evaluate((element) => element.previousElementSibling?.id)
+    ).toBe('lead');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('pastes a top-level svg root at slide level', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // An svg root is not SVG-internal, so an HTML anchor keeps the historical
+    // slide-level destination instead of swallowing the paste (CD-AC7).
+    await deck.frame.locator('svg.css-shape').click();
+    await page.keyboard.press('Control+c');
+    const save = waitForDeckSave(page);
+    await page.keyboard.press('Control+v');
+    await save;
+    await expect(deck.frame.locator('svg.css-shape')).toHaveCount(2);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('shows the paste-kind hint for an svg internal with no svg destination', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The chart figure is atomic: the first double-click enters the figure,
+    // the second enters its svg, and then the circle is a direct child.
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('chart-card');
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('svg');
+    await deck.frame.locator('#dot').click();
+    await page.keyboard.press('Control+c');
+
+    // Escape unwinds the drill-in one level at a time: svg -> chart figure ->
+    // .pad -> slide. The chart figure is nested inside .pad in this fixture,
+    // so the slide is three steps up.
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('edit-context')).toContainText('chart-card');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('edit-context')).toContainText('.pad');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('edit-context')).toHaveCount(0);
+    await deck.frame.locator('#lead').click();
+
+    const svgCount = await deck.frame.locator('#pad svg').count();
+    const deckPuts: string[] = [];
+    const recordDeckPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        deckPuts.push(request.url());
+      }
+    };
+    page.on('request', recordDeckPut);
+    try {
+      await page.keyboard.press('Control+v');
+      const hint = page.getByTestId('edit-hint');
+      await expect(hint).toBeVisible();
+      await expect(hint).toContainText('SVG');
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(deckPuts).toEqual([]);
+      await expect(deck.frame.locator('#pad svg')).toHaveCount(svgCount);
+    } finally {
+      page.off('request', recordDeckPut);
+    }
+  } finally {
+    await deck.close();
+  }
+});
+
+test('refuses to paste inside a guarded subtree', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    await deck.frame.locator('#headline').click();
+    await page.keyboard.press('Control+c');
+    // Alt reaches the child inside the locked wrapper; a plain click would
+    // resolve to the wrapper itself.
+    await deck.frame.locator('#locked-child').click({ modifiers: ['Alt'] });
+    await expect(page.getByTestId('selection-outline')).toBeVisible();
+
+    const deckPuts: string[] = [];
+    const recordDeckPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        deckPuts.push(request.url());
+      }
+    };
+    page.on('request', recordDeckPut);
+    try {
+      await page.keyboard.press('Control+v');
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(deckPuts).toEqual([]);
+      await expect(deck.frame.locator('#locked p')).toHaveCount(1);
+    } finally {
+      page.off('request', recordDeckPut);
+    }
   } finally {
     await deck.close();
   }

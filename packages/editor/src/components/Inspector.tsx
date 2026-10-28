@@ -92,6 +92,11 @@ export interface InspectorProps {
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
   /**
+   * How many selected targets sit below the slide root. A multi-selection
+   * that mixes depths still needs the nested structural explanation.
+   */
+  nestedSelectionCount?: number;
+  /**
    * A nested target whose top-level ancestor is locked, hidden, or a group.
    * The ancestor owns the subtree, so every geometry field stays disabled.
    */
@@ -374,6 +379,7 @@ export function Inspector({
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
+  nestedSelectionCount = 0,
   blockedByAncestor = false,
   geometryUnavailable = false,
   contextPath,
@@ -1108,9 +1114,19 @@ export function Inspector({
                 {t('inspector.lockedHint')}
               </p>
             ) : multi ? (
-              <p className="text-[11px] text-muted">
-                {t('inspector.multiHint', { count: selectionCount })}
-              </p>
+              <>
+                <p className="text-[11px] text-muted">
+                  {t('inspector.multiHint', { count: selectionCount })}
+                </p>
+                {nestedSelectionCount > 0 && (
+                  <p
+                    data-testid="inspector-nested-structural"
+                    className="text-[11px] text-muted"
+                  >
+                    {t('inspector.nestedStructuralHint')}
+                  </p>
+                )}
+              </>
             ) : objectActions.group ? (
               <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.groupHint')}
