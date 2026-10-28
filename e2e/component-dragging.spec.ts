@@ -400,6 +400,23 @@ test('enters an SVG and drags a circle with a transform', { tag: '@feature:compo
     const html = await readFile(deck.path, 'utf8');
     expect(html).toMatch(/id="dot"[^>]*transform="translate\([^)]*\)"/);
     expect(html).not.toMatch(/id="dot"[^>]*position: absolute/);
+
+    // A nudge is a second gesture on the same shape: it must append another
+    // translate and save, never fall back to absolute geometry.
+    const afterDrag = await deck.frame.locator('#dot').boundingBox();
+    const saveAfterNudge = waitForDeckSave(page);
+    await page.keyboard.press('Shift+ArrowRight');
+    await saveAfterNudge;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    const nudged = await deck.frame.locator('#dot').boundingBox();
+    const slideBox = await deck.frame.locator('[data-slide-id]').boundingBox();
+    const scale = slideBox!.width / 1600;
+    expect(nudged!.x - afterDrag!.x).toBeGreaterThan(10 * scale - 2);
+    expect(nudged!.x - afterDrag!.x).toBeLessThan(10 * scale + 2);
+    const htmlAfterNudge = await readFile(deck.path, 'utf8');
+    expect(htmlAfterNudge).toMatch(/id="dot"[^>]*transform="[^"]*translate\(/);
+    expect(htmlAfterNudge).not.toMatch(/id="dot"[^>]*position: absolute/);
+    expect(htmlAfterNudge).not.toMatch(/id="dot"[^>]*style="[^"]*(left|top):/);
   } finally {
     await deck.close();
   }
@@ -447,6 +464,18 @@ test('keeps a CSS-transformed SVG shape inert', { tag: '@feature:component-dragg
     const html = await readFile(deck.path, 'utf8');
     expect(html).not.toMatch(/id="css-dot"[^>]*transform=/);
     expect(html).not.toMatch(/id="css-dot"[^>]*position: absolute/);
+
+    // The keyboard path has the same contract as the pointer path: a shape
+    // whose rendering is owned by CSS cannot be nudged through the attribute.
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(250);
+    const afterNudge = await dot.boundingBox();
+    if (!afterNudge) throw new Error('No box for #css-dot after the nudge');
+    expect(
+      deviation(fromBoundingBox(afterNudge), fromBoundingBox(before))
+    ).toBeLessThanOrEqual(1);
+    expect(await dot.getAttribute('transform')).toBeNull();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
   } finally {
     await deck.close();
   }

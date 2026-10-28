@@ -2675,6 +2675,19 @@ export function App() {
           }
           continue;
         }
+        const svg = isSvgInternal(element);
+        // A CSS transform owns the shape's rendering; nudging the attribute
+        // would be inert.
+        const cssOwned = svg && svgCssTransformOverride(element);
+        if (cssOwned) {
+          boxes.push({
+            rect: frameRectOf(rect, offset),
+            rotation: rotationOf(element),
+            path: target.path,
+            elementId: target.elementId
+          });
+          continue;
+        }
         const next = nudge(
           rect,
           dx,
@@ -2690,8 +2703,18 @@ export function App() {
           });
           continue;
         }
-        if (willPinToAbsolute(element)) pinned = true;
-        pinToAbsolute(element, next, slide);
+        if (svg) {
+          // Repeated presses append translates, the same convention as
+          // repeated drag gestures.
+          applySvgTranslate(
+            element,
+            element.getAttribute('transform') ?? '',
+            svgUserDelta(element, { x: next.x - rect.x, y: next.y - rect.y })
+          );
+        } else {
+          if (willPinToAbsolute(element)) pinned = true;
+          pinToAbsolute(element, next, slide);
+        }
         changed = true;
         boxes.push({
           rect: frameRectOf(next, offset),
