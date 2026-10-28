@@ -116,6 +116,49 @@ export function rectOf(element: Element, slide: Element): Rect {
   };
 }
 
+interface MatrixLike {
+  transformPoint(point: Point): Point;
+}
+
+function svgInverseMatrix(element: Element): MatrixLike | null {
+  const graphics = element as SVGGraphicsElement;
+  const ctm = graphics.getScreenCTM?.();
+  return ctm ? (ctm.inverse() as unknown as MatrixLike) : null;
+}
+
+/**
+ * Converts a design-pixel delta to the element's SVG user units. The delta is
+ * mapped through the inverse screen CTM; a missing matrix keeps the design
+ * delta so authored geometry still moves by the pointer distance.
+ */
+export function svgUserDelta(element: Element, delta: Point): Point {
+  const inverse = svgInverseMatrix(element);
+  if (!inverse) return { x: delta.x, y: delta.y };
+  const origin = inverse.transformPoint({ x: 0, y: 0 });
+  const moved = inverse.transformPoint({ x: delta.x, y: delta.y });
+  return {
+    x: Math.round((moved.x - origin.x) * 1000) / 1000,
+    y: Math.round((moved.y - origin.y) * 1000) / 1000
+  };
+}
+
+/**
+ * Pre-multiplies a translate so the authored transform captured at gesture
+ * start is preserved verbatim instead of being overwritten.
+ */
+export function applySvgTranslate(
+  element: Element,
+  authoredTransform: string,
+  delta: Point
+): void {
+  const translate = `translate(${delta.x} ${delta.y})`;
+  const authored = authoredTransform.trim();
+  element.setAttribute(
+    'transform',
+    authored ? `${translate} ${authored}` : translate
+  );
+}
+
 /**
  * Offsets all targets by the same delta, preserving relative offsets. Styling
  * is left to the caller so a gesture can snap first and pin once.

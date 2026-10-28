@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { Rect } from './geometry.js';
+import type { Point, Rect } from './geometry.js';
 import {
   angleDelta,
   applyRotation,
+  applySvgTranslate,
   centerOf,
   moveTargets,
   pinToAbsolute,
@@ -11,6 +12,7 @@ import {
   rotationFromPointer,
   rotationOf,
   snapAngle,
+  svgUserDelta,
   type TransformTarget
 } from './transform.js';
 
@@ -42,6 +44,26 @@ function measuredRect(
 
 function target(element: Element, start: Rect): TransformTarget {
   return { element, start };
+}
+
+interface ScreenMatrixStub {
+  inverse(): { transformPoint(point: Point): Point };
+}
+
+function svgShape(tag = 'circle'): { svg: SVGSVGElement; shape: Element } {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  svg.appendChild(shape);
+  document.body.appendChild(svg);
+  return { svg, shape };
+}
+
+function stubScreenCtm(
+  element: Element,
+  transformPoint: (point: Point) => Point
+): void {
+  (element as unknown as { getScreenCTM: () => ScreenMatrixStub }).getScreenCTM =
+    () => ({ inverse: () => ({ transformPoint }) });
 }
 
 describe('pinToAbsolute', () => {
@@ -267,5 +289,85 @@ describe('rotation', () => {
 
     element.style.transform = 'translateX(10px)';
     expect(rotationOf(element)).toBe(0);
+  });
+});
+
+describe('svgUserDelta', () => {
+  it('converts a design delta through the element CTM', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, (point) => ({
+      x: point.x / 2 + 10,
+      y: point.y / 2 + 20
+    }));
+
+    expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 20, y: 10 });
+
+    svg.remove();
+  });
+
+  it('falls back to the design delta when the screen CTM is missing', () => {
+    const { svg, shape } = svgShape();
+
+    expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 40, y: 20 });
+
+    svg.remove();
+  });
+
+  it('falls back to the design delta when the screen CTM is null', () => {
+    const { svg, shape } = svgShape();
+    (shape as unknown as { getScreenCTM: () => null }).getScreenCTM = () => null;
+
+    expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 40, y: 20 });
+
+    svg.remove();
+  });
+
+  it('rounds converted deltas to three decimals', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, (point) => ({ x: point.x / 3, y: point.y / 3 }));
+
+    expect(svgUserDelta(shape, { x: 10, y: 20 })).toEqual({
+      x: 3.333,
+      y: 6.667
+    });
+
+    svg.remove();
+  });
+});
+
+describe('applySvgTranslate', () => {
+  it('writes only a translate when no transform is authored', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    applySvgTranslate(shape, '', { x: 20, y: 10 });
+
+    expect(shape.getAttribute('transform')).toBe('translate(20 10)');
+  });
+
+  it('treats a whitespace authored transform as empty', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    applySvgTranslate(shape, '   ', { x: 20, y: 10 });
+
+    expect(shape.getAttribute('transform')).toBe('translate(20 10)');
+  });
+
+  it('pre-multiplies the translate so the authored transform is preserved', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    applySvgTranslate(shape, 'rotate(45 12 12)', { x: 20, y: 10 });
+
+    expect(shape.getAttribute('transform')).toBe(
+      'translate(20 10) rotate(45 12 12)'
+    );
   });
 });
