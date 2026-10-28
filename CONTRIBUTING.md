@@ -49,7 +49,7 @@ contributor's branch.
 
 1. Write or update a failing test first (see TDD below).
 2. Implement the smallest change that makes it pass.
-3. Run the focused package tests while iterating.
+3. Run the focused tests while iterating (see the focused loop below).
 4. Build and exercise the real CLI/editor path:
 
    ```bash
@@ -63,6 +63,39 @@ contributor's branch.
    the host with `npx htmlppt stop deck.html`.
 5. Run `npm run verify:fast` before committing. Run `npm run verify` before a
    local merge or pull request when E2E and packaging are relevant.
+
+### Focused loop
+
+`npm run loop` (`scripts/loop.mjs`) shortens step 3 only. The aggregate gates
+are unchanged, and every number below is a wall-clock measurement on one
+machine (6 cores, 16 GB RAM), not a projection:
+
+| Iterate step | Command | Measured wall |
+| --- | --- | --- |
+| One test file | `npm run loop -- test packages/editor/src/play-fit.test.ts` | 2.1 s |
+| Two packages at once | `npm run loop -- test editor:play-fit core:appearance` | 4.3 s |
+| Whole editor package | `npm run test -w @htmlppt/editor` | 13.5 s |
+| Unit gate | `npm run test:unit` | 25.0 s |
+| One integration lane | `npm run test -w @htmlppt/host` | 10.5–42.7 s (load dependent) |
+| Integration gate, four lanes | `npm run test:integration` | 175.5 s, 203.8 s and 193.0 s, against 348.4 s and 402.6 s serial for the same 16 test files |
+| Types, incremental + parallel | `npm run loop -- types` | 4.4 s warm, 9.5 s cold cache |
+| Types gate | `npm run typecheck` | 25.6 s (and 30.6 s again immediately: it caches nothing) |
+| One E2E spec, no rebuild | `npm run loop -- e2e e2e/recovery.spec.ts` | 8.4 s |
+| Same spec through `npm run test:e2e` | build is mandatory first | 36.4 s build + 6.2 s spec |
+
+Three rules keep the shortcut honest:
+
+- `npm run typecheck` stays the gate. `loop types` writes cache files under
+  `node_modules/.tmp/` and re-checks a project whenever a file it reads changed,
+  including dependencies reached through `tsconfig` `paths`; a full
+  `npm run verify` never relies on that cache.
+- `loop e2e` skips `npm run build` only when the built editor is newer than
+  every source file. When it cannot tell, it builds.
+- The integration lanes share one guard. Suites that exec built binaries rebuild
+  only stale workspaces, and do it behind a cross-process lock, because tsup's
+  `--clean` would otherwise delete a dist another lane is running from. Port
+  reservations come from a per-lane block, so a concurrent suite cannot be handed
+  the number the CLI test is about to claim.
 
 For editor-only UI work, `npm run dev -w @htmlppt/editor` serves the Vite shell.
 It has no deck host behind it, so use the built CLI and `htmlppt open` for any
@@ -94,7 +127,7 @@ Rules:
 | Layer | Command | Covers |
 | --- | --- | --- |
 | Unit | `npm run test:unit` | Core contract, mutations, charts, tables, editor state, geometry, history, shortcuts, live-sync decisions. Editor tests use jsdom. |
-| Integration | `npm run test:integration` | Builds first, then exercises the renderer with real Chromium, the host over HTTP, MCP over stdio, and the CLI as a real process against real files. |
+| Integration | `npm run test:integration` | Builds first, then runs the renderer, host, MCP and CLI suites as four concurrent lanes (`scripts/run-integration.mjs`): real Chromium, the host over HTTP, MCP over stdio, and the CLI as a real process against real files. Every lane runs; a failing lane is named and still exits non-zero. |
 | E2E | `npm run test:e2e` | Builds first, then drives the editor and exported decks in Playwright Chromium. |
 | Package | `npm run test:package` | Builds, packs the `htmlppt` tarball, installs it in a temp project, and checks the installed bins, editor assets, skill, docs, host auth, `new`/`validate`/`open`/`stop`, and the MCP handshake. |
 | Matrix | `npm run test:matrix` | Ensures feature ids in `docs/features.json` have tagged test coverage. |

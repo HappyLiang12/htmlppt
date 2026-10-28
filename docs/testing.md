@@ -13,12 +13,13 @@ npx playwright install chromium
 ## Commands
 
 - `npm run test:unit` — core and editor unit tests
-- `npm run test:integration` — renderer, host, MCP, CLI, filesystem, and HTTP
+- `npm run test:integration` — builds, then runs renderer, host, MCP and CLI as four concurrent lanes: filesystem, HTTP, stdio and real Chromium
 - `npm run test:e2e` — builds the workspace first, then runs Playwright Chromium
 - `npm run test:package` — builds, packs the `htmlppt` tarball, installs it in a temp project, and smokes the installed bins
 - `npm run test:matrix` — feature tag coverage
 - `npm run verify:fast` — lint, boundaries, types, unit, integration, matrix
 - `npm run verify` — everything, including E2E
+- `npm run loop -- <types|test [filters]|e2e [spec]>` — focused iteration only; never a gate
 
 ## Adding a feature
 

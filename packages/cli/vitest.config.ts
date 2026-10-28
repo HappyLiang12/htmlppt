@@ -17,8 +17,9 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     testTimeout: 30_000,
     hookTimeout: 120_000,
-    // Both test files build the workspace in beforeAll; running files
-    // concurrently would race on the same dist outputs.
+    // Both test files can rebuild the workspace in beforeAll. tsup runs with
+    // --clean, and test-utils serialises that step behind a cross-process lock,
+    // so the files stay in one fork rather than racing on the same dist output.
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } }
   }
