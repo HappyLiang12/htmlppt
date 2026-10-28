@@ -116,8 +116,18 @@ export function rectOf(element: Element, slide: Element): Rect {
   };
 }
 
+/**
+ * The affine coefficients Chromium's `SVGMatrix` exposes after
+ * `getScreenCTM()?.inverse()`; unlike `DOMMatrix` it has no `transformPoint`.
+ * `e`/`f` are declared for shape parity but never affect a delta.
+ */
 interface MatrixLike {
-  transformPoint(point: Point): Point;
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e?: number;
+  f?: number;
 }
 
 function svgInverseMatrix(element: Element): MatrixLike | null {
@@ -127,24 +137,29 @@ function svgInverseMatrix(element: Element): MatrixLike | null {
 }
 
 /**
- * Converts a design-pixel delta to the element's SVG user units. The delta is
- * mapped through the inverse screen CTM; a missing matrix keeps the design
- * delta so authored geometry still moves by the pointer distance.
+ * Converts a design-pixel delta to the element's local SVG user units. The
+ * inverse screen CTM's coefficients carry the parent scale and rotation; its
+ * translation cancels for a delta, so only `a`/`b`/`c`/`d` matter. The local
+ * delta is the space a post-multiplied translate acts in. A missing matrix
+ * keeps the design delta so authored geometry still moves by the pointer
+ * distance. Each axis is rounded to 3 decimals.
  */
 export function svgUserDelta(element: Element, delta: Point): Point {
   const inverse = svgInverseMatrix(element);
   if (!inverse) return { x: delta.x, y: delta.y };
-  const origin = inverse.transformPoint({ x: 0, y: 0 });
-  const moved = inverse.transformPoint({ x: delta.x, y: delta.y });
   return {
-    x: Math.round((moved.x - origin.x) * 1000) / 1000,
-    y: Math.round((moved.y - origin.y) * 1000) / 1000
+    x: Math.round((inverse.a * delta.x + inverse.c * delta.y) * 1000) / 1000,
+    y: Math.round((inverse.b * delta.x + inverse.d * delta.y) * 1000) / 1000
   };
 }
 
 /**
- * Pre-multiplies a translate so the authored transform captured at gesture
- * start is preserved verbatim instead of being overwritten.
+ * Post-multiplies a translate onto the authored transform captured at gesture
+ * start. The delta arrives in the element's local user units (`svgUserDelta`),
+ * and a trailing translate is applied in that same local space, so a rotated
+ * or scaled shape follows the pointer. The authored transform is written back
+ * verbatim, so repeated writes with the same capture keep exactly one
+ * translate. An empty or `none` authored transform becomes just the translate.
  */
 export function applySvgTranslate(
   element: Element,
@@ -153,9 +168,10 @@ export function applySvgTranslate(
 ): void {
   const translate = `translate(${delta.x} ${delta.y})`;
   const authored = authoredTransform.trim();
+  const keepsAuthored = authored !== '' && authored.toLowerCase() !== 'none';
   element.setAttribute(
     'transform',
-    authored ? `${translate} ${authored}` : translate
+    keepsAuthored ? `${authored} ${translate}` : translate
   );
 }
 

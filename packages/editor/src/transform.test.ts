@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Point, Rect } from './geometry.js';
+import type { Rect } from './geometry.js';
 import {
   angleDelta,
   applyRotation,
@@ -46,8 +46,17 @@ function target(element: Element, start: Rect): TransformTarget {
   return { element, start };
 }
 
-interface ScreenMatrixStub {
-  inverse(): { transformPoint(point: Point): Point };
+/**
+ * The plain coefficient shape Chromium's `getScreenCTM().inverse()` really
+ * returns; it has no `transformPoint`.
+ */
+interface ScreenMatrixCoefficients {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e?: number;
+  f?: number;
 }
 
 function svgShape(tag = 'circle'): { svg: SVGSVGElement; shape: Element } {
@@ -60,10 +69,10 @@ function svgShape(tag = 'circle'): { svg: SVGSVGElement; shape: Element } {
 
 function stubScreenCtm(
   element: Element,
-  transformPoint: (point: Point) => Point
+  inverse: ScreenMatrixCoefficients
 ): void {
-  (element as unknown as { getScreenCTM: () => ScreenMatrixStub }).getScreenCTM =
-    () => ({ inverse: () => ({ transformPoint }) });
+  (element as unknown as { getScreenCTM: () => { inverse(): unknown } })
+    .getScreenCTM = () => ({ inverse: () => inverse });
 }
 
 describe('pinToAbsolute', () => {
@@ -293,14 +302,20 @@ describe('rotation', () => {
 });
 
 describe('svgUserDelta', () => {
-  it('converts a design delta through the element CTM', () => {
+  it('converts a design delta through the inverse matrix coefficients', () => {
     const { svg, shape } = svgShape();
-    stubScreenCtm(shape, (point) => ({
-      x: point.x / 2 + 10,
-      y: point.y / 2 + 20
-    }));
+    stubScreenCtm(shape, { a: 0.5, b: 0, c: 0, d: 0.5, e: 10, f: 20 });
 
     expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 20, y: 10 });
+
+    svg.remove();
+  });
+
+  it('composes rotation and scale through the inverse matrix', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, { a: 0, b: -1, c: 1, d: 0, e: 0, f: 0 });
+
+    expect(svgUserDelta(shape, { x: 10, y: 0 })).toEqual({ x: 0, y: -10 });
 
     svg.remove();
   });
@@ -324,11 +339,23 @@ describe('svgUserDelta', () => {
 
   it('rounds converted deltas to three decimals', () => {
     const { svg, shape } = svgShape();
-    stubScreenCtm(shape, (point) => ({ x: point.x / 3, y: point.y / 3 }));
+    stubScreenCtm(shape, { a: 1 / 3, b: 0, c: 0, d: 1 / 3 });
 
     expect(svgUserDelta(shape, { x: 10, y: 20 })).toEqual({
       x: 3.333,
       y: 6.667
+    });
+
+    svg.remove();
+  });
+
+  it('rounds negative converted deltas to three decimals', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, { a: 1 / 3, b: 0, c: 0, d: 1 / 3 });
+
+    expect(svgUserDelta(shape, { x: -10, y: -20 })).toEqual({
+      x: -3.333,
+      y: -6.667
     });
 
     svg.remove();
@@ -358,7 +385,29 @@ describe('applySvgTranslate', () => {
     expect(shape.getAttribute('transform')).toBe('translate(20 10)');
   });
 
-  it('pre-multiplies the translate so the authored transform is preserved', () => {
+  it('treats an authored none as empty', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    applySvgTranslate(shape, 'none', { x: 20, y: 10 });
+
+    expect(shape.getAttribute('transform')).toBe('translate(20 10)');
+  });
+
+  it('treats a padded, differently cased none as empty', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    applySvgTranslate(shape, '  NONE  ', { x: 20, y: 10 });
+
+    expect(shape.getAttribute('transform')).toBe('translate(20 10)');
+  });
+
+  it('post-multiplies the translate so the authored transform is preserved', () => {
     const shape = document.createElementNS(
       'http://www.w3.org/2000/svg',
       'circle'
@@ -367,7 +416,22 @@ describe('applySvgTranslate', () => {
     applySvgTranslate(shape, 'rotate(45 12 12)', { x: 20, y: 10 });
 
     expect(shape.getAttribute('transform')).toBe(
-      'translate(20 10) rotate(45 12 12)'
+      'rotate(45 12 12) translate(20 10)'
     );
+  });
+
+  it('keeps exactly one translate across repeated writes', () => {
+    const shape = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+    const authored = 'rotate(45 12 12)';
+
+    applySvgTranslate(shape, authored, { x: 5, y: 5 });
+    applySvgTranslate(shape, authored, { x: 10, y: 8 });
+
+    const written = shape.getAttribute('transform') ?? '';
+    expect(written).toBe('rotate(45 12 12) translate(10 8)');
+    expect(written.match(/translate\(/g)?.length).toBe(1);
   });
 });
