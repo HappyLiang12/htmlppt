@@ -16,6 +16,7 @@
     "test:e2e": "playwright test",
     "test:package": "npm run build && node scripts/package-smoke.mjs",
     "test:matrix": "node scripts/check-feature-coverage.mjs",
+    "loop": "node scripts/loop.mjs",
     "verify:fast": "npm run lint && npm run lint:deps && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:matrix",
     "verify": "npm run verify:fast && npm run test:e2e && npm run test:package",
     "verify:all": "npm run verify && npm run test:package"
