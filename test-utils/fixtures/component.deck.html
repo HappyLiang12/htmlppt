@@ -26,6 +26,12 @@
   .decor { position: absolute; left: 1400px; top: 80px; width: 160px; height: 160px; border-radius: 50%; background: #ddd; }
   .editable { position: absolute; left: 1100px; top: 400px; padding: 8px; border: 1px dashed #999; }
   .css-shape { position: absolute; left: 700px; top: 720px; width: 120px; height: 120px; }
+  .css-shape-b { position: absolute; left: 860px; top: 720px; width: 120px; height: 120px; }
+  .css-attr-dot { transform: rotate(20deg); }
+  /* The review's nest-wrap origin (900, 720) overlapped css-shape-b's box and
+     swallowed its centre click. This origin clears css-shape-b (ends at 980)
+     and the group/locked row above it (ends at 714). */
+  .nest-wrap { position: absolute; left: 1040px; top: 760px; width: 160px; height: 96px; }
   .contents { display: contents; }
 </style></head>
 <body>
@@ -58,6 +64,8 @@
       <div class="decor" id="decor"></div>
       <div class="editable" id="editable" contenteditable="true">Authored editable</div>
       <svg class="css-shape" id="css-shape" viewBox="0 0 100 100"><circle id="css-dot" cx="50" cy="50" r="30" style="transform: rotate(45deg)"/></svg>
+      <svg class="css-shape-b" id="css-shape-b" viewBox="0 0 100 100"><circle class="css-attr-dot" id="css-dot-b" cx="50" cy="50" r="30" transform="translate(2 2)"/></svg>
+      <svg class="nest-wrap" id="nest-wrap" viewBox="0 0 200 120"><svg id="inner-svg" x="20" y="20" width="100" height="80" viewBox="0 0 100 80"><circle id="inner-dot" cx="50" cy="40" r="20"/></svg></svg>
     </div>
     <svg class="arrow" id="arrow" viewBox="0 0 100 50" data-ppt-el="arrow"><path id="arrow-path" d="M0 25h80"/></svg>
     <aside data-ppt-notes="notes"></aside>

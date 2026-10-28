@@ -34,10 +34,16 @@ export function readComputedStyle(element: Element): ComputedComponentStyle {
   };
 }
 
-/** True for a shape inside an svg, false for the svg root and HTML content. */
+/**
+ * True for a shape inside an svg and for an svg nested inside another svg,
+ * false for the top-level svg root an author places in HTML content and for
+ * HTML content itself. A nested svg root is SVG content: absolute geometry
+ * styles are ignored there, so it moves through its transform like a shape.
+ */
 export function isSvgInternal(element: Element): boolean {
   if (element.namespaceURI !== SVG_NAMESPACE) return false;
-  return element.closest('svg') !== element;
+  if (element.closest('svg') !== element) return true;
+  return element.parentElement?.namespaceURI === SVG_NAMESPACE;
 }
 
 /** True for a cell or row inside a table, false for the table itself. */

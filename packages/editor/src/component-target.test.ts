@@ -156,6 +156,31 @@ describe('isSvgInternal and isTableInternal', () => {
     expect(isSvgInternal(html)).toBe(false);
   });
 
+  it('treats a nested svg root as svg-internal', () => {
+    const outer = document.createElementNS(SVG_NS, 'svg');
+    const inner = document.createElementNS(SVG_NS, 'svg');
+    outer.appendChild(inner);
+    expect(isSvgInternal(inner)).toBe(true);
+  });
+
+  it('keeps a top-level svg root in HTML content outside svg content', () => {
+    const host = document.createElement('div');
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    host.appendChild(svg);
+    expect(isSvgInternal(svg)).toBe(false);
+  });
+
+  it('keeps an svg inside an HTML parent inside foreignObject outside svg content', () => {
+    const outer = document.createElementNS(SVG_NS, 'svg');
+    const foreign = document.createElementNS(SVG_NS, 'foreignObject');
+    const html = document.createElement('div');
+    const inner = document.createElementNS(SVG_NS, 'svg');
+    html.appendChild(inner);
+    foreign.appendChild(html);
+    outer.appendChild(foreign);
+    expect(isSvgInternal(inner)).toBe(false);
+  });
+
   it('separates a table from its cells', () => {
     const slide = slideOf('<table id="table"><tbody><tr><td id="cell">x</td></tr></tbody></table>');
     expect(isTableInternal(slide.querySelector('#table')!)).toBe(false);

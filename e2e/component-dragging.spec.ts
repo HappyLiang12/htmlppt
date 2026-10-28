@@ -401,9 +401,19 @@ test('enters an SVG and drags a circle with a transform', { tag: '@feature:compo
     expect(html).toMatch(/id="dot"[^>]*transform="translate\([^)]*\)"/);
     expect(html).not.toMatch(/id="dot"[^>]*position: absolute/);
 
+    // The shape must actually follow the pointer, not merely save a matrix.
+    const afterDrag = await deck.frame.locator('#dot').boundingBox();
+    if (!afterDrag) throw new Error('No box for #dot after the drag');
+    expect(Math.abs(afterDrag.x - box.x - 40)).toBeLessThanOrEqual(2);
+    expect(Math.abs(afterDrag.y - box.y - 20)).toBeLessThanOrEqual(2);
+    // The overlay stores the design rect it moved, so the outline must land on
+    // the shape's measured box after the gesture, not only when selected.
+    expect(
+      deviation(await boxOfLocator(outline), fromBoundingBox(afterDrag))
+    ).toBeLessThanOrEqual(1);
+
     // A nudge is a second gesture on the same shape: it must append another
     // translate and save, never fall back to absolute geometry.
-    const afterDrag = await deck.frame.locator('#dot').boundingBox();
     const saveAfterNudge = waitForDeckSave(page);
     await page.keyboard.press('Shift+ArrowRight');
     await saveAfterNudge;
@@ -417,6 +427,23 @@ test('enters an SVG and drags a circle with a transform', { tag: '@feature:compo
     expect(htmlAfterNudge).toMatch(/id="dot"[^>]*transform="[^"]*translate\(/);
     expect(htmlAfterNudge).not.toMatch(/id="dot"[^>]*position: absolute/);
     expect(htmlAfterNudge).not.toMatch(/id="dot"[^>]*style="[^"]*(left|top):/);
+
+    // Escape leaves the svg context for the chart figure, so the svg root is a
+    // direct child and a width commit targets the svg itself.
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('edit-context')).toContainText('chart-card');
+    await deck.frame.locator('#chart-svg').click({ position: { x: 40, y: 40 } });
+    const widthField = page.getByTestId('field-width');
+    await expect(widthField).toBeEnabled();
+    const saveAfterWidth = waitForDeckSave(page);
+    await widthField.fill('480');
+    await widthField.press('Enter');
+    await saveAfterWidth;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    // A width commit on the svg must not re-render the owning figure: that
+    // would replace the svg and drop the shape's dragged transform.
+    const htmlAfterWidth = await readFile(deck.path, 'utf8');
+    expect(htmlAfterWidth).toMatch(/id="dot"[^>]*transform="[^"]*translate\(/);
   } finally {
     await deck.close();
   }
@@ -476,6 +503,97 @@ test('keeps a CSS-transformed SVG shape inert', { tag: '@feature:component-dragg
     ).toBeLessThanOrEqual(1);
     expect(await dot.getAttribute('transform')).toBeNull();
     await expect(page.getByTestId('save-status')).toHaveText('已同步');
+  } finally {
+    await deck.close();
+  }
+});
+
+test('keeps a stylesheet-transformed SVG shape inert', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The stylesheet rule outranks the authored attribute: the computed matrix
+    // is the rotation while the attribute stays in the markup, so CSS owns the
+    // rendering even though an attribute is present.
+    await deck.frame.locator('#css-shape-b').dblclick();
+    await expect(page.getByTestId('edit-context')).toContainText('.css-shape-b');
+
+    const dot = deck.frame.locator('#css-dot-b');
+    // The shape stays selectable, but the preview must not promise a move.
+    await dot.hover();
+    await expect
+      .poll(() => dot.evaluate((element) => getComputedStyle(element).cursor))
+      .toBe('default');
+
+    await dot.click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#css-dot-b')
+    );
+
+    const before = await dot.boundingBox();
+    if (!before) throw new Error('No box for #css-dot-b');
+    await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(before.x + before.width / 2 + 40, before.y + before.height / 2 + 20, { steps: 5 });
+    await page.mouse.up();
+    // A guarded gesture never writes; give a wrong background save time to
+    // surface before asserting the untouched status.
+    await page.waitForTimeout(250);
+
+    const after = await dot.boundingBox();
+    if (!after) throw new Error('No box for #css-dot-b after the drag');
+    expect(
+      deviation(fromBoundingBox(after), fromBoundingBox(before))
+    ).toBeLessThanOrEqual(1);
+    // The inert attribute must survive the rejected gesture verbatim.
+    expect(await dot.getAttribute('transform')).toBe('translate(2 2)');
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).not.toMatch(/id="css-dot-b"[^>]*position: absolute/);
+    expect(html).not.toMatch(/id="css-dot-b"[^>]*style="[^"]*(left|top):/);
+    expect(html.match(/id="css-dot-b"[^>]*transform="translate\(2 2\)"/g)).toHaveLength(1);
+  } finally {
+    await deck.close();
+  }
+});
+
+test('drags a nested svg root with a transform', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The outer svg root is atomic at the slide level, so one double-click
+    // enters it; the nested svg then is a direct child.
+    await deck.frame.locator('#nest-wrap').dblclick();
+    await expect(page.getByTestId('edit-context')).toContainText('.nest-wrap');
+    await deck.frame.locator('#inner-svg').click();
+
+    const outline = page.getByTestId('selection-outline');
+    await expect(outline).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#inner-svg')
+    );
+    // A nested svg root is SVG content too: absolute geometry styles would be
+    // ignored by the renderer.
+    await expect(page.locator('[data-testid^="handle-"]')).toHaveCount(0);
+    await expect(page.getByTestId('rotate-handle')).toHaveCount(0);
+    await expect(page.getByTestId('field-x')).toBeDisabled();
+
+    const box = await deck.frame.locator('#inner-svg').boundingBox();
+    if (!box) throw new Error('No box for #inner-svg');
+    const save = waitForDeckSave(page);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 10, { steps: 5 });
+    await page.mouse.up();
+    await save;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    const after = await deck.frame.locator('#inner-svg').boundingBox();
+    if (!after) throw new Error('No box for #inner-svg after the drag');
+    expect(Math.abs(after.x - box.x - 30)).toBeLessThanOrEqual(2);
+    expect(Math.abs(after.y - box.y - 10)).toBeLessThanOrEqual(2);
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).toMatch(/id="inner-svg"[^>]*transform="translate\([^)]*\)"/);
+    expect(html).not.toMatch(/id="inner-svg"[^>]*position: absolute/);
   } finally {
     await deck.close();
   }

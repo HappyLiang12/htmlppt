@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Rect } from './geometry.js';
 import {
   angleDelta,
@@ -511,6 +511,72 @@ describe('svgCssTransformOverride', () => {
 
     expect(svgCssTransformOverride(shape)).toBe(false);
 
+    svg.remove();
+  });
+
+  it('reports a stylesheet rule that outranks the presentation attribute', () => {
+    const style = document.createElement('style');
+    style.textContent = '.svg-css-override-probe { transform: rotate(20deg); }';
+    document.head.appendChild(style);
+    const { svg, shape } = svgShape();
+    shape.setAttribute('class', 'svg-css-override-probe');
+    shape.setAttribute('transform', 'translate(2 2)');
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    svg.remove();
+    style.remove();
+  });
+
+  it('keeps the attribute authoritative when the computed matrix is its own', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'translate(10 10)');
+    Object.defineProperty(shape, 'transform', {
+      configurable: true,
+      value: {
+        baseVal: {
+          consolidate: () => ({
+            matrix: { a: 1, b: 0, c: 0, d: 1, e: 10, f: 10 }
+          })
+        }
+      }
+    });
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'matrix(1, 0, 0, 1, 10, 10)'
+      } as CSSStyleDeclaration);
+
+    // Chromium surfaces the presentation attribute in the computed style, so
+    // an equal matrix is not a CSS override.
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports a computed matrix that differs from the attribute', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'translate(10 10)');
+    Object.defineProperty(shape, 'transform', {
+      configurable: true,
+      value: {
+        baseVal: {
+          consolidate: () => ({
+            matrix: { a: 1, b: 0, c: 0, d: 1, e: 10, f: 10 }
+          })
+        }
+      }
+    });
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'matrix(0.939693, 0.34202, -0.34202, 0.939693, 0, 0)'
+      } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    computed.mockRestore();
     svg.remove();
   });
 });

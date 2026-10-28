@@ -160,21 +160,59 @@ export function svgUserDelta(element: Element, delta: Point): Point {
   };
 }
 
+const MATRIX_2D = /^matrix\(\s*([^)]+)\)$/;
+
 /**
- * True when CSS owns the element's transform, so the presentation attribute
- * is inert. An inline style always wins; otherwise the attribute governs while
- * it names something other than `none`, and a computed transform only counts
- * when it is actually applied. jsdom reports an empty computed transform for
- * an unstyled element, which means the same thing as `none`.
+ * Splits Chromium's serialized 2D matrix. The computed value is serialized
+ * with about six significant digits, so comparisons need a tolerance.
+ */
+function matrixValues(value: string): number[] | null {
+  const match = MATRIX_2D.exec(value);
+  if (!match?.[1]) return null;
+  const parts = match[1].split(',').map((part) => Number(part.trim()));
+  return parts.length === 6 && parts.every(Number.isFinite) ? parts : null;
+}
+
+/**
+ * The matrix the `transform` presentation attribute alone produces. Chromium's
+ * `SVGGraphicsElement.transform` reflects the attribute, never a CSS
+ * declaration, and jsdom does not implement it at all.
+ */
+function attributeMatrix(element: Element): number[] | null {
+  const transform = (element as SVGGraphicsElement).transform?.baseVal;
+  const matrix = transform?.consolidate()?.matrix;
+  if (!matrix) return null;
+  return [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
+}
+
+function sameMatrix(applied: readonly number[], authored: readonly number[]): boolean {
+  return applied.every((value, index) => {
+    const reference = authored[index] ?? 0;
+    return Math.abs(value - reference) <= Math.max(1e-3, Math.abs(reference) * 1e-4);
+  });
+}
+
+/**
+ * True when CSS owns the element's transform, so the presentation attribute is
+ * inert. An inline style always wins and is detected cheaply. A stylesheet
+ * rule can also outrank the attribute while the attribute stays in the markup:
+ * Chromium surfaces the winning transform in the computed value, and it
+ * surfaces the attribute there too when no rule matches. CSS therefore owns
+ * the transform only when the computed matrix differs from the matrix the
+ * attribute alone produces. Any CSS transform on a shape without an attribute
+ * is an override by definition; jsdom reports the declared rule here and an
+ * empty computed value for an unstyled element (the same thing as `none`).
  */
 export function svgCssTransformOverride(element: Element): boolean {
   const inline = styleOf(element)?.transform?.trim() ?? '';
   if (inline !== '') return true;
-  const authored = element.getAttribute('transform')?.trim() ?? '';
-  if (authored !== '' && authored.toLowerCase() !== 'none') return false;
   const computed =
     element.ownerDocument.defaultView?.getComputedStyle(element).transform ?? '';
-  return computed.trim() !== '' && computed !== 'none';
+  if (computed.trim() === '' || computed === 'none') return false;
+  const authored = attributeMatrix(element);
+  if (!authored) return true;
+  const applied = matrixValues(computed.trim());
+  return applied === null || !sameMatrix(applied, authored);
 }
 
 /**

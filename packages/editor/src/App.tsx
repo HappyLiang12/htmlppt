@@ -1288,6 +1288,10 @@ export function App() {
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
+      // SVG shapes and table cells move through their own mechanisms; numeric
+      // geometry would write a contract the renderer ignores. The fields are
+      // disabled today, so this is a defensive guard.
+      if (isSvgInternal(element) || isTableInternal(element)) return false;
       if (isLockedElement(element) || isHiddenElement(element)) return false;
       if (isGroupElement(element) && (field === 'width' || field === 'height')) {
         return false;
@@ -2554,6 +2558,10 @@ export function App() {
       const element = elementAtPath(slide, selected.path);
       if (
         !element ||
+        // SVG shapes and table cells expose no handles; absolute geometry
+        // would be ignored by their renderers. Defensive, not reachable today.
+        isSvgInternal(element) ||
+        isTableInternal(element) ||
         isLockedElement(element) ||
         isGroupElement(element) ||
         blockedPathAncestor(slide, selected.path) !== null
@@ -2603,6 +2611,10 @@ export function App() {
       const element = elementAtPath(slide, selected.path);
       if (
         !element ||
+        // SVG shapes and table cells expose no rotate handle; absolute
+        // geometry would be ignored by their renderers. Defensive only.
+        isSvgInternal(element) ||
+        isTableInternal(element) ||
         isLockedElement(element) ||
         isHiddenElement(element) ||
         blockedPathAncestor(slide, selected.path) !== null
