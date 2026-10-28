@@ -990,8 +990,8 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
 
     // A mixed-depth selection must be refused as a whole too. #arrow is a
     // genuine slide child while #headline sits inside #pad, so the paths
-    // differ in depth; if the guard used every instead of some, both targets
-    // would duplicate and both counts would rise to 2.
+    // differ in depth; if the guard used every instead of some, only the
+    // top-level #arrow would duplicate and the deck would be written.
     await deck.frame.locator('#arrow').click();
     await deck.frame.locator('#headline').click({ modifiers: ['Shift'] });
     await expect(page.getByTestId('selection-outline')).toHaveCount(2);
