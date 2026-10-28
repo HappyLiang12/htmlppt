@@ -229,12 +229,15 @@ At slide level, the editor selects the innermost visible component rather than
 always the top-level object. `resolveComponent` in
 `packages/editor/src/component-target.ts` walks the pointer target toward the
 slide and stops at the deepest element that is not inline content, with
-exceptions for atomic widgets (images, tables, chart figures), SVG roots, and
-guarded wrappers. `selectionFromEvent`, `componentPath`, and the click resolver
-in `App.tsx` share it, so click, hover, and drag agree. An entered
-`containerPath` keeps the older direct-child rule. Hover reuses the same
-resolver and paints an editor-only outline plus a frame-level cursor attribute;
-nothing about hover or selection enters the master `Document`.
+exceptions for atomic widgets (images and chart figures), SVG roots, and
+guarded wrappers. Tables are atomic for geometry, not for selection: a click
+resolves the cell itself, while the table object is selected through its
+border, the OBJECTS row, or the breadcrumb. `selectionFromEvent`,
+`componentPath`, and the click resolver in `App.tsx` share it, so click, hover,
+and drag agree. An entered `containerPath` keeps the older direct-child rule.
+Hover reuses the same resolver and paints an editor-only outline plus a
+frame-level cursor attribute; nothing about hover or selection enters the
+master `Document`.
 
 HTML targets keep the pin-to-absolute drag gesture. SVG internals use a second
 geometry mode: the editor reads the pointer delta through the inverse CTM in
@@ -249,11 +252,14 @@ Structural commands on nested and SVG selections use the node clipboard in
 `use-deck-controller.ts`: copies hold cloned component nodes plus their kind
 (HTML, SVG root, or SVG internal). Paste inserts a sibling after a nested
 anchor when the kinds match, falls back to slide level for HTML and SVG roots,
-and refuses guarded, table-cell, and nested multi destinations. The helpers in
+and refuses guarded, table-cell, and nested multi destinations plus a
+multi-component clipboard aimed at a nested anchor. The helpers in
 `object-ops.ts` (`cloneComponent`, `deleteComponentPaths`,
-`pasteComponentNode`) refresh every `data-ppt-el` in a clone, offset it by
-20 px, and insert into the destination parent; every operation goes through
-`commitMaster`, so undo, autosave, and conflict recovery are unchanged.
+`pasteComponentNode`) refresh every `data-ppt-el` in a clone, offset it, and
+insert into the destination parent: HTML copies move 20 design px, while an SVG
+copy appends `translate(20 20)` in its local user units, so the rendered offset
+depends on the viewBox scale. Every operation goes through `commitMaster`, so
+undo, autosave, and conflict recovery are unchanged.
 
 ## Presenter BroadcastChannel protocol
 

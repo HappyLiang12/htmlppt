@@ -945,6 +945,12 @@ export function useDeckController(
     ) {
       return 'refused';
     }
+    // A nested anchor offers one insertion point. A clipboard with several
+    // components would fan out multiple siblings under a component, which the
+    // nested structural rule refuses as a whole.
+    if (parentPath !== null && components.length > 1) {
+      return 'refused';
+    }
 
     let kindMismatch = false;
     let pastedCount = 0;

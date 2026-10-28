@@ -472,8 +472,9 @@ export function Inspector({
   const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
   // Structural commands stay top-level only, so a nested selection still
-  // needs an explanation even though its position, size, and appearance are
-  // now editable.
+  // needs an explanation. A selection without numeric geometry (an SVG
+  // internal or a table cell) cannot promise position or size, so its hint
+  // only states the structural rule.
   const nested = selection !== null && selection.path.length > 1;
   const readOnly = multi;
   const selectedTopPath = selection?.path.slice(contextBase.length)[0];
@@ -1139,7 +1140,11 @@ export function Inspector({
                   data-testid="inspector-nested-structural"
                   className="text-[11px] text-muted"
                 >
-                  {t('inspector.nestedStructuralHint')}
+                  {t(
+                    geometryUnavailable
+                      ? 'inspector.nestedStructuralHintLimited'
+                      : 'inspector.nestedStructuralHint'
+                  )}
                 </p>
               )
             )}

@@ -25,6 +25,13 @@ export interface PastedObjectGeometry {
   y: number;
   /** Computed position in the rendered preview, including class rules. */
   position: string;
+  /**
+   * True when CSS owns an SVG-internal element's rendered transform and that
+   * ownership is only visible in the live preview. The inert master document
+   * sees inline styles alone, so this bridge keeps a stylesheet-transformed
+   * copy inert instead of appending a translate that CSS would ignore.
+   */
+  cssTransformOwned?: boolean;
 }
 
 /**
@@ -57,7 +64,7 @@ function offsetPastedObject(
   measured: PastedObjectGeometry | null
 ): void {
   if (isSvgInternal(element)) {
-    if (svgCssTransformOverride(element)) return;
+    if (svgCssTransformOverride(element) || measured?.cssTransformOwned) return;
     applySvgTranslate(element, element.getAttribute('transform') ?? '', {
       x: 20,
       y: 20

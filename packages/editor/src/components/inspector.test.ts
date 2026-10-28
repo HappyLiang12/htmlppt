@@ -378,6 +378,25 @@ describe('inspector nested structural hint', () => {
     expect(container.textContent).not.toContain('read-only');
   });
 
+  it('limits the hint when the nested selection has no geometry', async () => {
+    const LIMITED_COPY = 'Reorder and group act on top-level objects only.';
+    await render(
+      {
+        selection: nestedSelection,
+        geometry: null,
+        geometryUnavailable: true
+      },
+      'en'
+    );
+
+    const hint = container.querySelector(
+      '[data-testid="inspector-nested-structural"]'
+    );
+    expect(hint?.textContent?.trim()).toBe(LIMITED_COPY);
+    // Position and size are unavailable, so the full promise must not render.
+    expect(container.textContent).not.toContain(COPY);
+  });
+
   it('replaces the multi hint with the nested multi explanation', async () => {
     await render(
       {

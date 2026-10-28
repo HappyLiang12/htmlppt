@@ -591,7 +591,16 @@ export function App() {
         const position = view?.getComputedStyle(clone).position ?? '';
         const rect = rectOf(clone, liveSlide);
         const block = containingBlockOffset(clone, liveSlide);
-        return { x: rect.x - block.x, y: rect.y - block.y, position };
+        // Stylesheet transforms only resolve in the live preview; the master
+        // copy cannot see them, so the paste needs this bridge to stay inert.
+        const cssTransformOwned =
+          isSvgInternal(clone) && svgCssTransformOverride(clone);
+        return {
+          x: rect.x - block.x,
+          y: rect.y - block.y,
+          position,
+          cssTransformOwned
+        };
       } finally {
         clone.remove();
       }
@@ -1615,6 +1624,12 @@ export function App() {
     if (!top || guardedPathElement(slideInfo.element, selection.path)) {
       return;
     }
+    // The apply regenerates the figure's innerHTML, so a selection of the svg,
+    // its caption, or a shape inside it stops identifying the same node. Keep
+    // the owning figure so the selection survives the mutation.
+    const figure = chartFigure(elementAtPath(slideInfo.element, selection.path));
+    const figurePath = figure ? componentPath(slideInfo.element, figure) : null;
+    const figureId = figure?.getAttribute('data-ppt-el')?.trim() || null;
     let failure = '';
     const applied = applyInspectorEdit(
       current.master,
@@ -1641,6 +1656,17 @@ export function App() {
         error: failure || t('app.chartApplyFailed')
       });
       return;
+    }
+    if (figurePath !== null) {
+      actionsRef.current.selectTargets([
+        {
+          slideIndex: current.activeIndex,
+          path: figurePath,
+          elementId: figureId
+        }
+      ]);
+    } else {
+      actionsRef.current.clearSelection();
     }
     setChartEditor(null);
   }, [chartEditor, commitMasterDocument, t]);
@@ -4255,26 +4281,30 @@ export function App() {
     activeSlide && selection
       ? tableContext(activeSlide.element, selection.path)
       : null;
-  const tableState = tableSelection
-    ? {
-        row: tableSelection.row,
-        column: tableSelection.column,
-        rows: tableSelection.rows,
-        columns: tableSelection.columns,
-        header: tableSelection.header,
-        fill:
-          tableSelection.cell.style.background ||
-          tableSelection.cell.style.backgroundColor,
-        border:
-          tableSelection.cell.style.borderTopColor ||
-          tableSelection.cell.style.borderColor
-      }
-    : null;
+  const tableState =
+    tableSelection && selections.length === 1
+      ? {
+          row: tableSelection.row,
+          column: tableSelection.column,
+          rows: tableSelection.rows,
+          columns: tableSelection.columns,
+          header: tableSelection.header,
+          fill:
+            tableSelection.cell.style.background ||
+            tableSelection.cell.style.backgroundColor,
+          border:
+            tableSelection.cell.style.borderTopColor ||
+            tableSelection.cell.style.borderColor
+        }
+      : null;
   const primaryObject =
     activeSlide && selection
       ? elementAtPath(activeSlide.element, selection.path)
       : null;
   const chartState: InspectorChartState | null = (() => {
+    // A multi-selection has no single chart contract; the primary target must
+    // not keep offering a data editor for the rest of the selection.
+    if (selections.length !== 1) return null;
     const figure = chartFigure(primaryObject);
     if (!figure) return null;
     try {

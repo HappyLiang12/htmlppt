@@ -130,6 +130,7 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.groupHint': '群組僅支援移動與旋轉；取消群組後可調整大小。',
   'inspector.nestedStructuralHint':
     '位置、大小、外觀與文字會套用到這個物件；排序與群組只作用於最上層物件。',
+  'inspector.nestedStructuralHintLimited': '排序與群組只作用於最上層物件。',
   'inspector.nestedMultiStructuralHint':
     '已選取多個巢狀物件；僅支援拖曳或方向鍵移動，複製、刪除、排序與群組只作用於最上層物件。',
   'inspector.appearance': '外觀',

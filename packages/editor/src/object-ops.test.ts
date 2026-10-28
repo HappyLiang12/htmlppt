@@ -485,6 +485,28 @@ describe('pasteComponentNode', () => {
     expect(master.querySelectorAll('circle')).toHaveLength(2);
   });
 
+  it('leaves a stylesheet-owned svg transform untouched when measured', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="plot"><circle id="dot" cx="5" cy="5" r="2"/></svg>'
+    );
+    const dot = master.querySelector('#dot');
+    if (!dot) throw new Error('Missing source circle.');
+
+    // The master document has no defaultView, so only the live measurement
+    // can report that a stylesheet owns the copy's computed transform.
+    const target = pasteComponentNode(master, 0, dot, [0], null, () => ({
+      x: 0,
+      y: 0,
+      position: 'absolute',
+      cssTransformOwned: true
+    }));
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted circle.');
+    expect(clone.hasAttribute('transform')).toBe(false);
+    expect(clone.hasAttribute('style')).toBe(false);
+  });
+
   it('offsets a duplicated nested svg root inside its svg parent', () => {
     const { master, slide } = componentMaster(
       '<svg id="outer"><svg id="inner"><circle cx="3" cy="3" r="2"/></svg></svg>'

@@ -467,6 +467,54 @@ describe('useDeckController', () => {
     expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
   });
 
+  it('refuses a multi-component clipboard on a nested anchor', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: LEAD_PATH,
+        elementId: null
+      });
+      // Copy both nested targets, then anchor the paste on one of them. The
+      // clipboard has two kind-compatible components for one insertion point.
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: LEAD_PATH,
+        elementId: null
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([LEAD_PATH]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('refused');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    const pad = () => slide()?.querySelector('.pad');
+    expect(pad()?.childElementCount).toBe(4);
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+    expect(slide()?.querySelectorAll('#lead')).toHaveLength(1);
+
+    // No history entry was pushed, so undo cannot change the deck.
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(pad()?.childElementCount).toBe(4);
+  });
+
   it('refuses a table-cell paste destination before committing', async () => {
     await act(async () => {
       await controller.actions.load(STRUCTURED_DECK);
@@ -522,19 +570,18 @@ describe('useDeckController', () => {
       });
       // The second copy captures both: one HTML object and one SVG internal.
       controller.actions.copySelection();
-      controller.actions.select({
-        slideIndex: 0,
-        path: LEAD_PATH,
-        elementId: null
-      });
+      // A nested anchor refuses a multi-component clipboard as a whole, so
+      // exercise the mixed-kind skip at slide level, where the HTML half still
+      // has a destination.
+      controller.actions.clearSelection();
     });
 
     let outcome: PasteOutcome | undefined;
     await act(async () => {
       outcome = await controller.actions.pasteObjects();
     });
-    // The HTML object lands after the anchor, but the skipped SVG internal
-    // must still raise the hint so the user learns half the clipboard failed.
+    // The HTML object lands at slide level, but the skipped SVG internal must
+    // still raise the hint so the user learns half the clipboard failed.
     expect(outcome).toBe('kind-mismatch');
     const slide = () => controller.state.slides[0]?.element;
     expect(slide()?.querySelectorAll('h1')).toHaveLength(2);

@@ -449,6 +449,64 @@ test('enters an SVG and drags a circle with a transform', { tag: '@feature:compo
   }
 });
 
+test('reselects the chart figure after applying chart data', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The chart figure is atomic: the first double-click enters the figure,
+    // the second enters its svg, and then the circle is a direct child.
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('chart-card');
+    await deck.frame.locator('#chart-svg').dblclick({ position: { x: 40, y: 40 } });
+    await expect(page.getByTestId('edit-context')).toContainText('svg');
+    await deck.frame.locator('#dot').click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#dot')
+    );
+    await expect(deck.frame.locator('#dot')).toHaveCount(1);
+
+    await page.getByTestId('chart-edit').click();
+    const json = page.getByTestId('chart-json');
+    await expect(json).toHaveValue(/"type": "bar"/);
+    const data = {
+      type: 'bar',
+      title: 'Edited',
+      labels: ['Q1', 'Q2'],
+      series: [{ name: 'S', values: [5, 15] }],
+      colors: ['#4f7cff'],
+      legend: false,
+      valueLabels: true
+    };
+    await json.fill(JSON.stringify(data, null, 2));
+    const save = waitForDeckSave(page);
+    await page.getByTestId('chart-apply').click();
+    await save;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // The apply regenerates the figure's innerHTML, so a path to the old svg
+    // or its circle no longer identifies a chart node. The selection must move
+    // to the owning figure instead of leaving a stale descendant path.
+    const outline = page.getByTestId('selection-outline');
+    await expect(outline).toHaveAttribute('data-selected-id', 'chart');
+    await expect(outline).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#chart')
+    );
+    // The generated chart owns the figure content; the authored #dot fixture
+    // circle is regenerated away, while the chart itself stays rendered.
+    await expect(deck.frame.locator('#chart svg')).toHaveCount(1);
+    await expect(deck.frame.locator('#chart')).toContainText('Edited');
+
+    // Undo restores the authored chart card, including the fixture circle.
+    const undoSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+z');
+    await undoSave;
+    await expect(deck.frame.locator('#dot')).toHaveCount(1);
+  } finally {
+    await deck.close();
+  }
+});
+
 test('keeps a CSS-transformed SVG shape inert', { tag: '@feature:component-dragging' }, async ({ page }) => {
   const deck = await openDeck(page);
   try {
@@ -552,6 +610,44 @@ test('keeps a stylesheet-transformed SVG shape inert', { tag: '@feature:componen
     expect(html).not.toMatch(/id="css-dot-b"[^>]*position: absolute/);
     expect(html).not.toMatch(/id="css-dot-b"[^>]*style="[^"]*(left|top):/);
     expect(html.match(/id="css-dot-b"[^>]*transform="translate\(2 2\)"/g)).toHaveLength(1);
+  } finally {
+    await deck.close();
+  }
+});
+
+test('duplicates a stylesheet-owned svg shape without an inert offset', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    // The stylesheet transform outranks the authored attribute, so the copy
+    // must stay inert: a translate appended in the master document cannot see
+    // the stylesheet and would silently offset a shape CSS still owns.
+    await deck.frame.locator('#css-shape-b').dblclick();
+    await expect(page.getByTestId('edit-context')).toContainText('.css-shape-b');
+    await deck.frame.locator('#css-dot-b').click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#css-dot-b')
+    );
+
+    const save = waitForDeckSave(page);
+    await page.keyboard.press('Control+d');
+    await save;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    const circles = deck.frame.locator('#css-shape-b circle');
+    await expect(circles).toHaveCount(2);
+    expect(
+      await circles.evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('transform'))
+      )
+    ).toEqual(['translate(2 2)', 'translate(2 2)']);
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).not.toContain('translate(2 2) translate(20 20)');
+
+    const undoSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+z');
+    await undoSave;
+    await expect(circles).toHaveCount(1);
   } finally {
     await deck.close();
   }
@@ -671,6 +767,11 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
 
     // A mixed selection drags its HTML targets and leaves the cell untouched.
     await deck.frame.locator('#decor').click({ modifiers: ['Shift'] });
+    // The table toolbar belongs to exactly one cell; a multi-selection whose
+    // primary target happens to be a cell must not keep offering it. The chart
+    // editor likewise never describes a multi-selection.
+    await expect(page.getByTestId('table-toolbar')).toHaveCount(0);
+    await expect(page.getByTestId('chart-edit')).toHaveCount(0);
     const decorBefore = await deck.frame.locator('#decor').boundingBox();
     if (!decorBefore) throw new Error('No box for #decor');
     const cellBeforeMixed = await cell.boundingBox();
