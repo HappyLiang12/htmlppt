@@ -334,6 +334,8 @@ export const en = {
     'This object is hidden. Unhide it before editing its content.',
   'editor.hint.group':
     'Groups edit as one object. Ungroup it to edit the parts.',
+  'editor.hint.table-cell-move':
+    'This is a table cell. Select the table to move it.',
   'standalone.title': 'Standalone editor',
   'standalone.description': 'No local host is connected. Open or drop an HTML deck to edit it. Browsers with File System Access write back to the original file; others can download the exported HTML.',
   'standalone.open': 'Open HTML…',

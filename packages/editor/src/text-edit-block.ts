@@ -8,10 +8,15 @@ import type { MessageKey } from './i18n';
 export type TextEditBlock = 'not-text' | 'has-children' | 'empty';
 
 /** Every reason the rejected-gesture hint can name. */
-export type EditHintReason = TextEditBlock | 'locked' | 'hidden' | 'group';
+export type EditHintReason =
+  | TextEditBlock
+  | 'locked'
+  | 'hidden'
+  | 'group'
+  | 'table-cell';
 
-/** The reasons that come from the top-level guard, not the text contract. */
-export type TopLevelBlock = Exclude<EditHintReason, TextEditBlock>;
+/** Guard reasons only; table-cell is a movement hint, not a guard. */
+export type TopLevelBlock = 'locked' | 'hidden' | 'group';
 
 /**
  * One catalog key per reason, typed so a new reason cannot ship without
@@ -23,7 +28,8 @@ export const EDIT_HINT_KEYS: Record<EditHintReason, MessageKey> = {
   empty: 'editor.hint.empty',
   locked: 'editor.hint.locked',
   hidden: 'editor.hint.hidden',
-  group: 'editor.hint.group'
+  group: 'editor.hint.group',
+  'table-cell': 'editor.hint.table-cell-move'
 };
 
 /**

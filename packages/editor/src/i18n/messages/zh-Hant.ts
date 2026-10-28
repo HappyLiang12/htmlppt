@@ -323,6 +323,7 @@ export const zhHant: Record<MessageKey, string> = {
   'editor.hint.locked': '這個物件已鎖定。請先解鎖，再編輯其內容。',
   'editor.hint.hidden': '這個物件已隱藏。請先顯示，再編輯其內容。',
   'editor.hint.group': '群組會作為單一物件編輯。請先取消群組，再編輯其中的元件。',
+  'editor.hint.table-cell-move': '這是表格儲存格，請選取整個表格再移動。',
   'standalone.title': '獨立編輯模式',
   'standalone.description': '未連上本機 host。開啟或拖入一份 HTML 簡報即可編輯；支援 File System Access 的瀏覽器會直接寫回原檔，其他瀏覽器可下載匯出的 HTML。',
   'standalone.open': '開啟 HTML…',

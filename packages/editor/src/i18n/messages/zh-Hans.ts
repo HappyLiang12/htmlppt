@@ -323,6 +323,7 @@ export const zhHans: Record<MessageKey, string> = {
   'editor.hint.locked': '这个对象已锁定。请先解锁，再编辑其内容。',
   'editor.hint.hidden': '这个对象已隐藏。请先显示，再编辑其内容。',
   'editor.hint.group': '编组会作为单个对象编辑。请先取消编组，再编辑其中的组件。',
+  'editor.hint.table-cell-move': '这是表格单元格，请选取整个表格再移动。',
   'standalone.title': '独立编辑模式',
   'standalone.description': '未连接本地 host。打开或拖入一份 HTML 演示文稿即可编辑；支持 File System Access 的浏览器会直接写回原文件，其他浏览器可下载导出的 HTML。',
   'standalone.open': '打开 HTML…',

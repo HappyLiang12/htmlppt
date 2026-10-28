@@ -2667,6 +2667,7 @@ export function App() {
       const boxes: SelectionBox[] = [];
       let changed = false;
       let pinned = false;
+      let tableCells = 0;
       for (const target of targets) {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
@@ -2685,6 +2686,19 @@ export function App() {
               elementId: target.elementId
             });
           }
+          continue;
+        }
+        if (isTableInternal(element)) {
+          // A cell has no movable geometry: its renderer ignores the absolute
+          // styles a nudge would write. Keep it in the overlay and count it so
+          // a gesture that moved nothing can explain the refusal.
+          tableCells += 1;
+          boxes.push({
+            rect: frameRectOf(rect, offset),
+            rotation: rotationOf(element),
+            path: target.path,
+            elementId: target.elementId
+          });
           continue;
         }
         const svg = isSvgInternal(element);
@@ -2735,7 +2749,10 @@ export function App() {
           elementId: target.elementId
         });
       }
-      if (!changed) return false;
+      if (!changed) {
+        if (tableCells > 0) showEditHint('table-cell');
+        return false;
+      }
       setSelectionBoxes(boxes);
       setGuides([]);
       void commitFrame().then((committed) => {
@@ -2743,7 +2760,7 @@ export function App() {
       });
       return true;
     },
-    [commitFrame, frameSlideNow, showPinNotice]
+    [commitFrame, frameSlideNow, showEditHint, showPinNotice]
   );
 
   const beginTextEditing = useCallback((editable: HTMLElement) => {
@@ -3287,11 +3304,28 @@ export function App() {
           event.preventDefault();
           void actionsRef.current.duplicateSelection().catch(() => undefined);
           return;
-        case 'delete':
+        case 'delete': {
           if (current.selections.length === 0) return;
+          // A table cell has no removable geometry of its own; rows and
+          // columns belong to the table toolbar. Refuse the whole gesture so
+          // a mixed selection never deletes only its HTML targets.
+          const slide = frameSlideNow();
+          const tableCell =
+            slide !== null &&
+            current.selections.some((target) => {
+              if (target.slideIndex !== current.activeIndex) return false;
+              const element = elementAtPath(slide, target.path);
+              return element !== null && isTableInternal(element);
+            });
+          if (tableCell) {
+            event.preventDefault();
+            showEditHint('table-cell');
+            return;
+          }
           event.preventDefault();
           void actionsRef.current.deleteSelection().catch(() => undefined);
           return;
+        }
         case 'zoom-in':
           event.preventDefault();
           zoomBy(ZOOM_STEP);
@@ -3343,10 +3377,12 @@ export function App() {
       chartEditor,
       clearOverlay,
       computeFitScale,
+      frameSlideNow,
       handleObjectCommand,
       nudgeSelection,
       playing,
       shortcutsOpen,
+      showEditHint,
       startPlay,
       startTextEditing,
       stopPlay,
@@ -3456,6 +3492,40 @@ export function App() {
         return;
       }
 
+      if (isTableInternal(clicked)) {
+        // A table cell stays selectable, but absolute geometry is inert inside
+        // a table. Explain the refused move once the pointer travels past the
+        // drag threshold, and never start a session or write a style. The
+        // probe does not preventDefault, so native cell text selection works.
+        const startX = event.clientX;
+        const startY = event.clientY;
+        // The frame reports design/CSS pixels while the session threshold is
+        // defined in outer screen pixels.
+        const threshold = DRAG_THRESHOLD_SCREEN_PX / stateRef.current.scale;
+        const cleanup = () => {
+          frameDocument.removeEventListener('pointermove', onMove);
+          frameDocument.removeEventListener('pointerup', cleanup);
+          frameDocument.removeEventListener('pointercancel', cleanup);
+          window.removeEventListener('pointerup', cleanup);
+          window.removeEventListener('pointercancel', cleanup);
+        };
+        const onMove = (move: PointerEvent) => {
+          const distance = Math.hypot(
+            move.clientX - startX,
+            move.clientY - startY
+          );
+          if (distance < threshold) return;
+          cleanup();
+          showEditHint('table-cell');
+        };
+        frameDocument.addEventListener('pointermove', onMove);
+        frameDocument.addEventListener('pointerup', cleanup);
+        frameDocument.addEventListener('pointercancel', cleanup);
+        window.addEventListener('pointerup', cleanup);
+        window.addEventListener('pointercancel', cleanup);
+        return;
+      }
+
       const dragSelections = existing ? current.selections : [selected];
       const items = dragSelections
         .filter((candidate) => candidate.slideIndex === current.activeIndex)
@@ -3466,6 +3536,7 @@ export function App() {
         .filter(
           (item): item is { element: Element; selection: SelectionTarget } =>
             item.element !== null &&
+            !isTableInternal(item.element) &&
             !isLockedElement(item.element) &&
             !isHiddenElement(item.element) &&
             blockedPathAncestor(frameSlide, item.selection.path) === null &&
@@ -3489,7 +3560,7 @@ export function App() {
         event.altKey
       );
     },
-    [beginDragSession, clearOverlay, componentSelection, containerPath]
+    [beginDragSession, clearOverlay, componentSelection, containerPath, showEditHint]
   );
 
   keyDownRef.current = handleKeyDown;

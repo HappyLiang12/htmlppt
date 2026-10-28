@@ -557,6 +557,90 @@ test('keeps a stylesheet-transformed SVG shape inert', { tag: '@feature:componen
   }
 });
 
+test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    const cell = deck.frame.locator('#cell-a');
+    await cell.click();
+    await expect(page.getByTestId('table-toolbar')).toBeVisible();
+    const cellBox = await cell.boundingBox();
+    if (!cellBox) throw new Error('No box for #cell-a');
+    const cellStart = fromBoundingBox(cellBox);
+    const hint = page.getByTestId('edit-hint');
+
+    // A pointer drag inside the cell keeps the native text selection, but the
+    // cell owns no movable geometry: nothing may be pinned or saved.
+    // Chromium does not acknowledge synthetic mouse moves while a native text
+    // selection drag is active inside a sandboxed frame, so the drag arrives
+    // as real touch input on the same pointer listeners and coordinates.
+    const startX = cellBox.x + 10;
+    const startY = cellBox.y + 10;
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: startX, y: startY }]
+    });
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x: startX + 40, y: startY + 30 }]
+    });
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: []
+    });
+    await page.waitForTimeout(250);
+    const afterDrag = await cell.boundingBox();
+    if (!afterDrag) throw new Error('No box for #cell-a after the drag');
+    expect(deviation(cellStart, fromBoundingBox(afterDrag))).toBeLessThanOrEqual(1);
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText('表格');
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    // The keyboard path explains itself instead of silently doing nothing.
+    await page.getByTestId('edit-hint-dismiss').click();
+    await expect(hint).toHaveCount(0);
+    await page.keyboard.press('ArrowRight');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText('表格');
+    const afterNudge = await cell.boundingBox();
+    if (!afterNudge) throw new Error('No box for #cell-a after the nudge');
+    expect(deviation(cellStart, fromBoundingBox(afterNudge))).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
+    // A mixed selection drags its HTML targets and leaves the cell untouched.
+    await deck.frame.locator('#decor').click({ modifiers: ['Shift'] });
+    const decorBefore = await deck.frame.locator('#decor').boundingBox();
+    if (!decorBefore) throw new Error('No box for #decor');
+    const cellBeforeMixed = await cell.boundingBox();
+    if (!cellBeforeMixed) throw new Error('No box for #cell-a before the mixed drag');
+    const save = waitForDeckSave(page);
+    await page.mouse.move(decorBefore.x + decorBefore.width / 2, decorBefore.y + decorBefore.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(decorBefore.x + decorBefore.width / 2 + 40, decorBefore.y + decorBefore.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await save;
+    const decorAfter = await deck.frame.locator('#decor').boundingBox();
+    if (!decorAfter) throw new Error('No box for #decor after the drag');
+    expect(Math.abs(decorAfter.x - decorBefore.x - 40)).toBeLessThanOrEqual(2);
+    const afterMixed = await cell.boundingBox();
+    if (!afterMixed) throw new Error('No box for #cell-a after the mixed drag');
+    expect(deviation(fromBoundingBox(cellBeforeMixed), fromBoundingBox(afterMixed))).toBeLessThanOrEqual(1);
+    const html = await readFile(deck.path, 'utf8');
+    expect(html).not.toMatch(/id="cell-a"[^>]*(position: absolute|left:|top:)/);
+
+    // Delete refuses the cell and keeps every selected object, so the table
+    // itself stays the only thing that can remove a row or column.
+    await page.keyboard.press('Delete');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText('表格');
+    await expect(cell).toBeVisible();
+    await expect(deck.frame.locator('#decor')).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+  } finally {
+    await deck.close();
+  }
+});
+
 test('drags a nested svg root with a transform', { tag: '@feature:component-dragging' }, async ({ page }) => {
   const deck = await openDeck(page);
   try {

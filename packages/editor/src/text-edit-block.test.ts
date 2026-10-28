@@ -218,7 +218,8 @@ describe('EDIT_HINT_KEYS', () => {
       'has-children',
       'hidden',
       'locked',
-      'not-text'
+      'not-text',
+      'table-cell'
     ]);
     for (const key of Object.values(EDIT_HINT_KEYS)) {
       expect(en[key]).toBeTruthy();
@@ -233,6 +234,10 @@ describe('EDIT_HINT_KEYS', () => {
     expect(EDIT_HINT_KEYS.group).toBe('editor.hint.group');
   });
 
+  it('maps the table-cell reason to its copy key', () => {
+    expect(EDIT_HINT_KEYS['table-cell']).toBe('editor.hint.table-cell-move');
+  });
+
   it('pins the required English copy for the guard reasons', () => {
     expect(en[EDIT_HINT_KEYS.locked]).toBe(
       'This object is locked. Unlock it before editing its content.'
@@ -242,6 +247,12 @@ describe('EDIT_HINT_KEYS', () => {
     );
     expect(en[EDIT_HINT_KEYS.group]).toBe(
       'Groups edit as one object. Ungroup it to edit the parts.'
+    );
+  });
+
+  it('pins the required English copy for the table cell hint', () => {
+    expect(en[EDIT_HINT_KEYS['table-cell']]).toBe(
+      'This is a table cell. Select the table to move it.'
     );
   });
 });
