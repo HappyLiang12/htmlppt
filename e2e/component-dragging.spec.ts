@@ -230,3 +230,33 @@ test('shift-click builds a multi-selection across depths', { tag: '@feature:comp
     await deck.close();
   }
 });
+
+test('hover previews the component a click will select', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    await deck.frame.locator('#headline').hover();
+    const outline = page.getByTestId('hover-outline');
+    await expect(outline).toBeVisible();
+    await expect(page.getByTestId('hover-label')).toHaveText('h1.headline');
+    const headingBox = await deck.frame.locator('#headline').boundingBox();
+    expect(deviation(await boxOfLocator(outline), fromBoundingBox(headingBox!))).toBeLessThanOrEqual(1);
+    expect(await deck.frame.locator('#headline').evaluate((el) => getComputedStyle(el).cursor)).toBe('move');
+
+    // Playwright applies `position` before the canvas scale transform, so the
+    // design-pixel offset is multiplied by the frame scale to land on the
+    // pad's own padding instead of past the slide edge.
+    const slideBox = await deck.frame.locator('[data-slide-id]').boundingBox();
+    const scale = slideBox!.width / 1600;
+    await deck.frame
+      .locator('#pad')
+      .hover({ position: { x: 12 * scale, y: 500 * scale } });
+    await expect(outline).toBeVisible();
+    await expect(page.getByTestId('hover-label')).toHaveText('div.pad');
+
+    await deck.frame.locator('#cell-a').hover();
+    await expect(page.getByTestId('hover-label')).toHaveText('td');
+    expect(await deck.frame.locator('#cell-a').evaluate((el) => getComputedStyle(el).cursor)).toBe('default');
+  } finally {
+    await deck.close();
+  }
+});

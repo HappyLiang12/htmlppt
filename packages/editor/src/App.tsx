@@ -131,7 +131,12 @@ import {
   topLevelObjects,
   type SelectionTarget
 } from './selection';
-import { componentPath, resolveComponent } from './component-target';
+import {
+  componentLabel,
+  componentPath,
+  isTableInternal,
+  resolveComponent
+} from './component-target';
 import {
   buildSlideSrcDoc,
   commitSlide,
@@ -254,6 +259,9 @@ const DRAG_THRESHOLD_SCREEN_PX = 2;
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 3;
 const ZOOM_STEP = 1.2;
+// Set on the frame's document element only; it never enters the slide markup
+// that commitSlide serializes.
+const HOVER_ATTRIBUTE = 'data-ppt-hover';
 
 function sameSelection(a: SelectionTarget, b: SelectionTarget): boolean {
   return (
@@ -278,6 +286,15 @@ interface DragTarget extends TransformTarget {
   path: number[];
   elementId: string | null;
   rotation: number;
+}
+
+interface HoverTarget {
+  /** Raw child-index path from the slide. */
+  path: number[];
+  /** Frame-space rect, slide offset already applied. */
+  rect: Rect;
+  label: string;
+  draggable: boolean;
 }
 
 interface DragSession extends GestureBase {
@@ -701,6 +718,11 @@ export function App() {
   const [selectionGeometry, setSelectionGeometry] =
     useState<GeometryValues | null>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
+  const [hoverTarget, setHoverTarget] = useState<HoverTarget | null>(null);
+  // The hover resolver runs per pointer sample; the key skips state updates
+  // while the same path stays under the pointer.
+  const hoverKeyRef = useRef('');
+  const hoverFrameRef = useRef<number | null>(null);
   const [frameEpoch, setFrameEpoch] = useState(0);
   const [measuredBox, setMeasuredBox] = useState<MeasuredBox | null>(null);
   const measuredBoxRef = useRef<MeasuredBox | null>(null);
@@ -865,6 +887,11 @@ export function App() {
         window.clearTimeout(toolbarFocusTimerRef.current);
         toolbarFocusTimerRef.current = null;
       }
+      // A queued hover sample belongs to the frame being torn down.
+      if (hoverFrameRef.current !== null) {
+        window.cancelAnimationFrame(hoverFrameRef.current);
+        hoverFrameRef.current = null;
+      }
     },
     []
   );
@@ -952,11 +979,32 @@ export function App() {
     []
   );
 
+  /**
+   * Drops the hover preview and the editor-only cursor attribute. A queued
+   * sample is cancelled so a pointer that already left cannot resurrect the box
+   * after a gesture or a frame reload.
+   */
+  const clearHover = useCallback(() => {
+    if (hoverFrameRef.current !== null) {
+      window.cancelAnimationFrame(hoverFrameRef.current);
+      hoverFrameRef.current = null;
+    }
+    hoverKeyRef.current = '';
+    setHoverTarget(null);
+    // A rebinding iframe briefly exposes an empty document whose
+    // documentElement is still null.
+    const frameDocument = frame.current?.contentDocument;
+    if (frameDocument?.documentElement) {
+      frameDocument.documentElement.removeAttribute(HOVER_ATTRIBUTE);
+    }
+  }, []);
+
   const clearOverlay = useCallback(() => {
+    clearHover();
     setSelectionBoxes([]);
     setSelectionGeometry(null);
     setGuides([]);
-  }, []);
+  }, [clearHover]);
 
   /**
    * Moves the drill-in context and drops the selection, which belonged to the
@@ -2093,6 +2141,9 @@ export function App() {
   );
 
   const refreshOverlay = useCallback(() => {
+    // The stored hover rect is a snapshot; a selection, zoom, or reload makes
+    // it stale, so the next pointer sample re-measures instead.
+    clearHover();
     const current = stateRef.current;
     if (current.selections.length === 0) {
       clearOverlay();
@@ -2132,11 +2183,17 @@ export function App() {
     }
     setSelectionBoxes(boxes);
     setSelectionGeometry(geometry);
-  }, [clearOverlay]);
+  }, [clearHover, clearOverlay]);
 
   useEffect(() => {
     refreshOverlay();
   }, [refreshOverlay, selections, activeIndex, srcDoc, slides, frameEpoch]);
+
+  // A zoom rescales the frame under a stationary pointer, so the stored hover
+  // rect would paint at the old scale until the next pointer sample.
+  useEffect(() => {
+    clearHover();
+  }, [clearHover, scale]);
 
   /**
    * Reloads the preview iframe from the current master document, discarding
@@ -2394,6 +2451,7 @@ export function App() {
       const current = stateRef.current;
       const slideInfo = current.slides[current.activeIndex];
       if (!slideInfo || items.length === 0) return;
+      clearHover();
       sessionRef.current = {
         kind: 'drag',
         pointerId,
@@ -2418,7 +2476,7 @@ export function App() {
       };
       attachSession(slide);
     },
-    [attachSession]
+    [attachSession, clearHover]
   );
 
   const beginResizeSession = useCallback(
@@ -2447,6 +2505,7 @@ export function App() {
       }
       event.preventDefault();
       event.stopPropagation();
+      clearHover();
       // Keep overlay gestures in the editor document; without capture a drag
       // that crosses the iframe boundary gets routed into the iframe.
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -2468,7 +2527,7 @@ export function App() {
       };
       attachSession(slide);
     },
-    [attachSession, frameSlideNow, outerDesignPoint]
+    [attachSession, clearHover, frameSlideNow, outerDesignPoint]
   );
 
   const beginRotateSession = useCallback(
@@ -2495,6 +2554,7 @@ export function App() {
       }
       event.preventDefault();
       event.stopPropagation();
+      clearHover();
       event.currentTarget.setPointerCapture(event.pointerId);
       const startRect = rectOf(element, slide);
       const center = centerOf(startRect);
@@ -2520,7 +2580,7 @@ export function App() {
       };
       attachSession(slide);
     },
-    [attachSession, frameSlideNow, outerDesignPoint]
+    [attachSession, clearHover, frameSlideNow, outerDesignPoint]
   );
 
   const nudgeSelection = useCallback(
@@ -2598,6 +2658,7 @@ export function App() {
     // A started text edit is the success path for a previously rejected
     // gesture, so the advisory hint leaves at once.
     setEditHint(null);
+    clearHover();
     const document = editable.ownerDocument;
     const range = currentTextRange(document);
     editingElementRef.current = editable;
@@ -2607,7 +2668,7 @@ export function App() {
       state: readTextToolbarState(document, editable, lastTextRangeRef.current),
       error: ''
     });
-  }, []);
+  }, [clearHover]);
 
   const endTextEditing = useCallback(() => {
     editingElementRef.current = null;
@@ -3373,6 +3434,11 @@ export function App() {
     const frameDocument = frame.current?.contentDocument;
     if (!frameDocument) return;
 
+    // A reload replaces the frame document (and its listeners). Reset the hover
+    // key before anything else: a stale path would suppress the first sample on
+    // the new document, and a queued frame from the old one must not touch it.
+    clearHover();
+
     revealPreviewSlide(frameDocument);
     setFrameEpoch((value) => value + 1);
 
@@ -3601,10 +3667,97 @@ export function App() {
     frameDocument.addEventListener('pointerdown', (event) => {
       framePointerDownRef.current(event, frameDocument);
     });
+
+    // The cursor style lives in the frame head and the hover attribute on the
+    // frame's <html>: commitSlide serializes the slide subtree only, so neither
+    // can reach the saved deck.
+    frameDocument
+      .querySelectorAll('[data-ppt-editor-style]')
+      .forEach((style) => style.remove());
+    const editorStyle = frameDocument.createElement('style');
+    editorStyle.setAttribute('data-ppt-editor-style', '');
+    editorStyle.textContent =
+      `html[${HOVER_ATTRIBUTE}="move"], html[${HOVER_ATTRIBUTE}="move"] * { cursor: move !important; }` +
+      `html[${HOVER_ATTRIBUTE}="blocked"], html[${HOVER_ATTRIBUTE}="blocked"] * { cursor: default !important; }`;
+    frameDocument.head.appendChild(editorStyle);
+
+    const updateHover = (event: PointerEvent) => {
+      // Coalesce pointer moves into one sample per frame.
+      if (hoverFrameRef.current !== null) return;
+      const point = { x: event.clientX, y: event.clientY };
+      hoverFrameRef.current = window.requestAnimationFrame(() => {
+        hoverFrameRef.current = null;
+        const current = stateRef.current;
+        // Text editing and transform gestures own the pointer; no preview.
+        if (sessionRef.current || editingElementRef.current) {
+          clearHover();
+          return;
+        }
+        const slideInfo = current.slides[current.activeIndex];
+        const frameSlide = slideInfo
+          ? frameSlideElement(slideInfo, frameDocument)
+          : null;
+        const target = frameDocument.elementFromPoint(point.x, point.y);
+        if (
+          !slideInfo ||
+          !frameSlide ||
+          !target ||
+          !frameSlide.contains(target)
+        ) {
+          clearHover();
+          return;
+        }
+        const resolved = componentSelection(target, frameSlide, false);
+        const element = resolved
+          ? elementAtPath(frameSlide, resolved.path)
+          : null;
+        if (
+          !resolved ||
+          !element ||
+          // The outline already marks the selection; a second box would just
+          // double the border.
+          (current.selection &&
+            sameSelection(current.selection, resolved) &&
+            current.selections.length === 1)
+        ) {
+          clearHover();
+          return;
+        }
+        const key = resolved.path.join('.');
+        if (hoverKeyRef.current === key) return;
+        hoverKeyRef.current = key;
+        const draggable =
+          !isTableInternal(element) &&
+          !isLockedElement(element) &&
+          blockedPathAncestor(frameSlide, resolved.path) === null;
+        setHoverTarget({
+          path: resolved.path,
+          rect: frameRectOf(
+            rectOf(element, frameSlide),
+            slideOffsetOf(frameSlide)
+          ),
+          label: componentLabel(element),
+          draggable
+        });
+        frameDocument.documentElement.setAttribute(
+          HOVER_ATTRIBUTE,
+          draggable ? 'move' : 'blocked'
+        );
+      });
+    };
+    frameDocument.addEventListener('pointermove', updateHover);
+    frameDocument.addEventListener('pointerleave', clearHover);
+    // Leaving an iframe across the boundary reports no related target instead
+    // of a sibling element; either signal must drop the preview.
+    frameDocument.addEventListener('pointerout', (event) => {
+      if (!event.relatedTarget) clearHover();
+    });
   }, [
     beginTextEditing,
+    clearHover,
     clearOverlay,
     commit,
+    componentSelection,
     endTextEditing,
     finishTextEditing,
     showEditHint
@@ -4375,6 +4528,11 @@ export function App() {
                   <CanvasOverlay
                     boxes={selectionBoxes}
                     guides={guides}
+                    hover={
+                      hoverTarget
+                        ? { rect: hoverTarget.rect, label: hoverTarget.label }
+                        : null
+                    }
                     scale={scale}
                     readOnly={
                       selectionBoxes.length > 1 || blockedAncestor !== null
