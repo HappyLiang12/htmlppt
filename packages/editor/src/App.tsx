@@ -723,6 +723,10 @@ export function App() {
   // while the same path stays under the pointer.
   const hoverKeyRef = useRef('');
   const hoverFrameRef = useRef<number | null>(null);
+  const hoverPointRef = useRef<Point | null>(null);
+  // Re-resolves the last pointer sample when Alt changes, because Alt changes
+  // the click granularity (deepest node) without moving the pointer.
+  const hoverResampleRef = useRef<((altKey: boolean) => void) | null>(null);
   const [frameEpoch, setFrameEpoch] = useState(0);
   const [measuredBox, setMeasuredBox] = useState<MeasuredBox | null>(null);
   const measuredBoxRef = useRef<MeasuredBox | null>(null);
@@ -892,6 +896,7 @@ export function App() {
         window.cancelAnimationFrame(hoverFrameRef.current);
         hoverFrameRef.current = null;
       }
+      hoverResampleRef.current = null;
     },
     []
   );
@@ -990,6 +995,7 @@ export function App() {
       hoverFrameRef.current = null;
     }
     hoverKeyRef.current = '';
+    hoverPointRef.current = null;
     setHoverTarget(null);
     // A rebinding iframe briefly exposes an empty document whose
     // documentElement is still null.
@@ -2194,6 +2200,21 @@ export function App() {
   useEffect(() => {
     clearHover();
   }, [clearHover, scale]);
+
+  // The editor chrome usually owns keyboard focus, so the frame document never
+  // sees Alt. Re-resolve the last hover sample from the parent document too.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt') return;
+      hoverResampleRef.current?.(event.altKey);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keyup', onKey);
+    };
+  }, []);
 
   /**
    * Reloads the preview iframe from the current master document, discarding
@@ -3681,72 +3702,94 @@ export function App() {
       `html[${HOVER_ATTRIBUTE}="blocked"], html[${HOVER_ATTRIBUTE}="blocked"] * { cursor: default !important; }`;
     frameDocument.head.appendChild(editorStyle);
 
+    const sampleHover = (point: Point, altKey: boolean) => {
+      const current = stateRef.current;
+      // Text editing and transform gestures own the pointer; no preview.
+      if (sessionRef.current || editingElementRef.current) {
+        clearHover();
+        return;
+      }
+      const slideInfo = current.slides[current.activeIndex];
+      const frameSlide = slideInfo
+        ? frameSlideElement(slideInfo, frameDocument)
+        : null;
+      const target = frameDocument.elementFromPoint(point.x, point.y);
+      if (
+        !slideInfo ||
+        !frameSlide ||
+        !target ||
+        !frameSlide.contains(target)
+      ) {
+        clearHover();
+        return;
+      }
+      // An authored editable accepts the pointer for its own caret, not for a
+      // selection gesture, so it gets neither a preview nor a cursor.
+      if (isEditableTarget(target)) {
+        clearHover();
+        return;
+      }
+      // Alt deepens the click target, so the preview follows the same branch.
+      const resolved = componentSelection(target, frameSlide, altKey);
+      const element = resolved
+        ? elementAtPath(frameSlide, resolved.path)
+        : null;
+      if (
+        !resolved ||
+        !element ||
+        // The outline already marks the selection; a second box would just
+        // double the border.
+        (current.selection &&
+          sameSelection(current.selection, resolved) &&
+          current.selections.length === 1)
+      ) {
+        clearHover();
+        return;
+      }
+      const key = resolved.path.join('.');
+      if (hoverKeyRef.current === key) return;
+      hoverKeyRef.current = key;
+      const draggable =
+        !isTableInternal(element) &&
+        !isLockedElement(element) &&
+        blockedPathAncestor(frameSlide, resolved.path) === null;
+      setHoverTarget({
+        path: resolved.path,
+        rect: frameRectOf(
+          rectOf(element, frameSlide),
+          slideOffsetOf(frameSlide)
+        ),
+        label: componentLabel(element),
+        draggable
+      });
+      frameDocument.documentElement.setAttribute(
+        HOVER_ATTRIBUTE,
+        draggable ? 'move' : 'blocked'
+      );
+    };
+
     const updateHover = (event: PointerEvent) => {
+      hoverPointRef.current = { x: event.clientX, y: event.clientY };
       // Coalesce pointer moves into one sample per frame.
       if (hoverFrameRef.current !== null) return;
-      const point = { x: event.clientX, y: event.clientY };
+      const point = hoverPointRef.current;
+      const altKey = event.altKey;
       hoverFrameRef.current = window.requestAnimationFrame(() => {
         hoverFrameRef.current = null;
-        const current = stateRef.current;
-        // Text editing and transform gestures own the pointer; no preview.
-        if (sessionRef.current || editingElementRef.current) {
-          clearHover();
-          return;
-        }
-        const slideInfo = current.slides[current.activeIndex];
-        const frameSlide = slideInfo
-          ? frameSlideElement(slideInfo, frameDocument)
-          : null;
-        const target = frameDocument.elementFromPoint(point.x, point.y);
-        if (
-          !slideInfo ||
-          !frameSlide ||
-          !target ||
-          !frameSlide.contains(target)
-        ) {
-          clearHover();
-          return;
-        }
-        const resolved = componentSelection(target, frameSlide, false);
-        const element = resolved
-          ? elementAtPath(frameSlide, resolved.path)
-          : null;
-        if (
-          !resolved ||
-          !element ||
-          // The outline already marks the selection; a second box would just
-          // double the border.
-          (current.selection &&
-            sameSelection(current.selection, resolved) &&
-            current.selections.length === 1)
-        ) {
-          clearHover();
-          return;
-        }
-        const key = resolved.path.join('.');
-        if (hoverKeyRef.current === key) return;
-        hoverKeyRef.current = key;
-        const draggable =
-          !isTableInternal(element) &&
-          !isLockedElement(element) &&
-          blockedPathAncestor(frameSlide, resolved.path) === null;
-        setHoverTarget({
-          path: resolved.path,
-          rect: frameRectOf(
-            rectOf(element, frameSlide),
-            slideOffsetOf(frameSlide)
-          ),
-          label: componentLabel(element),
-          draggable
-        });
-        frameDocument.documentElement.setAttribute(
-          HOVER_ATTRIBUTE,
-          draggable ? 'move' : 'blocked'
-        );
+        sampleHover(point, altKey);
       });
+    };
+    const resampleForAlt = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' || !hoverPointRef.current) return;
+      sampleHover(hoverPointRef.current, event.altKey);
+    };
+    hoverResampleRef.current = (altKey) => {
+      if (hoverPointRef.current) sampleHover(hoverPointRef.current, altKey);
     };
     frameDocument.addEventListener('pointermove', updateHover);
     frameDocument.addEventListener('pointerleave', clearHover);
+    frameDocument.addEventListener('keydown', resampleForAlt);
+    frameDocument.addEventListener('keyup', resampleForAlt);
     // Leaving an iframe across the boundary reports no related target instead
     // of a sibling element; either signal must drop the preview.
     frameDocument.addEventListener('pointerout', (event) => {

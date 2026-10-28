@@ -104,6 +104,7 @@ test('selects and drags the heading, not the wrapper', { tag: '@feature:componen
     expect(html).toMatch(/<h1[^>]*style="[^"]*position:\s*absolute/);
     expect(html).not.toMatch(/id="pad"[^>]*style="[^"]*(left|top):/);
     expect(html).not.toContain('data-ppt-hover');
+    expect(html).not.toContain('data-ppt-editor-style');
     expect(html).not.toContain('data-ppt-preview-slide');
   } finally {
     await deck.close();
@@ -242,6 +243,27 @@ test('hover previews the component a click will select', { tag: '@feature:compon
     expect(deviation(await boxOfLocator(outline), fromBoundingBox(headingBox!))).toBeLessThanOrEqual(1);
     expect(await deck.frame.locator('#headline').evaluate((el) => getComputedStyle(el).cursor)).toBe('move');
 
+    // The attribute and the cursor sheet live on the frame boundary; the slide
+    // subtree never learns about hover, so nothing can be serialized.
+    const boundary = await deck.frame.locator('#headline').evaluate((element) => {
+      const doc = element.ownerDocument;
+      const slide = doc.querySelector('[data-slide-id]')!;
+      return {
+        attribute: doc.documentElement.getAttribute('data-ppt-hover'),
+        headStyle: Boolean(doc.head.querySelector('style[data-ppt-editor-style]')),
+        slideStyle: Boolean(slide.querySelector('style[data-ppt-editor-style]')),
+        slideHover:
+          slide.hasAttribute('data-ppt-hover') ||
+          slide.querySelector('[data-ppt-hover]') !== null
+      };
+    });
+    expect(boundary).toEqual({
+      attribute: 'move',
+      headStyle: true,
+      slideStyle: false,
+      slideHover: false
+    });
+
     // Playwright applies `position` before the canvas scale transform, so the
     // design-pixel offset is multiplied by the frame scale to land on the
     // pad's own padding instead of past the slide edge.
@@ -256,6 +278,24 @@ test('hover previews the component a click will select', { tag: '@feature:compon
     await deck.frame.locator('#cell-a').hover();
     await expect(page.getByTestId('hover-label')).toHaveText('td');
     expect(await deck.frame.locator('#cell-a').evaluate((el) => getComputedStyle(el).cursor)).toBe('default');
+
+    // A guarded subtree previews its wrapper and cannot promise a move.
+    await deck.frame.locator('#locked-child').hover();
+    await expect(page.getByTestId('hover-label')).toHaveText('div.locked');
+    expect(await deck.frame.locator('#locked-child').evaluate((el) => getComputedStyle(el).cursor)).toBe('default');
+
+    // Leaving the frame drops the preview; nothing is left on the editor.
+    await page.mouse.move(5, 5);
+    await expect(outline).toHaveCount(0);
+
+    // Alt deepens the click target, so the preview follows it without the
+    // pointer moving; the parent document owns focus in this flow.
+    await deck.frame.locator('#icon-svg').hover();
+    await expect(page.getByTestId('hover-label')).toHaveText('svg');
+    await page.keyboard.down('Alt');
+    await expect(page.getByTestId('hover-label')).toHaveText('path');
+    await page.keyboard.up('Alt');
+    await expect(page.getByTestId('hover-label')).toHaveText('svg');
   } finally {
     await deck.close();
   }
