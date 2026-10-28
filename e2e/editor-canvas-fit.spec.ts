@@ -131,7 +131,7 @@ test.describe('editor canvas fit @feature:editor-canvas-fit', () => {
         await page.getByTestId('thumbnail').nth(1).getByRole('button').click();
         await expect(deck.frame.locator('h1')).toHaveText('Second');
 
-        const stageSelector = `${FRAME_SELECTOR} >> xpath=..`;
+        const stageSelector = '[data-testid="canvas-stage"]';
         const iframe = await boxOf(page, FRAME_SELECTOR);
         const stage = await boxOf(page, stageSelector);
         const slide = await slideRect(page, FRAME_SELECTOR);
@@ -191,7 +191,7 @@ test.describe('editor canvas fit @feature:editor-canvas-fit', () => {
       const deck = await openDeck(page, DECLARED);
       try {
         await expect(deck.frame.locator('h1')).toHaveText('Four three');
-        const stageSelector = `${FRAME_SELECTOR} >> xpath=..`;
+        const stageSelector = '[data-testid="canvas-stage"]';
         const iframe = await boxOf(page, FRAME_SELECTOR);
         const stage = await boxOf(page, stageSelector);
         const slide = await slideRect(page, FRAME_SELECTOR);

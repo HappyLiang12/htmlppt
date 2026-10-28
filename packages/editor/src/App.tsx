@@ -4275,27 +4275,33 @@ export function App() {
             )}
             {activeSlide && stageCrop ? (
               <div
-                className="relative overflow-hidden shadow-[0_24px_80px_var(--editor-shadow-stage)]"
+                data-testid="canvas-stage"
+                className="relative shadow-[0_24px_80px_var(--editor-shadow-stage)]"
                 style={{
                   width: stageCrop.width,
                   height: stageCrop.height
                 }}
               >
-                <iframe
-                  key={state.documentEpoch}
-                  ref={frame}
-                  title={t('rail.preview')}
-                  sandbox="allow-same-origin"
-                  srcDoc={srcDoc}
-                  onLoad={onFrameLoad}
-                  className="absolute left-0 top-0 border-0 bg-white"
-                  style={{
-                    width: activeSlide.width,
-                    height: activeSlide.height,
-                    transform: `translate(${stageCrop.translateX}px, ${stageCrop.translateY}px) scale(${scale})`,
-                    transformOrigin: 'top left'
-                  }}
-                />
+                {/* Only the frame is clipped: handles that reach past the
+                    slide edge (the rotate handle sits above it) must stay
+                    clickable. */}
+                <div className="absolute inset-0 overflow-hidden">
+                  <iframe
+                    key={state.documentEpoch}
+                    ref={frame}
+                    title={t('rail.preview')}
+                    sandbox="allow-same-origin"
+                    srcDoc={srcDoc}
+                    onLoad={onFrameLoad}
+                    className="absolute left-0 top-0 border-0 bg-white"
+                    style={{
+                      width: activeSlide.width,
+                      height: activeSlide.height,
+                      transform: `translate(${stageCrop.translateX}px, ${stageCrop.translateY}px) scale(${scale})`,
+                      transformOrigin: 'top left'
+                    }}
+                  />
+                </div>
                 <CanvasOverlay
                   boxes={selectionBoxes}
                   guides={guides}
