@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Rect } from './geometry.js';
 import {
   angleDelta,
@@ -561,6 +561,10 @@ describe('applySvgTranslate', () => {
 });
 
 describe('svgCssTransformOverride', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('reports an inline style transform as an override', () => {
     const { svg, shape } = svgShape();
     (shape as SVGElement).setAttribute('style', 'transform: rotate(45deg)');
@@ -724,56 +728,102 @@ describe('svgCssTransformOverride', () => {
     svg.remove();
   });
 
+  it('reports a computed individual rotate as an override', () => {
+    const { svg, shape } = svgShape();
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: 'none',
+      rotate: '45deg',
+      scale: 'none'
+    } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    svg.remove();
+  });
+
   it('reports a computed individual scale as an override', () => {
     const { svg, shape } = svgShape();
-    const computed = vi
-      .spyOn(window, 'getComputedStyle')
-      .mockReturnValue({
-        transform: 'none',
-        translate: 'none',
-        rotate: 'none',
-        scale: '1.2'
-      } as CSSStyleDeclaration);
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: 'none',
+      rotate: 'none',
+      scale: '1.2'
+    } as CSSStyleDeclaration);
 
     // Chromium computes `transform: none` when an individual property owns
     // the rendering, so the computed transform alone would miss the override.
     expect(svgCssTransformOverride(shape)).toBe(true);
 
-    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports a computed individual scale with both axes as an override', () => {
+    const { svg, shape } = svgShape();
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: 'none',
+      rotate: 'none',
+      scale: '1.2 0.5'
+    } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
     svg.remove();
   });
 
   it('reports a computed individual translate as an override', () => {
     const { svg, shape } = svgShape();
-    const computed = vi
-      .spyOn(window, 'getComputedStyle')
-      .mockReturnValue({
-        transform: 'none',
-        translate: '10px',
-        rotate: 'none',
-        scale: 'none'
-      } as CSSStyleDeclaration);
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: '10px',
+      rotate: 'none',
+      scale: 'none'
+    } as CSSStyleDeclaration);
 
     expect(svgCssTransformOverride(shape)).toBe(true);
 
-    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports a computed individual translate with both axes as an override', () => {
+    const { svg, shape } = svgShape();
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: '10px 20px',
+      rotate: 'none',
+      scale: 'none'
+    } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
     svg.remove();
   });
 
   it('reports no override when all individual properties are default', () => {
     const { svg, shape } = svgShape();
-    const computed = vi
-      .spyOn(window, 'getComputedStyle')
-      .mockReturnValue({
-        transform: 'none',
-        translate: 'none',
-        rotate: 'none',
-        scale: 'none'
-      } as CSSStyleDeclaration);
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none',
+      translate: 'none',
+      rotate: 'none',
+      scale: 'none'
+    } as CSSStyleDeclaration);
 
     expect(svgCssTransformOverride(shape)).toBe(false);
 
-    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports no override when the computed style omits individual properties', () => {
+    const { svg, shape } = svgShape();
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      transform: 'none'
+    } as CSSStyleDeclaration);
+
+    // An engine that does not expose the individual properties reports them as
+    // missing, which is the default, not a CSS-owned transform.
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
     svg.remove();
   });
 });
