@@ -209,6 +209,30 @@ test('double-click enters a card and Enter enters a deep selected card', { tag: 
   }
 });
 
+test('offers a visible Enter action for a deep selected container', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    await deck.frame.locator('#card').click({ position: { x: 4, y: 4 } });
+    await page.getByTestId('inspector-enter-component').click();
+    await expect(page.getByTestId('edit-context')).toContainText('card');
+    await expect(page.getByTestId('object-row').filter({ hasText: 'icon' })).toBeVisible();
+  } finally {
+    await deck.close();
+  }
+});
+
+test('selects the chart figure and keeps chart controls', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    await deck.frame.locator('#chart-svg').click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute('data-selected-id', 'chart');
+    await expect(page.getByTestId('chart-object')).toBeVisible();
+    await expect(page.getByTestId('chart-summary')).toContainText('bar');
+  } finally {
+    await deck.close();
+  }
+});
+
 test('shift-click builds a multi-selection across depths', { tag: '@feature:component-dragging' }, async ({ page }) => {
   const deck = await openDeck(page);
   try {

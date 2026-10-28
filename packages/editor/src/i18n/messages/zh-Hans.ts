@@ -93,6 +93,7 @@ export const zhHans: Record<MessageKey, string> = {
   'inspector.text': '文字',
   'inspector.notes': '备注',
   'inspector.objects': '对象',
+  'inspector.enterComponent': '进入',
   'inspector.objectActions': '对象操作',
   'inspector.noObjects': '此页没有对象。',
   'inspector.invalidNumber': '数值无效，请修正或按 Escape 取消。',

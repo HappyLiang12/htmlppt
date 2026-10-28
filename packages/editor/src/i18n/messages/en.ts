@@ -91,6 +91,7 @@ export const en = {
   'inspector.text': 'Text',
   'inspector.notes': 'Notes',
   'inspector.objects': 'Objects',
+  'inspector.enterComponent': 'Enter',
   'inspector.objectActions': 'Object actions',
   'inspector.noObjects': 'No objects on this slide.',
   'inspector.invalidNumber': 'Invalid number. Fix it or press Escape to cancel.',

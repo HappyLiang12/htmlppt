@@ -93,6 +93,7 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.text': '文字',
   'inspector.notes': '備註',
   'inspector.objects': '物件',
+  'inspector.enterComponent': '進入',
   'inspector.objectActions': '物件操作',
   'inspector.noObjects': '此頁沒有物件。',
   'inspector.invalidNumber': '數值無效，請修正或按 Escape 取消。',

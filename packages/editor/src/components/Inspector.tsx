@@ -469,6 +469,22 @@ export function Inspector({
     objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;
 
+  // A single selection below the active context can become the new editing
+  // context. Leaves, guarded subtrees, the active container itself, and a
+  // multi-selection have nothing to enter; without a handler the action has
+  // nowhere to go.
+  const selectedElement =
+    slide && selection ? elementAtPath(slide.element, selection.path) : null;
+  const canEnterSelection =
+    selection !== null &&
+    selectionCount === 1 &&
+    onEnterContext !== undefined &&
+    selection.path.join('.') !== contextBase.join('.') &&
+    selectedElement !== null &&
+    isEnterableContainer(selectedElement);
+  const enterSelectionPath =
+    canEnterSelection && selection ? [...selection.path] : null;
+
   const selectTab = (next: InspectorTab, focus: boolean) => {
     setTab(next);
     if (focus) tabRefs.current[next]?.focus();
@@ -580,7 +596,19 @@ export function Inspector({
         hidden={tab !== 'design'}
       >
         <section aria-label={t('inspector.objects')} className={SECTION_CLASS}>
-          <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
+          <div className="flex items-center justify-between">
+            <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
+            {enterSelectionPath && (
+              <button
+                type="button"
+                data-testid="inspector-enter-component"
+                onClick={() => onEnterContext?.(enterSelectionPath)}
+                className={ACTION_CLASS}
+              >
+                {t('inspector.enterComponent')}
+              </button>
+            )}
+          </div>
           {objects.length === 0 ? (
             <p className="text-xs text-muted">{t('inspector.noObjects')}</p>
           ) : (

@@ -1613,9 +1613,10 @@ export function App() {
       return;
     }
     const element = elementAtPath(slideInfo.element, selection.path);
-    if (!chartFigure(element)) return;
+    const figure = chartFigure(element);
+    if (!figure) return;
     try {
-      setChartEditor({ json: chartJson(element as Element), error: '' });
+      setChartEditor({ json: chartJson(figure), error: '' });
     } catch (error) {
       setSlideOpError(error instanceof Error ? error.message : String(error));
     }
@@ -1647,11 +1648,12 @@ export function App() {
       (draft) => {
         const target = findSlide(draft, slideInfo.id);
         const element = elementAtPath(target.element, selection.path);
-        if (!element || !chartFigure(element)) {
+        const figure = chartFigure(element);
+        if (!figure) {
           failure = t('app.chartNotSelected');
           return false;
         }
-        const result = withChartData(element, editor.json);
+        const result = withChartData(figure, editor.json);
         if (!result.ok) {
           failure = result.error;
           return false;
@@ -4145,9 +4147,10 @@ export function App() {
       ? elementAtPath(activeSlide.element, selection.path)
       : null;
   const chartState: InspectorChartState | null = (() => {
-    if (!chartFigure(primaryObject)) return null;
+    const figure = chartFigure(primaryObject);
+    if (!figure) return null;
     try {
-      const data = chartDataOf(primaryObject as Element);
+      const data = chartDataOf(figure);
       return { type: data.type, title: data.title ?? '' };
     } catch {
       return { type: 'invalid', title: t('app.invalidData') };
