@@ -369,7 +369,7 @@ describe('inspector nested structural hint', () => {
   const COPY =
     'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.';
   const NESTED_MULTI_COPY =
-    'Multiple nested objects selected. Only dragging applies; duplicate, delete, reorder, and group act on top-level objects only.';
+    'Multiple nested objects selected. Only moving with the drag or arrow keys applies; duplicate, delete, reorder, and group act on top-level objects only.';
 
   it('explains which edits a nested selection still supports', async () => {
     await render({ selection: nestedSelection, geometry }, 'en');

@@ -962,8 +962,8 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
     await deck.frame.locator('#headline').click();
     await expect(page.getByTestId('inspector-nested-structural')).toBeVisible();
 
-    // A nested multi-selection renders the multi hint and keeps the nested
-    // structural explanation, then refuses duplicate without writing.
+    // A nested multi-selection renders only the nested-multi structural hint,
+    // then refuses duplicate without writing.
     await deck.frame.locator('#chip-one').click({ modifiers: ['Shift'] });
     await expect(page.getByTestId('selection-outline')).toHaveCount(2);
     await expect(page.getByTestId('inspector-nested-structural')).toBeVisible();
@@ -988,11 +988,11 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
       page.off('request', recordDeckPut);
     }
 
-    // A mixed-depth selection must be refused as a whole too: a top-level
-    // target next to a nested one would make "every target is top-level"
-    // silently duplicate only the top-level object if the guard used every
-    // instead of some.
-    await deck.frame.locator('#decor').click();
+    // A mixed-depth selection must be refused as a whole too. #arrow is a
+    // genuine slide child while #headline sits inside #pad, so the paths
+    // differ in depth; if the guard used every instead of some, both targets
+    // would duplicate and both counts would rise to 2.
+    await deck.frame.locator('#arrow').click();
     await deck.frame.locator('#headline').click({ modifiers: ['Shift'] });
     await expect(page.getByTestId('selection-outline')).toHaveCount(2);
     const mixedPuts: string[] = [];
@@ -1012,7 +1012,7 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
       await page.waitForTimeout(1_000);
       expect(mixedPuts).toEqual([]);
       await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
-      await expect(deck.frame.locator('#decor')).toHaveCount(1);
+      await expect(deck.frame.locator('#arrow')).toHaveCount(1);
     } finally {
       page.off('request', recordMixedPut);
     }
@@ -1182,8 +1182,9 @@ test('refuses to paste inside a guarded subtree', { tag: '@feature:component-dra
     }
 
     // The clipboard was populated, so the refused no-op above was the guard,
-    // not an empty clipboard: the same paste succeeds at slide level.
-    await deck.frame.locator('#decor').click();
+    // not an empty clipboard: the same paste succeeds. #arrow is a genuine
+    // slide child, so the paste lands at slide level instead of inside #pad.
+    await deck.frame.locator('#arrow').click();
     const pasteSave = waitForDeckSave(page);
     await page.keyboard.press('Control+v');
     await pasteSave;

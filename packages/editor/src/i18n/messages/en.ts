@@ -134,7 +134,7 @@ export const en = {
   'inspector.nestedStructuralHint':
     'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.',
   'inspector.nestedMultiStructuralHint':
-    'Multiple nested objects selected. Only dragging applies; duplicate, delete, reorder, and group act on top-level objects only.',
+    'Multiple nested objects selected. Only moving with the drag or arrow keys applies; duplicate, delete, reorder, and group act on top-level objects only.',
   'inspector.appearance': 'Appearance',
   'inspector.objectAppearance': 'Object appearance',
   'inspector.image': 'Image',

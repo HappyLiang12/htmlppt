@@ -131,7 +131,7 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.nestedStructuralHint':
     '位置、大小、外觀與文字會套用到這個物件；排序與群組只作用於最上層物件。',
   'inspector.nestedMultiStructuralHint':
-    '已選取多個巢狀物件；僅支援拖曳移動，複製、刪除、排序與群組只作用於最上層物件。',
+    '已選取多個巢狀物件；僅支援拖曳或方向鍵移動，複製、刪除、排序與群組只作用於最上層物件。',
   'inspector.appearance': '外觀',
   'inspector.objectAppearance': '物件外觀',
   'inspector.image': '圖片',

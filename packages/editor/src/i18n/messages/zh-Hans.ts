@@ -131,7 +131,7 @@ export const zhHans: Record<MessageKey, string> = {
   'inspector.nestedStructuralHint':
     '位置、大小、外观与文字会应用到该对象；排序与编组只作用于顶层对象。',
   'inspector.nestedMultiStructuralHint':
-    '已选择多个嵌套对象；仅支持拖动移动，复制、删除、排序与编组只作用于顶层对象。',
+    '已选择多个嵌套对象；仅支持拖动或方向键移动，复制、删除、排序与编组只作用于顶层对象。',
   'inspector.appearance': '外观',
   'inspector.objectAppearance': '对象外观',
   'inspector.image': '图片',
