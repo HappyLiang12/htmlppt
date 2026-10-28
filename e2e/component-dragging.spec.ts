@@ -573,9 +573,51 @@ test('drags a nested svg root with a transform', { tag: '@feature:component-drag
       nestBox.y + 70 * scale
     );
     await expect(page.getByTestId('edit-context')).toContainText('.nest-wrap');
+
+    // A CSS individual transform (`scale` here) composes outside the
+    // presentation attribute, so the root computes `transform: none` and the
+    // editor cannot append a translate without changing the authored styling.
+    // The root stays selectable but is drag-inert.
+    const outline = page.getByTestId('selection-outline');
+    const scaledDot = deck.frame.locator('#scaled-dot');
+    await scaledDot.hover();
+    await expect
+      .poll(() => scaledDot.evaluate((element) => getComputedStyle(element).cursor))
+      .toBe('default');
+
+    await scaledDot.click();
+    await expect(outline).toHaveAttribute(
+      'data-selected-path',
+      await pathOf(deck, '#inner-scaled')
+    );
+
+    const scaledRoot = deck.frame.locator('#inner-scaled');
+    const scaledBefore = await scaledRoot.boundingBox();
+    if (!scaledBefore) throw new Error('No box for #inner-scaled');
+    await page.mouse.move(
+      scaledBefore.x + scaledBefore.width / 2,
+      scaledBefore.y + scaledBefore.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      scaledBefore.x + scaledBefore.width / 2 + 40,
+      scaledBefore.y + scaledBefore.height / 2 + 20,
+      { steps: 5 }
+    );
+    await page.mouse.up();
+    // A guarded gesture never writes; give a wrong background save time to
+    // surface before asserting the untouched status.
+    await page.waitForTimeout(250);
+    const scaledAfter = await scaledRoot.boundingBox();
+    if (!scaledAfter) throw new Error('No box for #inner-scaled after the drag');
+    expect(
+      deviation(fromBoundingBox(scaledAfter), fromBoundingBox(scaledBefore))
+    ).toBeLessThanOrEqual(1);
+    expect(await scaledRoot.getAttribute('transform')).toBeNull();
+    await expect(page.getByTestId('save-status')).toHaveText('已同步');
+
     await deck.frame.locator('#inner-svg').click();
 
-    const outline = page.getByTestId('selection-outline');
     await expect(outline).toHaveAttribute(
       'data-selected-path',
       await pathOf(deck, '#inner-svg')
@@ -619,6 +661,10 @@ test('drags a nested svg root with a transform', { tag: '@feature:component-drag
     if (!nudged) throw new Error('No box for #inner-svg after the nudge');
     expect(nudged.x - after.x).toBeGreaterThan(10 * scale - 2);
     expect(nudged.x - after.x).toBeLessThan(10 * scale + 2);
+    // The overlay follows the nudged root, not only the pointer path.
+    expect(
+      deviation(await boxOfLocator(outline), fromBoundingBox(nudged))
+    ).toBeLessThanOrEqual(1);
     const htmlAfterNudge = await readFile(deck.path, 'utf8');
     expect(htmlAfterNudge).toMatch(/id="inner-svg"[^>]*transform="[^"]*translate\(/);
     expect(htmlAfterNudge).not.toMatch(/id="inner-svg"[^>]*position: absolute/);

@@ -246,6 +246,28 @@ function sameMatrix(applied: readonly number[], authored: readonly number[]): bo
   });
 }
 
+/** The CSS individual transform properties, in composition order. */
+const INDIVIDUAL_TRANSFORM_PROPERTIES = [
+  'translate',
+  'rotate',
+  'scale'
+] as const;
+
+/**
+ * True when CSS declares an individual transform property. These properties
+ * compose outside the `transform` presentation attribute: Chromium computes
+ * `transform: none` for a shape or nested root styled with
+ * `style="scale: 2"`, so a predicate that reads only the computed transform
+ * would classify it as attribute-owned. The defaults are an empty value,
+ * `none`, and a missing property.
+ */
+function individualTransformSet(style: CSSStyleDeclaration): boolean {
+  return INDIVIDUAL_TRANSFORM_PROPERTIES.some((property) => {
+    const normalized = (style[property] ?? '').trim();
+    return normalized !== '' && normalized !== 'none';
+  });
+}
+
 /**
  * True when CSS owns the element's transform, so the presentation attribute is
  * inert. An inline style always wins and is detected cheaply. A stylesheet
@@ -257,6 +279,12 @@ function sameMatrix(applied: readonly number[], authored: readonly number[]): bo
  * is an override by definition; jsdom reports the declared rule here and an
  * empty computed value for an unstyled element (the same thing as `none`).
  *
+ * The individual `translate`, `rotate`, and `scale` properties are CSS-owned
+ * too. They compose outside the presentation attribute, so Chromium computes
+ * `transform: none` for an element that uses them; the editor cannot append a
+ * translate without changing the authored styling, so a non-default individual
+ * property is an override as well.
+ *
  * Documented residual: a stylesheet `transform: none` over an authored
  * attribute computes `none`, which is indistinguishable from "no CSS
  * transform", so the attribute reads as authoritative. A computed matrix that
@@ -266,12 +294,14 @@ function sameMatrix(applied: readonly number[], authored: readonly number[]): bo
 export function svgCssTransformOverride(element: Element): boolean {
   const inline = styleOf(element)?.transform?.trim() ?? '';
   if (inline !== '') return true;
-  const computed =
-    element.ownerDocument.defaultView?.getComputedStyle(element).transform ?? '';
-  if (computed.trim() === '' || computed === 'none') return false;
+  const computed = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (!computed) return false;
+  if (individualTransformSet(computed)) return true;
+  const transform = computed.transform ?? '';
+  if (transform.trim() === '' || transform === 'none') return false;
   const authored = attributeMatrix(element);
   if (!authored) return true;
-  const applied = matrixValues(computed.trim());
+  const applied = matrixValues(transform.trim());
   return applied === null || !sameMatrix(applied, authored);
 }
 

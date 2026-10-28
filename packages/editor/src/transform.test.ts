@@ -723,4 +723,57 @@ describe('svgCssTransformOverride', () => {
     computed.mockRestore();
     svg.remove();
   });
+
+  it('reports a computed individual scale as an override', () => {
+    const { svg, shape } = svgShape();
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'none',
+        translate: 'none',
+        rotate: 'none',
+        scale: '1.2'
+      } as CSSStyleDeclaration);
+
+    // Chromium computes `transform: none` when an individual property owns
+    // the rendering, so the computed transform alone would miss the override.
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports a computed individual translate as an override', () => {
+    const { svg, shape } = svgShape();
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'none',
+        translate: '10px',
+        rotate: 'none',
+        scale: 'none'
+      } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports no override when all individual properties are default', () => {
+    const { svg, shape } = svgShape();
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'none',
+        translate: 'none',
+        rotate: 'none',
+        scale: 'none'
+      } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    computed.mockRestore();
+    svg.remove();
+  });
 });
