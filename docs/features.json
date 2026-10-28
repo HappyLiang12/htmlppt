@@ -19,6 +19,9 @@
     { "id": "drill-in-selection", "spec": "Drill-in container editing", "status": "active", "tests": ["@feature:drill-in-selection"] },
     { "id": "nested-geometry", "spec": "Drill-in container editing", "status": "active", "tests": ["@feature:nested-geometry"] },
     { "id": "nested-appearance", "spec": "Drill-in container editing", "status": "active", "tests": ["@feature:nested-appearance"] },
-    { "id": "edit-context-feedback", "spec": "Drill-in container editing", "status": "active", "tests": ["@feature:edit-context-feedback"] }
+    { "id": "edit-context-feedback", "spec": "Drill-in container editing", "status": "active", "tests": ["@feature:edit-context-feedback"] },
+    { "id": "preview-reveal", "spec": "QA fixes 2026-10-27", "status": "active", "tests": ["@feature:preview-reveal"] },
+    { "id": "play-fit", "spec": "QA fixes 2026-10-27", "status": "active", "tests": ["@feature:play-fit"] },
+    { "id": "text-entry", "spec": "QA fixes 2026-10-27", "status": "active", "tests": ["@feature:text-entry"] }
   ]
 }

@@ -194,6 +194,11 @@ A standalone multi-slide deck needs exactly one runtime script:
   using its `data-width`/`data-height` (falling back to its computed size).
   Resizing the window refits it, and each slide keeps its own aspect ratio.
   Screen scaling resets for print so exported pages keep their authored size.
+- The editor's built-in play view offers Fit (default) and Fill. Fit uses the
+  measured slide box and letterboxes it; Fill covers the viewport and crops
+  the overflow. Exported decks and the standalone runtime keep Fit. Play
+  measures the rendered slide box when it fits inside the preview viewport;
+  content that overflows the viewport falls back to metadata.
 - Multi-slide decks get prev/next buttons and a page indicator pinned to the
   bottom of the window. Single-slide decks get no controls, and controls are
   hidden when printing. Control clicks never advance the deck.

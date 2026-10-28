@@ -209,8 +209,19 @@ test('icon-only controls expose Traditional Chinese accessible names', async ({
     ).toBeVisible();
 
     await page.getByTestId('view-normal').click();
-    await harness.frame.locator('[data-ppt-el="a11y-title"]').dblclick();
+    await harness.frame.locator('[data-ppt-el="a11y-title"]').click();
     await expect(page.getByTestId('text-toolbar')).toBeVisible();
+    await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+      'data-mode',
+      'selection'
+    );
+    await expect(page.getByRole('button', { name: '粗體' })).toBeVisible();
+
+    await harness.frame.locator('[data-ppt-el="a11y-title"]').dblclick();
+    await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+      'data-mode',
+      'editing'
+    );
     await expect(page.getByRole('button', { name: '粗體' })).toBeVisible();
     await expect(page.getByRole('button', { name: '文字顏色' })).toBeVisible();
     await expect(page.getByRole('button', { name: '粗體' })).toHaveAttribute(

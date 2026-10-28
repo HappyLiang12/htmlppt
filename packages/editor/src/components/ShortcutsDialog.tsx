@@ -37,6 +37,9 @@ const GROUPS: ShortcutGroup[] = [
       { keys: 'Ctrl+C / Ctrl+V', description: 'shortcuts.copyPaste' },
       { keys: 'Ctrl+G / Ctrl+Shift+G', description: 'shortcuts.groupUngroup' },
       { keys: 'Enter', description: 'shortcuts.editText' },
+      { keys: 'Ctrl+B', description: 'shortcuts.bold' },
+      { keys: 'Ctrl+I', description: 'shortcuts.italic' },
+      { keys: 'Ctrl+U', description: 'shortcuts.underline' },
       {
         keys: '',
         keysMessage: 'shortcuts.arrowKeys',

@@ -138,6 +138,11 @@ import {
   FRAME_SLIDE_ATTRIBUTE,
   frameSlideElement
 } from './slide-doc';
+import { revealPreviewSlide } from './frame-reveal';
+import {
+  resolveSelectedTextTarget,
+  type TextTargetResult
+} from './text-target';
 import type { PastedObjectGeometry } from './object-ops';
 import {
   applyObjectCommand,
@@ -191,6 +196,7 @@ import {
   Inspector,
   type InspectorChartState,
   type InspectorStyleState,
+  type InspectorTextAction,
   type ObjectActionState
 } from './components/Inspector';
 import {
@@ -213,7 +219,12 @@ import {
   reorderSlides,
   type SlideOpsContext
 } from './slide-ops';
-import { mapShortcut, isEditableShortcutTarget } from './shortcuts';
+import {
+  isEditableShortcutTarget,
+  mapShortcut,
+  mapTextShortcut,
+  type TextShortcutAction
+} from './shortcuts';
 import {
   isSwitchedFileConflict,
   useDeckController,
@@ -227,14 +238,6 @@ interface EditHintState {
   // A new gesture mints a new state object, so repeating the same failure
   // restarts the dismissal timer instead of leaving the old one running.
   gesture: number;
-}
-
-// Div shapes and text boxes are leaf objects; a layout div with element
-// children keeps its original semantic text target rather than becoming the
-// edit surface itself.
-function isLeafTextElement(element: HTMLElement): boolean {
-  if (element.tagName !== 'DIV') return true;
-  return Array.from(element.children).every((child) => child.tagName === 'BR');
 }
 
 const SNAP_THRESHOLD_SCREEN_PX = 6;
@@ -309,6 +312,38 @@ function errorMessage(cause: unknown): string {
 function eventElement(target: EventTarget | null): Element | null {
   const node = target as Node | null;
   return node && node.nodeType === 1 ? (node as Element) : null;
+}
+
+function resolveTextTargetAt(
+  frameDocument: Document | null | undefined,
+  slideInfo: SlideInfo | undefined,
+  path: readonly number[]
+): TextTargetResult | null {
+  if (!frameDocument || !slideInfo) return null;
+  const slide = frameSlideElement(slideInfo, frameDocument);
+  if (!slide) return null;
+  return resolveSelectedTextTarget(slide, path);
+}
+
+/**
+ * Whole-leaf commands wrap the contents in a styled span, so anchoring the
+ * toolbar state on the leaf element itself would report the old, outer style.
+ * Start the probe inside the first child instead, which is where the applied
+ * style actually lands.
+ */
+function selectionRangeFor(
+  frameDocument: Document,
+  leaf: HTMLElement
+): Range {
+  const range = frameDocument.createRange();
+  const first = leaf.firstChild;
+  if (first) {
+    range.setStart(first, 0);
+    range.setEnd(leaf, leaf.childNodes.length);
+  } else {
+    range.selectNodeContents(leaf);
+  }
+  return range;
 }
 
 function isEditableTarget(element: Element | null): boolean {
@@ -755,6 +790,17 @@ export function App() {
     state: TextToolbarState;
     error: string;
   } | null>(null);
+  const [selectionToolbar, setSelectionToolbar] = useState<{
+    state: TextToolbarState;
+    error: string;
+    path: number[];
+  } | null>(null);
+  const selectionToolbarRef = useRef<typeof selectionToolbar>(null);
+  selectionToolbarRef.current = selectionToolbar;
+  const selectionBusyRef = useRef(false);
+  const textShortcutRef = useRef<(action: TextShortcutAction) => void>(
+    () => undefined
+  );
   const [chartEditor, setChartEditor] = useState<{
     json: string;
     error: string;
@@ -1952,6 +1998,62 @@ export function App() {
     }
   }, []);
 
+  const applySelectionTextCommand = useCallback(
+    async (command: TextCommand) => {
+      if (selectionBusyRef.current) return;
+      if (!actionsRef.current.settlePendingEdits()) return;
+      const current = stateRef.current;
+      if (current.selections.length !== 1 || !current.selection) return;
+      const frameDocument = frame.current?.contentDocument;
+      if (!frameDocument) return;
+      const resolved = resolveTextTargetAt(
+        frameDocument,
+        current.slides[current.activeIndex],
+        current.selection.path
+      );
+      if (!resolved || resolved.status !== 'editable') {
+        setSelectionToolbar(null);
+        return;
+      }
+      try {
+        frameDocument.getSelection()?.removeAllRanges();
+        applyTextCommand(frameDocument, resolved.leaf, command, null);
+        selectionBusyRef.current = true;
+        const saved = await commitFrame();
+        if (saved) {
+          setSelectionToolbar((previous) =>
+            previous ? { ...previous, error: '' } : previous
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setSelectionToolbar((previous) =>
+          previous ? { ...previous, error: message } : previous
+        );
+      } finally {
+        selectionBusyRef.current = false;
+      }
+    },
+    [commitFrame]
+  );
+
+  const applySelectionTextLink = useCallback(() => {
+    const current = selectionToolbarRef.current;
+    if (!current) return;
+    toolbarInteractionRef.current = true;
+    let value: string | null = null;
+    try {
+      value = window.prompt(
+        t('app.linkPromptDetail'),
+        current.state.link || 'https://'
+      );
+    } finally {
+      toolbarInteractionRef.current = false;
+    }
+    if (value === null) return;
+    void applySelectionTextCommand({ type: 'link', value });
+  }, [applySelectionTextCommand, t]);
+
   const changeView = useCallback(
     (next: EditorView) => {
       if (next === view || !actionsRef.current.settlePendingEdits()) return;
@@ -2487,6 +2589,54 @@ export function App() {
     setTextToolbar(null);
   }, []);
 
+  useEffect(() => {
+    if (textToolbar) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const current = stateRef.current;
+    if (
+      current.selections.length !== 1 ||
+      !current.selection ||
+      current.selection.slideIndex !== current.activeIndex
+    ) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const frameDocument = frame.current?.contentDocument;
+    const resolved = resolveTextTargetAt(
+      frameDocument,
+      current.slides[current.activeIndex],
+      current.selection.path
+    );
+    if (
+      !frameDocument ||
+      !resolved ||
+      resolved.status !== 'editable' ||
+      resolved.empty
+    ) {
+      setSelectionToolbar(null);
+      return;
+    }
+    setSelectionToolbar({
+      state: readTextToolbarState(
+        frameDocument,
+        resolved.leaf,
+        selectionRangeFor(frameDocument, resolved.leaf)
+      ),
+      error: '',
+      path: current.selection.path
+    });
+  }, [
+    textToolbar,
+    selection,
+    selections,
+    activeIndex,
+    slides,
+    master,
+    frameEpoch
+  ]);
+
   // The notice's Undo delegates to the global undo. A pending edit is settled
   // into its own history entry and then undone by that undo, and an active
   // text session is the same hazard, so the notice steps aside instead of
@@ -2565,39 +2715,16 @@ export function App() {
     if (current.selections.length !== 1 || !current.selection) return false;
     if (current.selection.slideIndex !== current.activeIndex) return false;
     if (current.selection.path.length < 1) return false;
-    const slideInfo = current.slides[current.activeIndex];
     const frameDocument = frame.current?.contentDocument;
-    if (!slideInfo || !frameDocument) return false;
-    const slide = frameSlideElement(slideInfo, frameDocument);
-    if (!slide) return false;
-    const top = elementAtPath(slide, [current.selection.path[0] ?? -1]);
-    if (
-      !top ||
-      isLockedElement(top) ||
-      isHiddenElement(top) ||
-      isGroupElement(top)
-    ) {
-      return false;
-    }
-    const selected = elementAtPath(slide, current.selection.path);
-    if (!selected) return false;
+    if (!frameDocument) return false;
+    const resolved = resolveTextTargetAt(
+      frameDocument,
+      current.slides[current.activeIndex],
+      current.selection.path
+    );
+    if (!resolved || resolved.status !== 'editable') return false;
 
-    const textElement = selected.matches(TEXT_EDITABLE_SELECTOR)
-      ? selected
-      : selected.querySelector(TEXT_EDITABLE_SELECTOR);
-    const editable = textElement as HTMLElement | null;
-    if (!editable || !isLeafTextElement(editable)) return false;
-    // Empty div shapes and table cells accept a first text entry; other
-    // semantic elements require existing content so Enter cannot inject text.
-    if (
-      !editable.textContent?.trim() &&
-      editable.tagName !== 'DIV' &&
-      editable.tagName !== 'TD' &&
-      editable.tagName !== 'TH'
-    ) {
-      return false;
-    }
-
+    const editable = resolved.leaf;
     textBaselineRef.current.set(editable, editable.innerHTML);
     editable.setAttribute('contenteditable', 'true');
     editable.setAttribute(EDITING_ATTRIBUTE, 'true');
@@ -2855,6 +2982,25 @@ export function App() {
             return;
           default:
             return;
+        }
+      }
+
+      const textShortcut = mapTextShortcut(event);
+      if (textShortcut) {
+        const target = eventElement(event.target);
+        const inForm = target?.closest('input, textarea, select');
+        const foreignEditable =
+          isEditableShortcutTarget(event.target) && !editingElementRef.current;
+        if (
+          !shortcutsOpen &&
+          !chartEditor &&
+          !inForm &&
+          !foreignEditable &&
+          (editingElementRef.current || selectionToolbarRef.current)
+        ) {
+          event.preventDefault();
+          textShortcutRef.current(textShortcut);
+          return;
         }
       }
 
@@ -3167,6 +3313,7 @@ export function App() {
     const frameDocument = frame.current?.contentDocument;
     if (!frameDocument) return;
 
+    revealPreviewSlide(frameDocument);
     setFrameEpoch((value) => value + 1);
 
     frameDocument.addEventListener('dblclick', (event) => {
@@ -3484,6 +3631,19 @@ export function App() {
     }
   }, [endTextEditing, t]);
 
+  const applyTextShortcut = useCallback(
+    (action: TextShortcutAction) => {
+      const command: TextCommand = { type: action.type };
+      if (editingElementRef.current) {
+        applyTextToolbarCommand(command);
+        return;
+      }
+      void applySelectionTextCommand(command);
+    },
+    [applySelectionTextCommand, applyTextToolbarCommand]
+  );
+  textShortcutRef.current = applyTextShortcut;
+
   const runInsertion = useCallback(async (request: InsertRequest) => {
     if (!actionsRef.current.settlePendingEdits()) return;
     const current = stateRef.current;
@@ -3727,6 +3887,43 @@ export function App() {
       : primaryObject && isGroupElement(primaryObject)
         ? 'rotate'
         : 'all';
+
+  const inspectorTextAction = useMemo<InspectorTextAction>(() => {
+    if (state.selections.length > 1) {
+      return { status: 'multi', canEdit: false, canFormat: false };
+    }
+    if (
+      state.selections.length !== 1 ||
+      !state.selection ||
+      state.selection.slideIndex !== state.activeIndex
+    ) {
+      return { status: 'idle', canEdit: false, canFormat: false };
+    }
+    const resolved = resolveTextTargetAt(
+      frame.current?.contentDocument,
+      state.slides[state.activeIndex],
+      state.selection.path
+    );
+    if (!resolved) return { status: 'idle', canEdit: false, canFormat: false };
+    if (resolved.status === 'blocked') {
+      return {
+        status: 'blocked',
+        canEdit: false,
+        canFormat: false,
+        reason: resolved.reason
+      };
+    }
+    const fullText =
+      resolved.leaf.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const text =
+      fullText.length > 40 ? `${fullText.slice(0, 40)}…` : fullText;
+    return {
+      status: 'editable',
+      canEdit: true,
+      canFormat: !resolved.empty,
+      text
+    };
+  }, [state, frameEpoch]);
 
   if (mode === 'standalone' && !master) {
     return (
@@ -4032,6 +4229,21 @@ export function App() {
             }}
             className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-canvas p-12"
           >
+            {selectionToolbar && !textToolbar && (
+              <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center">
+                <div className="pointer-events-auto overflow-hidden rounded-md border border-line-strong shadow-[0_16px_40px_var(--editor-shadow-panel)]">
+                  <TextToolbar
+                    mode="selection"
+                    state={selectionToolbar.state}
+                    error={selectionToolbar.error || undefined}
+                    onCommand={(command) =>
+                      void applySelectionTextCommand(command)
+                    }
+                    onLink={applySelectionTextLink}
+                  />
+                </div>
+              </div>
+            )}
             {activeSlide ? (
               <div
                 className="relative shadow-[0_24px_80px_var(--editor-shadow-stage)]"
@@ -4208,6 +4420,10 @@ export function App() {
             onSetBackground={handleBackgroundChange}
             onClearBackground={handleClearBackground}
             onSetNotes={handleNotesChange}
+            textAction={inspectorTextAction}
+            onEditText={() => {
+              void startTextEditing();
+            }}
           />
         </div>
       )}

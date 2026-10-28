@@ -6,6 +6,7 @@ import {
 
 export const EDITING_ATTRIBUTE = 'data-ppt-editing';
 export const FRAME_SLIDE_ATTRIBUTE = 'data-ppt-frame-slide';
+export const PREVIEW_SLIDE_ATTRIBUTE = 'data-ppt-preview-slide';
 
 // One preview is rendered at a time, so a module-level token is enough. A
 // fresh value per srcDoc keeps authored markup from guessing the marker.
@@ -75,7 +76,9 @@ export function buildSlideSrcDoc(
     frameToken = crypto.randomUUID();
     frameSlideToken = frameToken;
   }
-  const bodyAttributes = doc.body ? attributesOf(doc.body) : '';
+  const bodyAttributes = `${doc.body ? attributesOf(doc.body) : ''}${
+    slide.element.tagName === 'BODY' ? ` ${PREVIEW_SLIDE_ATTRIBUTE}=""` : ''
+  }`;
   let content: string;
   if (slide.element.tagName === 'BODY') {
     content = slide.element.innerHTML;
@@ -84,6 +87,7 @@ export function buildSlideSrcDoc(
     const open = ancestors.map(openTag).join('');
     const close = [...ancestors].reverse().map(closeTag).join('');
     const frameSlide = slide.element.cloneNode(true) as Element;
+    frameSlide.setAttribute(PREVIEW_SLIDE_ATTRIBUTE, '');
     if (frameToken) {
       frameSlide.setAttribute(FRAME_SLIDE_ATTRIBUTE, frameToken);
     }
@@ -146,10 +150,17 @@ export function commitSlide(
   if (slide.element.tagName === 'BODY') {
     slide.element.innerHTML = frameSlide.innerHTML;
   } else {
-    // Strip the preview marker from the serialized clone so the live frame
-    // keeps it for queued follow-up commits.
+    // The frame clone carries preview-only attributes (the preview marker, the
+    // rotating frame token) plus whatever reveal mutations the helper applied.
+    // Restore the authored root attributes exactly so none of that leaks into
+    // the saved deck, while keeping the edited innerHTML from the clone.
     const serialized = frameSlide.cloneNode(true) as Element;
-    serialized.removeAttribute(FRAME_SLIDE_ATTRIBUTE);
+    for (const attribute of Array.from(serialized.attributes)) {
+      serialized.removeAttribute(attribute.name);
+    }
+    for (const attribute of Array.from(slide.element.attributes)) {
+      serialized.setAttribute(attribute.name, attribute.value);
+    }
     slide.element.outerHTML = serialized.outerHTML;
   }
 

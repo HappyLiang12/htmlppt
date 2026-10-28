@@ -702,7 +702,10 @@ test.describe('theme', () => {
       expect(lightActive.paintedBy.testId).toBe('text-bold');
 
       await page.keyboard.press('Escape');
-      await expect(page.getByTestId('text-toolbar')).toHaveCount(0);
+      await expect(page.getByTestId('text-toolbar')).toHaveAttribute(
+        'data-mode',
+        'selection'
+      );
 
       // Bold is already applied, so the dark session activates a different
       // toggle instead of turning it back off.
@@ -1217,8 +1220,11 @@ test.describe('theme', () => {
       await page.keyboard.press('F5');
       await expect(page.getByTestId('play-view')).toBeVisible();
 
-      // PlayView focuses the stage on entry; the first Tab reaches its only
-      // control, which must not inherit the light-theme chrome accent.
+      // PlayView focuses the stage on entry; Tab walks the Fit/Fill controls
+      // and then the presenter button, which must not inherit the light-theme
+      // chrome accent.
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Tab');
       await page.keyboard.press('Tab');
       const trigger = page.getByTestId('presenter-open');
       await expect(trigger).toBeFocused();

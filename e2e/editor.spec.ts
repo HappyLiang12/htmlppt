@@ -2205,7 +2205,7 @@ test(
         'aria-selected',
         'true'
       );
-      await expect(page.getByTestId('text-placeholder')).toBeVisible();
+      await expect(page.getByTestId('inspector-text-idle')).toBeVisible();
 
       await page.getByTestId('inspector-tab-notes').click();
       const notes = page.getByTestId('notes-input');
@@ -2603,7 +2603,7 @@ test(
       await expect(design).toHaveAttribute('aria-selected', 'false');
       await expect(text).toHaveAttribute('tabindex', '0');
       await expect(design).toHaveAttribute('tabindex', '-1');
-      await expect(page.getByTestId('text-placeholder')).toBeVisible();
+      await expect(page.getByTestId('inspector-text-idle')).toBeVisible();
 
       await page.keyboard.press('End');
       await expect(notes).toBeFocused();
@@ -2624,7 +2624,7 @@ test(
       // Clicking still selects a tab outside the keyboard path.
       await text.click();
       await expect(text).toHaveAttribute('aria-selected', 'true');
-      await expect(page.getByTestId('text-placeholder')).toBeVisible();
+      await expect(page.getByTestId('inspector-text-idle')).toBeVisible();
     } finally {
       await closeEditor(editor);
     }
