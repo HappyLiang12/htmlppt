@@ -133,13 +133,20 @@ interface MatrixLike {
 function svgInverseMatrix(element: Element): MatrixLike | null {
   const graphics = element as SVGGraphicsElement;
   const ctm = graphics.getScreenCTM?.();
-  return ctm ? (ctm.inverse() as unknown as MatrixLike) : null;
+  if (!ctm) return null;
+  try {
+    return ctm.inverse() as unknown as MatrixLike;
+  } catch {
+    // A singular CTM (for example scale(0)) has no inverse; keep the design
+    // delta rather than breaking the pointer stream.
+    return null;
+  }
 }
 
 /**
  * Converts a design-pixel delta to the element's local SVG user units. The
- * inverse screen CTM's coefficients carry the parent scale and rotation; its
- * translation cancels for a delta, so only `a`/`b`/`c`/`d` matter. The local
+ * inverse screen CTM's coefficients carry the local-to-screen scale and
+ * rotation; its translation cancels for a delta, so only `a`/`b`/`c`/`d` matter. The local
  * delta is the space a post-multiplied translate acts in. A missing matrix
  * keeps the design delta so authored geometry still moves by the pointer
  * distance. Each axis is rounded to 3 decimals.

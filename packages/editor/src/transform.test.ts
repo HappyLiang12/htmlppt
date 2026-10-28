@@ -320,6 +320,37 @@ describe('svgUserDelta', () => {
     svg.remove();
   });
 
+  it('composes an anisotropic rotation and scale', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, { a: 0.5, b: -0.5, c: 0.5, d: 0.5 });
+
+    expect(svgUserDelta(shape, { x: 10, y: 20 })).toEqual({ x: 15, y: 5 });
+
+    svg.remove();
+  });
+
+  it('keeps a zero delta at zero', () => {
+    const { svg, shape } = svgShape();
+    stubScreenCtm(shape, { a: 0.5, b: -0.5, c: 0.5, d: 0.5 });
+
+    expect(svgUserDelta(shape, { x: 0, y: 0 })).toEqual({ x: 0, y: 0 });
+
+    svg.remove();
+  });
+
+  it('falls back to the design delta when the CTM cannot be inverted', () => {
+    const { svg, shape } = svgShape();
+    (shape as unknown as { getScreenCTM: () => unknown }).getScreenCTM = () => ({
+      inverse: () => {
+        throw new DOMException('singular', 'InvalidStateError');
+      }
+    });
+
+    expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 40, y: 20 });
+
+    svg.remove();
+  });
+
   it('falls back to the design delta when the screen CTM is missing', () => {
     const { svg, shape } = svgShape();
 

@@ -1152,18 +1152,13 @@ Add to `packages/editor/src/transform.test.ts`:
 import { applySvgTranslate, svgUserDelta } from './transform.js';
 
 describe('svgUserDelta', () => {
-  it('converts a design delta through the element CTM', () => {
+  it('converts a design delta through the inverse matrix coefficients', () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const shape = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     svg.appendChild(shape);
-    document.body.appendChild(svg);
+    // Chromium's SVGMatrix exposes a..f and has no transformPoint.
     (shape as unknown as { getScreenCTM(): unknown }).getScreenCTM = () => ({
-      inverse: () => ({
-        transformPoint: (point: { x: number; y: number }) => ({
-          x: point.x / 2 + 10,
-          y: point.y / 2 + 20
-        })
-      })
+      inverse: () => ({ a: 0.5, b: 0, c: 0, d: 0.5, e: 10, f: 20 })
     });
     expect(svgUserDelta(shape, { x: 40, y: 20 })).toEqual({ x: 20, y: 10 });
     svg.remove();
@@ -1178,27 +1173,42 @@ Run: `npm run test -w @htmlppt/editor -- src/transform.test.ts` — FAIL (functi
 - [ ] **Step 3: Implement the helpers**
 
 ```ts
-function svgMatrix(element: Element): {
-  transformPoint(point: { x: number; y: number }): { x: number; y: number };
-} | null {
-  const graphics = element as SVGGraphicsElement;
-  const ctm = graphics.getScreenCTM?.();
-  return ctm ? (ctm.inverse() as unknown as { transformPoint(point: { x: number; y: number }): { x: number; y: number } }) : null;
+interface MatrixLike {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e?: number;
+  f?: number;
 }
 
-/** Converts a design-pixel delta to the element's SVG user units. */
+function svgInverseMatrix(element: Element): MatrixLike | null {
+  const graphics = element as SVGGraphicsElement;
+  const ctm = graphics.getScreenCTM?.();
+  if (!ctm) return null;
+  try {
+    return ctm.inverse() as unknown as MatrixLike;
+  } catch {
+    // A singular CTM (for example scale(0)) has no inverse.
+    return null;
+  }
+}
+
+/** Converts a design-pixel delta to the element's local SVG user units. */
 export function svgUserDelta(element: Element, delta: Point): Point {
-  const inverse = svgMatrix(element);
+  const inverse = svgInverseMatrix(element);
   if (!inverse) return { x: delta.x, y: delta.y };
-  const origin = inverse.transformPoint({ x: 0, y: 0 });
-  const moved = inverse.transformPoint({ x: delta.x, y: delta.y });
   return {
-    x: Math.round((moved.x - origin.x) * 1000) / 1000,
-    y: Math.round((moved.y - origin.y) * 1000) / 1000
+    x: Math.round((inverse.a * delta.x + inverse.c * delta.y) * 1000) / 1000,
+    y: Math.round((inverse.b * delta.x + inverse.d * delta.y) * 1000) / 1000
   };
 }
 
-/** Pre-multiplies a translate so authored transforms are preserved. */
+/**
+ * Post-multiplies a translate onto the authored transform. The delta is already
+ * local (`svgUserDelta`), so the trailing translate moves the shape along the
+ * pointer even when its own transform rotates or scales it.
+ */
 export function applySvgTranslate(
   element: Element,
   authoredTransform: string,
@@ -1206,9 +1216,10 @@ export function applySvgTranslate(
 ): void {
   const translate = `translate(${delta.x} ${delta.y})`;
   const authored = authoredTransform.trim();
+  const keepsAuthored = authored !== '' && authored.toLowerCase() !== 'none';
   element.setAttribute(
     'transform',
-    authored ? `${translate} ${authored}` : translate
+    keepsAuthored ? `${authored} ${translate}` : translate
   );
 }
 ```
@@ -1672,7 +1683,7 @@ export function pasteComponentNode(
 }
 ```
 
-Note: `nextIdFactory` and `offsetPastedObject` are private but already in the file, so reuse them. `elementAtPath` must be imported from `selection.js`. The `svg` parameter is not needed if `importNode` preserves the namespace; drop it. `offsetPastedObject` handles `position:relative` for flow; for SVG nodes, inline styles are ineffective, so add a branch: if `isSvgInternal(clone)`, set a `transform` translate of 20 user units? The duplicate offset for SVG uses a 20 px design offset; import `svgUserDelta` from `transform.js` would create a dependency from object-ops to transform (both editor modules, fine). Simpler: set `transform="translate(20 20) <authored>"` for SVG clones inside the offset function:
+Note: `nextIdFactory` and `offsetPastedObject` are private but already in the file, so reuse them. `elementAtPath` must be imported from `selection.js`. The `svg` parameter is not needed if `importNode` preserves the namespace; drop it. `offsetPastedObject` handles `position:relative` for flow; for SVG nodes, inline styles are ineffective, so add a branch: if `isSvgInternal(clone)`, set a `transform` translate of 20 user units? The duplicate offset for SVG uses a 20 px design offset; import `svgUserDelta` from `transform.js` would create a dependency from object-ops to transform (both editor modules, fine). Simpler: set `transform="<authored> translate(20 20)"` (post-multiplied, matching `applySvgTranslate`) for SVG clones inside the offset function:
 
 ```ts
 if (clone.namespaceURI === 'http://www.w3.org/2000/svg' && clone.closest('svg') !== clone) {
