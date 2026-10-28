@@ -628,7 +628,7 @@ export function Inspector({
               ref={objectListRef}
               tabIndex={-1}
               data-testid="object-list"
-              className="flex flex-col gap-1 outline-none"
+              className="flex flex-col gap-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               {objects.map((object) => {
                 const selected = selectedTopPath === object.path[0];
