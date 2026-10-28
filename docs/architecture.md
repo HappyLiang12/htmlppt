@@ -223,6 +223,38 @@ serialized, is not restored after a reload, and drilling in writes no deck
 attributes or ids. A nested geometry edit is not context state: it writes
 inline styles to the selected element exactly like a top-level edit.
 
+### Component selection and dragging
+
+At slide level, the editor selects the innermost visible component rather than
+always the top-level object. `resolveComponent` in
+`packages/editor/src/component-target.ts` walks the pointer target toward the
+slide and stops at the deepest element that is not inline content, with
+exceptions for atomic widgets (images, tables, chart figures), SVG roots, and
+guarded wrappers. `selectionFromEvent`, `componentPath`, and the click resolver
+in `App.tsx` share it, so click, hover, and drag agree. An entered
+`containerPath` keeps the older direct-child rule. Hover reuses the same
+resolver and paints an editor-only outline plus a frame-level cursor attribute;
+nothing about hover or selection enters the master `Document`.
+
+HTML targets keep the pin-to-absolute drag gesture. SVG internals use a second
+geometry mode: the editor reads the pointer delta through the inverse CTM in
+design pixels (parent CTM times the authored attribute for a nested `<svg>`
+root) and writes a post-multiplied `transform="translate(dx dy)"` in local user
+units. A CSS-owned transform makes a shape selectable but drag-inert, and
+snapping is disabled for non-HTML targets. Table cells are selectable but have
+no geometry gesture; a drag on one shows an editor-only hint instead of
+preventing native text selection.
+
+Structural commands on nested and SVG selections use the node clipboard in
+`use-deck-controller.ts`: copies hold cloned component nodes plus their kind
+(HTML, SVG root, or SVG internal). Paste inserts a sibling after a nested
+anchor when the kinds match, falls back to slide level for HTML and SVG roots,
+and refuses guarded, table-cell, and nested multi destinations. The helpers in
+`object-ops.ts` (`cloneComponent`, `deleteComponentPaths`,
+`pasteComponentNode`) refresh every `data-ppt-el` in a clone, offset it by
+20 px, and insert into the destination parent; every operation goes through
+`commitMaster`, so undo, autosave, and conflict recovery are unchanged.
+
 ## Presenter BroadcastChannel protocol
 
 Both the editor play mode and the standalone runtime use one origin-scoped
