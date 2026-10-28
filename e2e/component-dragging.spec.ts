@@ -561,8 +561,17 @@ test('drags a nested svg root with a transform', { tag: '@feature:component-drag
   const deck = await openDeck(page);
   try {
     // The outer svg root is atomic at the slide level, so one double-click
-    // enters it; the nested svg then is a direct child.
-    await deck.frame.locator('#nest-wrap').dblclick();
+    // enters it; the nested svg then is a direct child. Its centre sits on the
+    // circle's right edge in the new non-1:1 viewport, and corner handles own
+    // the margins after the first click, so enter through a bare viewport point.
+    const slideBox = await deck.frame.locator('[data-slide-id]').boundingBox();
+    const scale = slideBox!.width / 1600;
+    const nestBox = await deck.frame.locator('#nest-wrap').boundingBox();
+    if (!nestBox) throw new Error('No box for #nest-wrap');
+    await page.mouse.dblclick(
+      nestBox.x + 30 * scale,
+      nestBox.y + 70 * scale
+    );
     await expect(page.getByTestId('edit-context')).toContainText('.nest-wrap');
     await deck.frame.locator('#inner-svg').click();
 
@@ -591,9 +600,28 @@ test('drags a nested svg root with a transform', { tag: '@feature:component-drag
     if (!after) throw new Error('No box for #inner-svg after the drag');
     expect(Math.abs(after.x - box.x - 30)).toBeLessThanOrEqual(2);
     expect(Math.abs(after.y - box.y - 10)).toBeLessThanOrEqual(2);
+    // The viewport root's own matrix includes its viewBox scale; the overlay
+    // must still land on the moved element, not only on the pointer path.
+    expect(
+      deviation(await boxOfLocator(outline), fromBoundingBox(after))
+    ).toBeLessThanOrEqual(1);
     const html = await readFile(deck.path, 'utf8');
     expect(html).toMatch(/id="inner-svg"[^>]*transform="translate\([^)]*\)"/);
     expect(html).not.toMatch(/id="inner-svg"[^>]*position: absolute/);
+
+    // A nudge is a second gesture on the same nested root: it must move by the
+    // design nudge distance in screen pixels and never pin absolute geometry.
+    const saveAfterNudge = waitForDeckSave(page);
+    await page.keyboard.press('Shift+ArrowRight');
+    await saveAfterNudge;
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    const nudged = await deck.frame.locator('#inner-svg').boundingBox();
+    if (!nudged) throw new Error('No box for #inner-svg after the nudge');
+    expect(nudged.x - after.x).toBeGreaterThan(10 * scale - 2);
+    expect(nudged.x - after.x).toBeLessThan(10 * scale + 2);
+    const htmlAfterNudge = await readFile(deck.path, 'utf8');
+    expect(htmlAfterNudge).toMatch(/id="inner-svg"[^>]*transform="[^"]*translate\(/);
+    expect(htmlAfterNudge).not.toMatch(/id="inner-svg"[^>]*position: absolute/);
   } finally {
     await deck.close();
   }

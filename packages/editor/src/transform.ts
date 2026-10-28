@@ -144,20 +144,74 @@ function svgInverseMatrix(element: Element): MatrixLike | null {
 }
 
 /**
- * Converts a design-pixel delta to the element's local SVG user units. The
- * inverse screen CTM's coefficients carry the local-to-screen scale and
- * rotation; its translation cancels for a delta, so only `a`/`b`/`c`/`d` matter. The local
- * delta is the space a post-multiplied translate acts in. A missing matrix
- * keeps the design delta so authored geometry still moves by the pointer
- * distance. Each axis is rounded to 3 decimals.
+ * Converts a design-pixel delta to the space in which the written transform
+ * acts. For a shape, `g`, `use`, or `text`, the element's own screen CTM
+ * already includes its authored transform, and its inverse maps the delta to
+ * the local user space a post-multiplied translate acts in; the translation
+ * cancels for a delta, so only `a`/`b`/`c`/`d` matter.
+ *
+ * A nested `<svg>` is a viewport, not a shape: its own CTM also includes the
+ * `x`/`y` viewport offset and the `viewBox` scale, but its transform attribute
+ * is applied in the parent's user space, outside that mapping. Using the own
+ * CTM there would shrink the delta by the viewBox scale. The nested root
+ * therefore maps through the linear part of `parentCTM * authoredAttribute`
+ * (identity when no attribute exists). A missing parent CTM (a top-level svg
+ * in HTML, or jsdom without stubs) keeps the old fallback: the element's own
+ * CTM, then the raw delta. Each axis is rounded to 3 decimals.
  */
 export function svgUserDelta(element: Element, delta: Point): Point {
-  const inverse = svgInverseMatrix(element);
+  const parent = element.parentElement as
+    | (Element & { getScreenCTM?: () => MatrixLike | null })
+    | null;
+  const nestedSvgRoot =
+    element.tagName.toLowerCase() === 'svg' &&
+    typeof parent?.getScreenCTM === 'function';
+  const inverse = nestedSvgRoot
+    ? (nestedSvgInverseMatrix(element) ?? svgInverseMatrix(element))
+    : svgInverseMatrix(element);
   if (!inverse) return { x: delta.x, y: delta.y };
   return {
     x: Math.round((inverse.a * delta.x + inverse.c * delta.y) * 1000) / 1000,
     y: Math.round((inverse.b * delta.x + inverse.d * delta.y) * 1000) / 1000
   };
+}
+
+/**
+ * Inverts a 2x2 linear matrix by hand. A zero determinant (for example
+ * `scale(0)` or a collapsed axis) has no inverse; the caller keeps the design
+ * delta rather than breaking the pointer stream.
+ */
+function invertLinear(matrix: MatrixLike): MatrixLike | null {
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (!Number.isFinite(determinant) || determinant === 0) return null;
+  return {
+    a: matrix.d / determinant,
+    b: -matrix.b / determinant,
+    c: -matrix.c / determinant,
+    d: matrix.a / determinant
+  };
+}
+
+/**
+ * The inverse of the linear part of the matrix a nested svg root's transform
+ * attribute acts through: `parentCTM * authoredAttribute`. The attribute is
+ * applied in the parent's user space, before the element's own viewport
+ * mapping, so the element's own CTM is the wrong source here.
+ */
+function nestedSvgInverseMatrix(element: Element): MatrixLike | null {
+  const parent = element.parentElement as
+    | (Element & { getScreenCTM?: () => MatrixLike | null })
+    | null;
+  const parentCtm = parent?.getScreenCTM?.() ?? null;
+  if (!parentCtm) return null;
+  const authored = attributeMatrix(element);
+  const [a = 1, b = 0, c = 0, d = 1] = authored ?? [];
+  return invertLinear({
+    a: parentCtm.a * a + parentCtm.c * b,
+    b: parentCtm.b * a + parentCtm.d * b,
+    c: parentCtm.a * c + parentCtm.c * d,
+    d: parentCtm.b * c + parentCtm.d * d
+  });
 }
 
 const MATRIX_2D = /^matrix\(\s*([^)]+)\)$/;
@@ -202,6 +256,12 @@ function sameMatrix(applied: readonly number[], authored: readonly number[]): bo
  * attribute alone produces. Any CSS transform on a shape without an attribute
  * is an override by definition; jsdom reports the declared rule here and an
  * empty computed value for an unstyled element (the same thing as `none`).
+ *
+ * Documented residual: a stylesheet `transform: none` over an authored
+ * attribute computes `none`, which is indistinguishable from "no CSS
+ * transform", so the attribute reads as authoritative. A computed matrix that
+ * happens to equal the attribute is likewise treated as attribute-owned;
+ * telling those apart needs CSS rule introspection.
  */
 export function svgCssTransformOverride(element: Element): boolean {
   const inline = styleOf(element)?.transform?.trim() ?? '';

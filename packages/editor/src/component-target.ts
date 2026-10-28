@@ -39,11 +39,16 @@ export function readComputedStyle(element: Element): ComputedComponentStyle {
  * false for the top-level svg root an author places in HTML content and for
  * HTML content itself. A nested svg root is SVG content: absolute geometry
  * styles are ignored there, so it moves through its transform like a shape.
+ * A direct svg child of a `foreignObject` is the exception: a foreignObject
+ * switches to HTML content, so an svg inside it is an HTML box even though the
+ * parent element lives in the SVG namespace.
  */
 export function isSvgInternal(element: Element): boolean {
   if (element.namespaceURI !== SVG_NAMESPACE) return false;
   if (element.closest('svg') !== element) return true;
-  return element.parentElement?.namespaceURI === SVG_NAMESPACE;
+  const parent = element.parentElement;
+  if (!parent || parent.namespaceURI !== SVG_NAMESPACE) return false;
+  return parent.tagName.toLowerCase() !== 'foreignobject';
 }
 
 /** True for a cell or row inside a table, false for the table itself. */

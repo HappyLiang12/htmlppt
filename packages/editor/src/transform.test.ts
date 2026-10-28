@@ -60,9 +60,11 @@ interface ScreenMatrixCoefficients {
   f?: number;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 function svgShape(tag = 'circle'): { svg: SVGSVGElement; shape: Element } {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  const shape = document.createElementNS(SVG_NS, tag);
   svg.appendChild(shape);
   document.body.appendChild(svg);
   return { svg, shape };
@@ -74,6 +76,44 @@ function stubScreenCtm(
 ): void {
   (element as unknown as { getScreenCTM: () => { inverse(): unknown } })
     .getScreenCTM = () => ({ inverse: () => inverse });
+}
+
+/**
+ * A screen matrix stub that exposes the raw coefficients Chromium's
+ * `DOMMatrix` reports and a separate `inverse()`. A nested svg root maps
+ * through its parent's raw matrix, while shapes read the inverse.
+ */
+function stubRawScreenCtm(
+  element: Element,
+  matrix: ScreenMatrixCoefficients,
+  inverse: ScreenMatrixCoefficients = matrix
+): void {
+  (
+    element as unknown as {
+      getScreenCTM: () => ScreenMatrixCoefficients & { inverse(): unknown };
+    }
+  ).getScreenCTM = () => ({ ...matrix, inverse: () => inverse });
+}
+
+/** The consolidated authored attribute matrix, or null when absent. */
+function stubAttributeMatrix(
+  element: Element,
+  matrix: ScreenMatrixCoefficients | null
+): void {
+  Object.defineProperty(element, 'transform', {
+    configurable: true,
+    value: {
+      baseVal: { consolidate: () => (matrix ? { matrix } : null) }
+    }
+  });
+}
+
+function nestedSvgPair(): { outer: SVGSVGElement; inner: SVGSVGElement } {
+  const outer = document.createElementNS(SVG_NS, 'svg');
+  const inner = document.createElementNS(SVG_NS, 'svg');
+  outer.appendChild(inner);
+  document.body.appendChild(outer);
+  return { outer, inner };
 }
 
 describe('pinToAbsolute', () => {
@@ -339,6 +379,58 @@ describe('svgUserDelta', () => {
     svg.remove();
   });
 
+  it('maps a nested svg root through its parent space, not its own viewport', () => {
+    const { outer, inner } = nestedSvgPair();
+    // The inner viewport maps 100 px onto 50 user units, so using its own CTM
+    // would halve the delta. The attribute applies in the parent space.
+    stubRawScreenCtm(
+      inner,
+      { a: 2, b: 0, c: 0, d: 2 },
+      { a: 0.5, b: 0, c: 0, d: 0.5 }
+    );
+    stubRawScreenCtm(outer, { a: 1, b: 0, c: 0, d: 1 });
+    stubAttributeMatrix(inner, { a: 1, b: 0, c: 0, d: 1 });
+
+    expect(svgUserDelta(inner, { x: 10, y: 20 })).toEqual({ x: 10, y: 20 });
+
+    outer.remove();
+  });
+
+  it('applies the authored rotation before the parent space for a nested svg', () => {
+    const { outer, inner } = nestedSvgPair();
+    stubRawScreenCtm(inner, { a: 2, b: 0, c: 0, d: 2 });
+    stubRawScreenCtm(outer, { a: 1, b: 0, c: 0, d: 1 });
+    stubAttributeMatrix(inner, { a: 0, b: 1, c: -1, d: 0 });
+
+    // P * A = rotate(90), whose inverse maps (10, 0) to (0, -10).
+    expect(svgUserDelta(inner, { x: 10, y: 0 })).toEqual({ x: 0, y: -10 });
+
+    outer.remove();
+  });
+
+  it('keeps the design delta when a nested svg authored matrix is singular', () => {
+    const { outer, inner } = nestedSvgPair();
+    stubRawScreenCtm(outer, { a: 1, b: 0, c: 0, d: 1 });
+    stubAttributeMatrix(inner, { a: 0, b: 0, c: 0, d: 0 });
+    (inner as unknown as { getScreenCTM: () => null }).getScreenCTM = () => null;
+
+    expect(svgUserDelta(inner, { x: 10, y: 20 })).toEqual({ x: 10, y: 20 });
+
+    outer.remove();
+  });
+
+  it('keeps the element CTM fallback for a top-level svg in HTML', () => {
+    const host = document.createElement('div');
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    host.appendChild(svg);
+    document.body.appendChild(host);
+    stubScreenCtm(svg, { a: 0.5, b: 0, c: 0, d: 0.5 });
+
+    expect(svgUserDelta(svg, { x: 10, y: 20 })).toEqual({ x: 5, y: 10 });
+
+    host.remove();
+  });
+
   it('falls back to the design delta when the CTM cannot be inverted', () => {
     const { svg, shape } = svgShape();
     (shape as unknown as { getScreenCTM: () => unknown }).getScreenCTM = () => ({
@@ -505,12 +597,64 @@ describe('svgCssTransformOverride', () => {
     svg.remove();
   });
 
-  it('trims the presentation attribute before judging it', () => {
+  it('treats a stylesheet transform:none over an authored attribute as attribute-owned', () => {
     const { svg, shape } = svgShape();
-    shape.setAttribute('transform', '  translate(10 10)  ');
+    shape.setAttribute('transform', 'translate(10 10)');
+    stubAttributeMatrix(shape, { a: 1, b: 0, c: 0, d: 1, e: 10, f: 10 });
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'none'
+      } as CSSStyleDeclaration);
 
+    // A stylesheet `none` really outranks the attribute, but the computed value
+    // cannot be told apart from "no CSS transform"; documented residual.
     expect(svgCssTransformOverride(shape)).toBe(false);
 
+    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('reports a matrix3d computed transform as an override', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'translate(10 10)');
+    stubAttributeMatrix(shape, { a: 1, b: 0, c: 0, d: 1, e: 10, f: 10 });
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform:
+          'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)'
+      } as CSSStyleDeclaration);
+
+    expect(svgCssTransformOverride(shape)).toBe(true);
+
+    computed.mockRestore();
+    svg.remove();
+  });
+
+  it('tolerates six-significant-digit rounding against an exact authored matrix', () => {
+    const { svg, shape } = svgShape();
+    shape.setAttribute('transform', 'rotate(20)');
+    const radians = (20 * Math.PI) / 180;
+    stubAttributeMatrix(shape, {
+      a: Math.cos(radians),
+      b: Math.sin(radians),
+      c: -Math.sin(radians),
+      d: Math.cos(radians),
+      e: 0,
+      f: 0
+    });
+    const computed = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockReturnValue({
+        transform: 'matrix(0.939693, 0.34202, -0.34202, 0.939693, 0, 0)'
+      } as CSSStyleDeclaration);
+
+    // Chromium serializes to about six significant digits; exact equality
+    // would report a false override.
+    expect(svgCssTransformOverride(shape)).toBe(false);
+
+    computed.mockRestore();
     svg.remove();
   });
 

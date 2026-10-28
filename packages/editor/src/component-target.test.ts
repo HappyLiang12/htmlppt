@@ -156,11 +156,15 @@ describe('isSvgInternal and isTableInternal', () => {
     expect(isSvgInternal(html)).toBe(false);
   });
 
-  it('treats a nested svg root as svg-internal', () => {
-    const outer = document.createElementNS(SVG_NS, 'svg');
-    const inner = document.createElementNS(SVG_NS, 'svg');
-    outer.appendChild(inner);
-    expect(isSvgInternal(inner)).toBe(true);
+  it('treats a nested svg root as svg-internal in any svg container', () => {
+    for (const tag of ['svg', 'g', 'a']) {
+      const outer = document.createElementNS(SVG_NS, 'svg');
+      const container = document.createElementNS(SVG_NS, tag);
+      const inner = document.createElementNS(SVG_NS, 'svg');
+      container.appendChild(inner);
+      outer.appendChild(container);
+      expect(isSvgInternal(inner)).toBe(true);
+    }
   });
 
   it('keeps a top-level svg root in HTML content outside svg content', () => {
@@ -177,6 +181,15 @@ describe('isSvgInternal and isTableInternal', () => {
     const inner = document.createElementNS(SVG_NS, 'svg');
     html.appendChild(inner);
     foreign.appendChild(html);
+    outer.appendChild(foreign);
+    expect(isSvgInternal(inner)).toBe(false);
+  });
+
+  it('keeps a direct svg child of foreignObject outside svg content', () => {
+    const outer = document.createElementNS(SVG_NS, 'svg');
+    const foreign = document.createElementNS(SVG_NS, 'foreignObject');
+    const inner = document.createElementNS(SVG_NS, 'svg');
+    foreign.appendChild(inner);
     outer.appendChild(foreign);
     expect(isSvgInternal(inner)).toBe(false);
   });
