@@ -191,7 +191,7 @@ export function sameMeasuredBox(
 export function parseFitMode(...) // not here
 ```
 
-Run: `npx vitest run packages/editor/src/canvas-fit.test.ts` (RED, then GREEN).
+Run: `npm test -w @htmlppt/editor -- canvas-fit` (RED, then GREEN).
 
 Commit: `test(editor): define measured stage and crop math` (tests + module
 may land together after GREEN).
