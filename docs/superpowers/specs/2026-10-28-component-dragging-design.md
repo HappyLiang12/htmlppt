@@ -97,10 +97,12 @@ Non-goals:
   outside its own `x`/`y`/`viewBox` mapping, so the delta converts through the
   parent's screen CTM composed with the authored transform instead of the
   element's own CTM. SVG internals whose transform is owned by CSS — a computed
-  `transform`, the individual `translate`/`rotate`/`scale` properties, or an
-  inline style — stay selectable but are drag-inert, because the presentation
-  attribute cannot compose with that styling. Resize and rotate are not offered
-  for SVG internals, and snapping is disabled for them.
+  `transform` (which overrides the attribute) or the individual
+  `translate`/`rotate`/`scale` properties (which compose outside it) — stay
+  selectable but are drag-inert: the editor's delta model reads only the
+  authored attribute, so it cannot move them by the pointer distance. Resize
+  and rotate are not offered for SVG internals, and snapping is disabled for
+  them.
 - **D9 — Tables.** A cell is selectable by click (the table toolbar needs it) but
   table-internal selections have no geometry gestures; a drag on a cell shows a
   hint naming the table. The table itself is selectable through its border,
@@ -305,8 +307,10 @@ the display/position/atomic rules without a browser.
   selectable; Enter on a deep selected container enters it; Esc leaves one
   level; OBJECTS and breadcrumb reflect the level.
 - **CD-AC5** Inside an entered SVG, clicking a `g`/`circle`/`line`/`path`
-  selects it; dragging writes a `transform="translate(...)"` in user units and
-  saves; no resize/rotate handles appear; undo restores the authored transform.
+  selects it; when its transform is attribute-owned, dragging writes a
+  `transform="translate(...)"` in user units and saves; CSS-owned shapes stay
+  selectable but drag-inert; no resize/rotate handles appear; undo restores the
+  authored transform.
 - **CD-AC6** Clicking a table cell selects it and shows the table toolbar;
   dragging the cell does not move it and shows the hint; the table itself moves.
 - **CD-AC7** Nested duplicate/delete/copy-paste persist across save/reload with
