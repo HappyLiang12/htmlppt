@@ -18,6 +18,7 @@ import {
   isEnterableContainer,
   type SelectionTarget
 } from '../selection';
+import { componentLabel } from '../component-target';
 import type { DeckControllerActions } from '../use-deck-controller';
 import { EDIT_HINT_KEYS, type EditHintReason } from '../text-edit-block';
 import {
@@ -397,6 +398,7 @@ export function Inspector({
   const { t } = useI18n();
   const [tab, setTab] = useState<InspectorTab>('design');
   const replaceInput = useRef<HTMLInputElement | null>(null);
+  const objectListRef = useRef<HTMLUListElement | null>(null);
   const tabRefs = useRef<Record<InspectorTab, HTMLButtonElement | null>>({
     design: null,
     text: null,
@@ -598,11 +600,21 @@ export function Inspector({
         <section aria-label={t('inspector.objects')} className={SECTION_CLASS}>
           <div className="flex items-center justify-between">
             <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
-            {enterSelectionPath && (
+            {enterSelectionPath && selectedElement && (
               <button
                 type="button"
                 data-testid="inspector-enter-component"
-                onClick={() => onEnterContext?.(enterSelectionPath)}
+                aria-label={t('editor.context.enter', {
+                  name: componentLabel(selectedElement)
+                })}
+                onClick={() => {
+                  onEnterContext?.(enterSelectionPath);
+                  // The action unmounts with the old context; hand focus to
+                  // the new object list instead of dropping it to the body.
+                  window.requestAnimationFrame(() =>
+                    objectListRef.current?.focus()
+                  );
+                }}
                 className={ACTION_CLASS}
               >
                 {t('inspector.enterComponent')}
@@ -612,7 +624,12 @@ export function Inspector({
           {objects.length === 0 ? (
             <p className="text-xs text-muted">{t('inspector.noObjects')}</p>
           ) : (
-            <ul data-testid="object-list" className="flex flex-col gap-1">
+            <ul
+              ref={objectListRef}
+              tabIndex={-1}
+              data-testid="object-list"
+              className="flex flex-col gap-1 outline-none"
+            >
               {objects.map((object) => {
                 const selected = selectedTopPath === object.path[0];
                 const objectElement = contextElement?.children[object.index];

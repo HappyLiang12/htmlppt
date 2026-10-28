@@ -213,9 +213,13 @@ test('offers a visible Enter action for a deep selected container', { tag: '@fea
   const deck = await openDeck(page);
   try {
     await deck.frame.locator('#card').click({ position: { x: 4, y: 4 } });
-    await page.getByTestId('inspector-enter-component').click();
+    const enterButton = page.getByTestId('inspector-enter-component');
+    await expect(enterButton).toHaveAttribute('aria-label', /card/);
+    await enterButton.click();
     await expect(page.getByTestId('edit-context')).toContainText('card');
     await expect(page.getByTestId('object-row').filter({ hasText: 'icon' })).toBeVisible();
+    // The action unmounts with the old context; focus lands on the new list.
+    await expect(page.getByTestId('object-list')).toBeFocused();
   } finally {
     await deck.close();
   }
