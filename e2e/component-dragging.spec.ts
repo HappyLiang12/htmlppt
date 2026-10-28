@@ -574,16 +574,18 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     // A pointer drag inside the cell keeps the native text selection, but the
     // cell owns no movable geometry: nothing may be pinned or saved.
     // Chromium does not acknowledge synthetic mouse moves while a native text
-    // selection drag is active inside a sandboxed frame, so the drag arrives
-    // as real touch input on the same pointer listeners and coordinates.
+    // selection drag is active inside a sandboxed frame, so the touch start
+    // only installs the probe. Every distance sample below is a mouse move,
+    // and the above-threshold one must reach that probe, so a future
+    // pointer-type filter would fail this test.
     const startX = cellBox.x + 10;
     const startY = cellBox.y + 10;
     const cdp = await page.context().newCDPSession(page);
     // Chromium swallows touch moves below its slop (~3 page px), which is
     // already past the 2 screen px probe threshold, so a touch sample alone
     // cannot prove the gate. Count pointer moves on the frame and take the
-    // sub-threshold sample as a bare pointer move at the same point: the probe
-    // compares coordinates only, never the pointer type.
+    // sub-threshold sample as a bare mouse move at the same point: the probe
+    // compares coordinates only, and the counter proves the frame saw it.
     await page.evaluate(() => {
       const frame = document.querySelector(
         'iframe[title="投影片預覽"]'
@@ -627,13 +629,19 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     });
     await expect.poll(framePointerMoves).toBeGreaterThan(0);
     await expect(hint).toHaveCount(0);
-    await cdp.send('Input.dispatchTouchEvent', {
-      type: 'touchMove',
-      touchPoints: [{ id: 0, x: startX + 40, y: startY + 30 }]
+    // The mouse move crosses the threshold, so the probe installed by the
+    // touch start must surface the refusal.
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: startX + 40,
+      y: startY + 30,
+      button: 'none',
+      buttons: 0
     });
     await page.waitForTimeout(250);
     await expect(hint).toBeVisible();
     await expect(hint).toContainText('表格');
+    // The touch point is still live, so end it; the probe is already detached.
     await cdp.send('Input.dispatchTouchEvent', {
       type: 'touchEnd',
       touchPoints: []
@@ -739,6 +747,49 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     } finally {
       page.off('request', recordDeckPut);
     }
+
+    // A guarded target is the blocker here: the clamped decor cannot move
+    // right, the cell must not move, and the locked wrapper explains the rest.
+    // This mixed no-op contains more than the cell, so the hint must stay
+    // away. The dismissal leaves no stale hint behind for the assertions.
+    await page.getByTestId('edit-hint-dismiss').click();
+    await expect(hint).toHaveCount(0);
+    // The guarded subtree resolves to its locked wrapper and joins the cell
+    // and decor, so three outlines prove the selection really is mixed.
+    await deck.frame.locator('#locked-child').click({ modifiers: ['Shift'] });
+    await expect(page.getByTestId('selection-outline')).toHaveCount(3);
+    await expect(
+      page.locator(
+        '[data-testid="selection-outline"][data-selected-id="locked"]'
+      )
+    ).toHaveCount(1);
+    const decorBeforeGuarded = await deck.frame.locator('#decor').boundingBox();
+    const cellBeforeGuarded = await cell.boundingBox();
+    if (!decorBeforeGuarded || !cellBeforeGuarded) {
+      throw new Error('No box before the guarded nudge');
+    }
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(250);
+    await expect(hint).toHaveCount(0);
+    const decorAfterGuarded = await deck.frame.locator('#decor').boundingBox();
+    const cellAfterGuarded = await cell.boundingBox();
+    if (!decorAfterGuarded || !cellAfterGuarded) {
+      throw new Error('No box after the guarded nudge');
+    }
+    expect(
+      deviation(
+        fromBoundingBox(decorBeforeGuarded),
+        fromBoundingBox(decorAfterGuarded)
+      )
+    ).toBeLessThanOrEqual(1);
+    expect(
+      deviation(
+        fromBoundingBox(cellBeforeGuarded),
+        fromBoundingBox(cellAfterGuarded)
+      )
+    ).toBeLessThanOrEqual(1);
+    // Nothing moved and nothing was written.
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
   } finally {
     await deck.close();
   }

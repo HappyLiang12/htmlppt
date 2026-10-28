@@ -1288,8 +1288,9 @@ export function App() {
       if (!slide) return false;
       const element = elementAtPath(slide, selected.path);
       if (!element) return false;
-      // SVG shapes and table cells move through their own mechanisms; numeric
-      // geometry would write a contract the renderer ignores. The fields are
+      // SVG shapes position through their transform and a table cell through
+      // its row and column layout; numeric x/y/width/height would be ignored
+      // by an SVG shape or pull the cell out of its table. The fields are
       // disabled today, so this is a defensive guard.
       if (isSvgInternal(element) || isTableInternal(element)) return false;
       if (isLockedElement(element) || isHiddenElement(element)) return false;
@@ -2668,10 +2669,14 @@ export function App() {
       let changed = false;
       let pinned = false;
       let tableCells = 0;
-      let movable = 0;
+      let others = 0;
       for (const target of targets) {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
+        // A clamped, CSS-owned, locked, hidden, or blocked target can all be
+        // the reason a gesture moves nothing, so count every resolved non-cell
+        // target before the guards below.
+        if (!isTableInternal(element)) others += 1;
         const rect = rectOf(element, slide);
         const blockedAncestor = blockedPathAncestor(slide, target.path);
         if (
@@ -2703,10 +2708,6 @@ export function App() {
           });
           continue;
         }
-        // Anything that reaches here could have moved. When one of these
-        // targets is the blocker (clamped at the slide bounds, owned by CSS),
-        // the no-op is not the table cell's fault.
-        movable += 1;
         const svg = isSvgInternal(element);
         // A CSS transform owns the shape's rendering; nudging the attribute
         // would be inert.
@@ -2756,7 +2757,9 @@ export function App() {
         });
       }
       if (!changed) {
-        if (movable === 0 && tableCells > 0) showEditHint('table-cell');
+        // Only an all-cell selection explains itself; any other selected
+        // target can be the blocker.
+        if (tableCells > 0 && others === 0) showEditHint('table-cell');
         return false;
       }
       setSelectionBoxes(boxes);
