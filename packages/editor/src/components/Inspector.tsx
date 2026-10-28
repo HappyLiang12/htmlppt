@@ -1114,19 +1114,21 @@ export function Inspector({
                 {t('inspector.lockedHint')}
               </p>
             ) : multi ? (
-              <>
+              nestedSelectionCount > 0 ? (
+                // Geometry is locked for a nested multi, and align, distribute,
+                // and group are top-level only, so the generic multi hint
+                // would promise gestures this selection cannot perform.
+                <p
+                  data-testid="inspector-nested-structural"
+                  className="text-[11px] text-muted"
+                >
+                  {t('inspector.nestedMultiStructuralHint')}
+                </p>
+              ) : (
                 <p className="text-[11px] text-muted">
                   {t('inspector.multiHint', { count: selectionCount })}
                 </p>
-                {nestedSelectionCount > 0 && (
-                  <p
-                    data-testid="inspector-nested-structural"
-                    className="text-[11px] text-muted"
-                  >
-                    {t('inspector.nestedStructuralHint')}
-                  </p>
-                )}
-              </>
+              )
             ) : objectActions.group ? (
               <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.groupHint')}

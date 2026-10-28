@@ -125,11 +125,16 @@ interface ClipboardComponent {
 
 /**
  * Result of a paste gesture. A paste that targets no valid destination never
- * commits, and "kind-mismatch" is the only outcome that raises a hint: an SVG
- * internal can only land inside an SVG, while HTML and an SVG root fall back
- * to the slide.
+ * commits. "kind-mismatch" and "table-cell" raise a hint: an SVG internal can
+ * only land inside an SVG, while HTML and an SVG root fall back to the slide;
+ * a table cell has no destination that would keep the markup valid.
  */
-export type PasteOutcome = 'pasted' | 'empty' | 'kind-mismatch' | 'refused';
+export type PasteOutcome =
+  | 'pasted'
+  | 'empty'
+  | 'kind-mismatch'
+  | 'refused'
+  | 'table-cell';
 
 export interface DeckControllerActions {
   changePendingEdit(owner: string, edit: PendingEdit | null): void;
@@ -906,6 +911,17 @@ export function useDeckController(
     const selected = stateRef.current.selections.filter(
       (target) => target.slideIndex === activeIndexRef.current
     );
+    // A table cell owns no valid insertion point: a component between cells or
+    // rows would produce markup the table cannot represent, so the gesture
+    // explains itself before any destination is resolved.
+    if (selected.length === 1) {
+      const target = selected[0];
+      const element =
+        target && target.path.length > 1
+          ? elementAtPath(slide.element, target.path)
+          : null;
+      if (element && isTableInternal(element)) return 'table-cell';
+    }
     // A multi-selection is a slide-level paste only while every target is a
     // slide child; a nested path in the mix has no unambiguous destination.
     if (
@@ -980,8 +996,11 @@ export function useDeckController(
       pastedCount = targets.length;
       applySelections(targets);
     });
+    // An SVG internal that found no SVG destination must surface even when the
+    // rest of a mixed clipboard pasted: the hint explains the missing half.
+    if (kindMismatch) return 'kind-mismatch';
     if (pastedCount > 0) return 'pasted';
-    return kindMismatch ? 'kind-mismatch' : 'empty';
+    return 'empty';
   }, [applySelections, commitMaster]);
 
   const duplicateSelection = useCallback(async () => {

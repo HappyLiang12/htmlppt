@@ -133,6 +133,8 @@ export const en = {
     'Groups can only be moved and rotated; ungroup to resize.',
   'inspector.nestedStructuralHint':
     'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.',
+  'inspector.nestedMultiStructuralHint':
+    'Multiple nested objects selected. Only dragging applies; duplicate, delete, reorder, and group act on top-level objects only.',
   'inspector.appearance': 'Appearance',
   'inspector.objectAppearance': 'Object appearance',
   'inspector.image': 'Image',

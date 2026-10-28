@@ -30,6 +30,33 @@ const DECK: DeckResponse = {
 </html>`
 };
 
+const STRUCTURED_DECK: DeckResponse = {
+  revision: 'revision-1',
+  filePath: 'structured.html',
+  html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Structured fixture</title></head>
+<body>
+<main data-ppt-deck>
+<section class="slide">
+  <div class="pad">
+    <h1>Headline</h1>
+    <p id="lead">Lead</p>
+    <table><tbody><tr><td id="cell">A1</td></tr></tbody></table>
+    <svg id="chart-svg"><circle id="dot" cx="5" cy="5" r="2"/></svg>
+  </div>
+</section>
+</main>
+</body>
+</html>`
+};
+
+/** Slide child [0] is .pad; h1 [0,0], lead [0,1], cell [0,2,0,0,0]. */
+const HEADLINE_PATH = [0, 0];
+const LEAD_PATH = [0, 1];
+const CELL_PATH = [0, 2, 0, 0, 0];
+const CIRCLE_PATH = [0, 3, 0];
+
 let container: HTMLDivElement;
 let root: Root;
 let controller!: DeckController;
@@ -438,6 +465,81 @@ describe('useDeckController', () => {
       controller.actions.undo();
     });
     expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('refuses a table-cell paste destination before committing', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: CELL_PATH,
+        elementId: null
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([CELL_PATH]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('table-cell');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    // The heading must not land inside the row or the cell: neither invalid
+    // markup nor a silent success may reach the save queue.
+    expect(slide()?.querySelectorAll('tr h1')).toHaveLength(0);
+    expect(slide()?.querySelectorAll('td h1')).toHaveLength(0);
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('reports kind-mismatch when a mixed clipboard skips an svg internal', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.copySelection();
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: CIRCLE_PATH,
+        elementId: null
+      });
+      // The second copy captures both: one HTML object and one SVG internal.
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: LEAD_PATH,
+        elementId: null
+      });
+    });
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    // The HTML object lands after the anchor, but the skipped SVG internal
+    // must still raise the hint so the user learns half the clipboard failed.
+    expect(outcome).toBe('kind-mismatch');
+    const slide = () => controller.state.slides[0]?.element;
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(2);
+    expect(slide()?.querySelectorAll('circle')).toHaveLength(1);
+    expect(controller.state.dirty).toBe(true);
   });
 
   it('applies slide mutations and restores them through undo and redo', async () => {    await act(async () => {

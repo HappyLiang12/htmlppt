@@ -3271,6 +3271,7 @@ export function App() {
             .pasteObjects()
             .then((outcome) => {
               if (outcome === 'kind-mismatch') showEditHint('paste-kind');
+              if (outcome === 'table-cell') showEditHint('table-cell');
             })
             .catch(() => undefined);
           return;

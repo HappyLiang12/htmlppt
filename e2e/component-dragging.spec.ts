@@ -987,6 +987,35 @@ test('shows the nested structural hint and refuses a nested multi-selection', { 
     } finally {
       page.off('request', recordDeckPut);
     }
+
+    // A mixed-depth selection must be refused as a whole too: a top-level
+    // target next to a nested one would make "every target is top-level"
+    // silently duplicate only the top-level object if the guard used every
+    // instead of some.
+    await deck.frame.locator('#decor').click();
+    await deck.frame.locator('#headline').click({ modifiers: ['Shift'] });
+    await expect(page.getByTestId('selection-outline')).toHaveCount(2);
+    const mixedPuts: string[] = [];
+    const recordMixedPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        mixedPuts.push(request.url());
+      }
+    };
+    page.on('request', recordMixedPut);
+    try {
+      await page.keyboard.press('Control+d');
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(mixedPuts).toEqual([]);
+      await expect(deck.frame.locator('#pad h1')).toHaveCount(1);
+      await expect(deck.frame.locator('#decor')).toHaveCount(1);
+    } finally {
+      page.off('request', recordMixedPut);
+    }
   } finally {
     await deck.close();
   }
@@ -1043,14 +1072,26 @@ test('copies and pastes a nested component as its sibling', { tag: '@feature:com
 test('pastes a top-level svg root at slide level', { tag: '@feature:component-dragging' }, async ({ page }) => {
   const deck = await openDeck(page);
   try {
-    // An svg root is not SVG-internal, so an HTML anchor keeps the historical
-    // slide-level destination instead of swallowing the paste (CD-AC7).
-    await deck.frame.locator('svg.css-shape').click();
+    // #arrow is a genuine slide child (the fixture puts it outside #pad), so a
+    // paste with no nested anchor proves the slide-level destination branch. A
+    // nested svg root would take the mismatch fallback instead and pass this
+    // test without ever exercising the slide-level rule.
+    await deck.frame.locator('#arrow').click();
+    await expect(page.getByTestId('selection-outline')).toHaveAttribute(
+      'data-selected-id',
+      'arrow'
+    );
     await page.keyboard.press('Control+c');
     const save = waitForDeckSave(page);
     await page.keyboard.press('Control+v');
     await save;
-    await expect(deck.frame.locator('svg.css-shape')).toHaveCount(2);
+    await expect(deck.frame.locator('#arrow')).toHaveCount(2);
+    const clone = deck.frame.locator('#arrow').nth(1);
+    expect(
+      await clone.evaluate((element) =>
+        element.parentElement?.getAttribute('data-slide-id')
+      )
+    ).toBe('s1');
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
   } finally {
     await deck.close();
@@ -1136,6 +1177,52 @@ test('refuses to paste inside a guarded subtree', { tag: '@feature:component-dra
       await page.waitForTimeout(1_000);
       expect(deckPuts).toEqual([]);
       await expect(deck.frame.locator('#locked p')).toHaveCount(1);
+    } finally {
+      page.off('request', recordDeckPut);
+    }
+
+    // The clipboard was populated, so the refused no-op above was the guard,
+    // not an empty clipboard: the same paste succeeds at slide level.
+    await deck.frame.locator('#decor').click();
+    const pasteSave = waitForDeckSave(page);
+    await page.keyboard.press('Control+v');
+    await pasteSave;
+    await expect(deck.frame.locator('h1')).toHaveCount(2);
+  } finally {
+    await deck.close();
+  }
+});
+
+test('refuses to paste into a table cell', { tag: '@feature:component-dragging' }, async ({ page }) => {
+  const deck = await openDeck(page);
+  try {
+    await deck.frame.locator('#headline').click();
+    await page.keyboard.press('Control+c');
+    await deck.frame.locator('#cell-a').click();
+    await expect(page.getByTestId('selection-outline')).toBeVisible();
+
+    const hint = page.getByTestId('edit-hint');
+    const deckPuts: string[] = [];
+    const recordDeckPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        deckPuts.push(request.url());
+      }
+    };
+    page.on('request', recordDeckPut);
+    try {
+      await page.keyboard.press('Control+v');
+      await expect(hint).toBeVisible();
+      await expect(hint).toContainText('表格');
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(deckPuts).toEqual([]);
+      // Neither the heading nor any other component may land inside the table.
+      await expect(deck.frame.locator('#table h1')).toHaveCount(0);
+      await expect(page.getByTestId('save-status')).toHaveText('已同步');
     } finally {
       page.off('request', recordDeckPut);
     }
