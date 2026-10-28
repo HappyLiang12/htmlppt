@@ -321,6 +321,23 @@ describe('cloneComponent', () => {
     expect(clone.hasAttribute('data-ppt-el')).toBe(false);
     expect(nextId).not.toHaveBeenCalled();
   });
+
+  it('refreshes only a descendant id when the clone root has none', () => {
+    const { master } = componentMaster(
+      '<div id="wrap"><span data-ppt-el="e2">x</span></div>'
+    );
+    const source = master.querySelector('#wrap');
+    if (!source) throw new Error('Missing source element.');
+    const nextId = vi.fn(() => 'e10');
+
+    const clone = cloneComponent(source, master, nextId);
+
+    expect(clone.hasAttribute('data-ppt-el')).toBe(false);
+    expect(clone.querySelector('span')?.getAttribute('data-ppt-el')).toBe(
+      'e10'
+    );
+    expect(nextId).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('deleteComponentPaths', () => {
@@ -345,6 +362,55 @@ describe('deleteComponentPaths', () => {
     expect(master.querySelector('#a')).toBeNull();
     expect(master.querySelector('#b')).toBeNull();
     expect(master.querySelector('#c')).not.toBeNull();
+  });
+
+  it('removes only the topmost selected node when an ancestor and its child are selected', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
+    );
+    const pad = master.querySelector('#pad');
+    if (!pad) throw new Error('Missing selected ancestor.');
+
+    expect(deleteComponentPaths(master, 0, [[0], [0, 0]])).toBe(1);
+
+    expect(slide.children).toHaveLength(0);
+    expect(master.querySelector('#pad')).toBeNull();
+    // The descendant left the document with its detached ancestor; it was not
+    // removed a second time from the detached subtree.
+    expect(pad.querySelector('#head')).not.toBeNull();
+  });
+
+  it('counts duplicate paths once', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
+    );
+
+    expect(deleteComponentPaths(master, 0, [[0, 0], [0, 0]])).toBe(1);
+
+    expect(master.querySelector('#head')).toBeNull();
+    expect(master.querySelector('#lead')).not.toBeNull();
+  });
+
+  it('removes the valid path when another path is missing', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
+    );
+
+    expect(deleteComponentPaths(master, 0, [[0, 9], [0, 0]])).toBe(1);
+
+    expect(master.querySelector('#head')).toBeNull();
+    expect(master.querySelector('#lead')).not.toBeNull();
+  });
+
+  it('ignores a path that resolves to the slide itself', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1></div>'
+    );
+
+    expect(deleteComponentPaths(master, 0, [[]])).toBe(0);
+
+    expect(slide.parentElement).not.toBeNull();
+    expect(master.querySelector('#head')).not.toBeNull();
   });
 });
 
@@ -384,6 +450,61 @@ describe('pasteComponentNode', () => {
     );
   });
 
+  it('leaves a css-owned svg transform untouched when pasting', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="plot"><circle id="dot" cx="5" cy="5" r="2" style="transform: rotate(20deg)"/></svg>'
+    );
+    const dot = master.querySelector('#dot');
+    if (!dot) throw new Error('Missing source circle.');
+
+    const target = pasteComponentNode(master, 0, dot, [0], null);
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted circle.');
+    // CSS owns the rendering, so the copy stays on the source and the editor
+    // does not write an inert presentation attribute.
+    expect(clone.hasAttribute('transform')).toBe(false);
+    expect(clone.getAttribute('style')).toContain('transform: rotate(20deg)');
+    expect(clone.getAttribute('data-ppt-el')).toBeNull();
+    expect(master.querySelectorAll('circle')).toHaveLength(2);
+  });
+
+  it('offsets a duplicated nested svg root inside its svg parent', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="outer"><svg id="inner"><circle cx="3" cy="3" r="2"/></svg></svg>'
+    );
+    const source = master.querySelector('#inner');
+    if (!source) throw new Error('Missing nested svg root.');
+
+    const target = pasteComponentNode(master, 0, source, [0], null);
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted svg root.');
+    // Inserting before offsetting is what makes the copy svg-internal, so the
+    // 20 px moves through a transform rather than ignored inline styles.
+    expect(target?.path).toEqual([0, 1]);
+    expect(clone.getAttribute('transform')).toBe('translate(20 20)');
+    expect(clone.hasAttribute('style')).toBe(false);
+  });
+
+  it('offsets a top-level svg root with html positioning', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="plot"><circle cx="1" cy="1" r="1"/></svg>'
+    );
+    const source = master.querySelector('#plot');
+    if (!source) throw new Error('Missing svg root.');
+
+    const target = pasteComponentNode(master, 0, source, [], null);
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted svg root.');
+    expect(target?.path).toEqual([1]);
+    expect(clone.hasAttribute('transform')).toBe(false);
+    expect(styleOf(clone).position).toBe('relative');
+    expect(styleOf(clone).left).toBe('20px');
+    expect(styleOf(clone).top).toBe('20px');
+  });
+
   it('inserts after a slide-rooted anchor that lives inside the parent', () => {
     const { master, slide } = componentMaster(
       '<div id="stack"><p id="a" data-ppt-el="e1">A</p><p id="b">B</p><p id="c">C</p></div>'
@@ -406,21 +527,86 @@ describe('pasteComponentNode', () => {
     expect(parent.children[2]?.textContent).toBe('B');
   });
 
+  it('appends when the anchor is the destination parent itself', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><p id="a">A</p><p id="b">B</p></div>'
+    );
+    const source = master.querySelector('#a');
+    if (!source) throw new Error('Missing source element.');
+
+    const target = pasteComponentNode(master, 0, source, [0], [0]);
+
+    expect(target?.path).toEqual([0, 2]);
+    const parent = elementAtPath(slide, [0]);
+    expect(
+      Array.from(parent?.children ?? [], (child) => child.textContent)
+    ).toEqual(['A', 'B', 'A']);
+  });
+
   it('appends when the anchor is outside the parent or null', () => {
     const { master, slide } = componentMaster(
-      '<div id="pad"><p id="a">A</p></div><p id="outside">Outside</p>'
+      '<div id="pad"><p id="a">A</p><p id="b">B</p><p id="c">C</p></div><p id="outside">Outside</p>'
     );
     const source = master.querySelector('#outside');
     if (!source) throw new Error('Missing source element.');
 
+    // A slide-rooted anchor outside the parent must not be indexed into the
+    // parent's children: the buggy parent.children[1] would land after B.
     const foreign = pasteComponentNode(master, 0, source, [0], [1]);
-    expect(foreign?.path).toEqual([0, 1]);
-
-    const missing = pasteComponentNode(master, 0, source, [0], null);
-    expect(missing?.path).toEqual([0, 2]);
+    expect(foreign?.path).toEqual([0, 3]);
 
     const parent = elementAtPath(slide, [0]);
-    expect(parent?.children[2]?.textContent).toBe('Outside');
+    if (!parent) throw new Error('Missing paste parent.');
+    expect(Array.from(parent.children, (child) => child.textContent)).toEqual([
+      'A',
+      'B',
+      'C',
+      'Outside'
+    ]);
+
+    const missing = pasteComponentNode(master, 0, source, [0], null);
+    expect(missing?.path).toEqual([0, 4]);
+    expect(Array.from(parent.children, (child) => child.textContent)).toEqual([
+      'A',
+      'B',
+      'C',
+      'Outside',
+      'Outside'
+    ]);
+  });
+
+  it('offsets a flow component with relative positioning inside its parent', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><p id="lead">L</p></div>'
+    );
+    const source = master.createElement('p');
+    source.textContent = 'Flow';
+
+    const target = pasteComponentNode(master, 0, source, [0], null);
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted flow element.');
+    expect(target?.path).toEqual([0, 1]);
+    expect(styleOf(clone).position).toBe('relative');
+    expect(styleOf(clone).left).toBe('20px');
+    expect(styleOf(clone).top).toBe('20px');
+  });
+
+  it('gives repeated pastes of the same source distinct fresh ids', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><p id="a" data-ppt-el="e1">A</p></div>'
+    );
+    const source = master.querySelector('#a');
+    if (!source) throw new Error('Missing source element.');
+
+    const first = pasteComponentNode(master, 0, source, [0], null);
+    const second = pasteComponentNode(master, 0, source, [0], null);
+
+    // The second factory rescans the slide, so it sees the first clone.
+    expect(first?.elementId).toBe('e2');
+    expect(second?.elementId).toBe('e3');
+    expect(first?.elementId).not.toBe(second?.elementId);
+    expect(first?.elementId).not.toBe('e1');
   });
 
   it('measures an html paste inside its real parent with the parent path', () => {

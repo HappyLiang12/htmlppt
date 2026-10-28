@@ -8,7 +8,8 @@ import {
 import {
   applySvgTranslate,
   containingBlockOffset,
-  rectOf
+  rectOf,
+  svgCssTransformOverride
 } from './transform.js';
 
 const PIXEL_VALUE = /^(-?(?:\d+|\d*\.\d+))px$/;
@@ -41,12 +42,14 @@ export type PastedObjectMeasure = (
 /**
  * Shifts a pasted object by 20 design pixels on both axes. SVG content moves
  * through a post-multiplied transform because absolute geometry styles are
- * ignored there. Positioned objects with finite inline pixel coordinates move
- * those values; an axis without a usable pixel value (unitless, percentage,
- * auto, or a class-supplied coordinate) falls back to the measured box so the
- * copy lands 20 px down-right of where it renders. Flow objects switch to
- * relative positioning so the offset applies without measuring the destination
- * slide. Callers insert the copy first so an svg it lives inside is visible.
+ * ignored there, unless CSS owns the transform: a css-transformed copy lands
+ * on the source and gains no inert presentation attribute. Positioned objects
+ * with finite inline pixel coordinates move those values; an axis without a
+ * usable pixel value (unitless, percentage, auto, or a class-supplied
+ * coordinate) falls back to the measured box so the copy lands 20 px
+ * down-right of where it renders. Flow objects switch to relative positioning
+ * so the offset applies without measuring the destination slide. Callers
+ * insert the copy first so an svg it lives inside is visible.
  */
 function offsetPastedObject(
   element: Element,
@@ -54,6 +57,7 @@ function offsetPastedObject(
   measured: PastedObjectGeometry | null
 ): void {
   if (isSvgInternal(element)) {
+    if (svgCssTransformOverride(element)) return;
     applySvgTranslate(element, element.getAttribute('transform') ?? '', {
       x: 20,
       y: 20
@@ -241,9 +245,11 @@ export function cloneComponent(
 
 /**
  * Removes the selected nested nodes in one mutation. Every path resolves
- * before the first removal so same-parent sibling indices cannot shift, and a
- * node whose ancestor was already removed has no parent left and is skipped.
- * The slide itself and unresolvable paths are ignored.
+ * before the first removal so same-parent sibling indices cannot shift. Only
+ * the topmost selected nodes are removed: a selected node whose ancestor is
+ * also selected leaves with that ancestor and is not counted twice, so
+ * [[0], [0, 0]] removes one subtree. The slide itself, unresolvable paths, and
+ * duplicate paths are ignored.
  */
 export function deleteComponentPaths(
   master: Document,
@@ -261,6 +267,18 @@ export function deleteComponentPaths(
   }
   let removed = 0;
   for (const element of selected) {
+    let topmost = true;
+    for (
+      let ancestor = element.parentElement;
+      ancestor && ancestor !== slide;
+      ancestor = ancestor.parentElement
+    ) {
+      if (selected.has(ancestor)) {
+        topmost = false;
+        break;
+      }
+    }
+    if (!topmost) continue;
     if (!element.parentElement) continue;
     element.parentElement.removeChild(element);
     removed += 1;
