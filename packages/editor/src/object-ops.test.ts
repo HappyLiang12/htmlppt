@@ -380,6 +380,22 @@ describe('deleteComponentPaths', () => {
     expect(pad.querySelector('#head')).not.toBeNull();
   });
 
+  it('removes only the topmost node when the child path comes first', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
+    );
+    const pad = master.querySelector('#pad');
+    if (!pad) throw new Error('Missing selected ancestor.');
+
+    expect(deleteComponentPaths(master, 0, [[0, 0], [0]])).toBe(1);
+
+    expect(slide.children).toHaveLength(0);
+    expect(master.querySelector('#pad')).toBeNull();
+    // A connectivity-only check would remove the detached #head as well and
+    // count it twice; the detached subtree must stay intact.
+    expect(pad.querySelector('#head')).not.toBeNull();
+  });
+
   it('counts duplicate paths once', () => {
     const { master } = componentMaster(
       '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
@@ -528,8 +544,11 @@ describe('pasteComponentNode', () => {
   });
 
   it('appends when the anchor is the destination parent itself', () => {
+    // The trailing slide-level sibling is what exposes a missing direct-parent
+    // guard: without the guard the parent would insert before #after, which is
+    // not one of its children.
     const { master, slide } = componentMaster(
-      '<div id="pad"><p id="a">A</p><p id="b">B</p></div>'
+      '<div id="pad"><p id="a">A</p><p id="b">B</p></div><p id="after">After</p>'
     );
     const source = master.querySelector('#a');
     if (!source) throw new Error('Missing source element.');
@@ -544,8 +563,11 @@ describe('pasteComponentNode', () => {
   });
 
   it('appends when the anchor is outside the parent or null', () => {
+    // #tail follows the foreign anchor so a guardless insert after
+    // anchor.nextSibling targets a slide child and throws instead of
+    // accidentally appending.
     const { master, slide } = componentMaster(
-      '<div id="pad"><p id="a">A</p><p id="b">B</p><p id="c">C</p></div><p id="outside">Outside</p>'
+      '<div id="pad"><p id="a">A</p><p id="b">B</p><p id="c">C</p></div><p id="outside">Outside</p><p id="tail">Tail</p>'
     );
     const source = master.querySelector('#outside');
     if (!source) throw new Error('Missing source element.');
