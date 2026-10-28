@@ -2668,6 +2668,7 @@ export function App() {
       let changed = false;
       let pinned = false;
       let tableCells = 0;
+      let movable = 0;
       for (const target of targets) {
         const element = elementAtPath(slide, target.path);
         if (!element) continue;
@@ -2689,9 +2690,10 @@ export function App() {
           continue;
         }
         if (isTableInternal(element)) {
-          // A cell has no movable geometry: its renderer ignores the absolute
-          // styles a nudge would write. Keep it in the overlay and count it so
-          // a gesture that moved nothing can explain the refusal.
+          // Absolute positioning would pull the cell out of the table layout
+          // and corrupt its row and column, so a nudge must never write it.
+          // Keep the cell in the overlay and count it so a gesture that moved
+          // nothing can explain the refusal.
           tableCells += 1;
           boxes.push({
             rect: frameRectOf(rect, offset),
@@ -2701,6 +2703,10 @@ export function App() {
           });
           continue;
         }
+        // Anything that reaches here could have moved. When one of these
+        // targets is the blocker (clamped at the slide bounds, owned by CSS),
+        // the no-op is not the table cell's fault.
+        movable += 1;
         const svg = isSvgInternal(element);
         // A CSS transform owns the shape's rendering; nudging the attribute
         // would be inert.
@@ -2750,7 +2756,7 @@ export function App() {
         });
       }
       if (!changed) {
-        if (tableCells > 0) showEditHint('table-cell');
+        if (movable === 0 && tableCells > 0) showEditHint('table-cell');
         return false;
       }
       setSelectionBoxes(boxes);
@@ -3493,10 +3499,12 @@ export function App() {
       }
 
       if (isTableInternal(clicked)) {
-        // A table cell stays selectable, but absolute geometry is inert inside
-        // a table. Explain the refused move once the pointer travels past the
-        // drag threshold, and never start a session or write a style. The
-        // probe does not preventDefault, so native cell text selection works.
+        // A table cell stays selectable, but absolute positioning would pull
+        // it out of the table layout and corrupt its row and column, so the
+        // editor must not write it. Explain the refused move once the pointer
+        // travels past the drag threshold, and never start a session or write
+        // a style. The probe does not preventDefault, so native cell text
+        // selection works.
         const startX = event.clientX;
         const startY = event.clientY;
         // The frame reports design/CSS pixels while the session threshold is

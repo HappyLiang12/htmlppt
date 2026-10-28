@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Request } from '@playwright/test';
 import { startCliHost } from './helpers';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -563,10 +563,13 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     const cell = deck.frame.locator('#cell-a');
     await cell.click();
     await expect(page.getByTestId('table-toolbar')).toBeVisible();
+    const hint = page.getByTestId('edit-hint');
+    // Selecting the cell is not a refused gesture: the probe stays quiet until
+    // the pointer actually travels.
+    await expect(hint).toHaveCount(0);
     const cellBox = await cell.boundingBox();
     if (!cellBox) throw new Error('No box for #cell-a');
     const cellStart = fromBoundingBox(cellBox);
-    const hint = page.getByTestId('edit-hint');
 
     // A pointer drag inside the cell keeps the native text selection, but the
     // cell owns no movable geometry: nothing may be pinned or saved.
@@ -576,14 +579,61 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     const startX = cellBox.x + 10;
     const startY = cellBox.y + 10;
     const cdp = await page.context().newCDPSession(page);
+    // Chromium swallows touch moves below its slop (~3 page px), which is
+    // already past the 2 screen px probe threshold, so a touch sample alone
+    // cannot prove the gate. Count pointer moves on the frame and take the
+    // sub-threshold sample as a bare pointer move at the same point: the probe
+    // compares coordinates only, never the pointer type.
+    await page.evaluate(() => {
+      const frame = document.querySelector(
+        'iframe[title="投影片預覽"]'
+      ) as HTMLIFrameElement | null;
+      const doc = frame?.contentDocument;
+      const win = doc?.defaultView as
+        | (Window & { __moves?: number })
+        | null;
+      if (win) win.__moves = 0;
+      doc?.addEventListener('pointermove', () => {
+        if (win) win.__moves = (win.__moves ?? 0) + 1;
+      });
+    });
+    const framePointerMoves = () =>
+      page.evaluate(() => {
+        const frame = document.querySelector(
+          'iframe[title="投影片預覽"]'
+        ) as HTMLIFrameElement | null;
+        const win = frame?.contentDocument?.defaultView as
+          | (Window & { __moves?: number })
+          | null;
+        return win?.__moves ?? -1;
+      });
     await cdp.send('Input.dispatchTouchEvent', {
       type: 'touchStart',
-      touchPoints: [{ x: startX, y: startY }]
+      touchPoints: [{ id: 0, x: startX, y: startY }]
     });
+    // A move below the drag threshold must not surface the refusal, so the
+    // hint below can only be the probe's own threshold signal.
     await cdp.send('Input.dispatchTouchEvent', {
       type: 'touchMove',
-      touchPoints: [{ x: startX + 40, y: startY + 30 }]
+      touchPoints: [{ id: 0, x: startX + 1, y: startY }]
     });
+    await expect(hint).toHaveCount(0);
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: startX + 1,
+      y: startY,
+      button: 'none',
+      buttons: 0
+    });
+    await expect.poll(framePointerMoves).toBeGreaterThan(0);
+    await expect(hint).toHaveCount(0);
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ id: 0, x: startX + 40, y: startY + 30 }]
+    });
+    await page.waitForTimeout(250);
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText('表格');
     await cdp.send('Input.dispatchTouchEvent', {
       type: 'touchEnd',
       touchPoints: []
@@ -606,6 +656,10 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     if (!afterNudge) throw new Error('No box for #cell-a after the nudge');
     expect(deviation(cellStart, fromBoundingBox(afterNudge))).toBeLessThanOrEqual(1);
     await expect(page.getByTestId('save-status')).toHaveText('已同步');
+    // Delete must not inherit this hint, so dismiss it while it is guaranteed
+    // visible; the leg below re-checks the count right before Delete.
+    await page.getByTestId('edit-hint-dismiss').click();
+    await expect(hint).toHaveCount(0);
 
     // A mixed selection drags its HTML targets and leaves the cell untouched.
     await deck.frame.locator('#decor').click({ modifiers: ['Shift'] });
@@ -628,14 +682,63 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     const html = await readFile(deck.path, 'utf8');
     expect(html).not.toMatch(/id="cell-a"[^>]*(position: absolute|left:|top:)/);
 
-    // Delete refuses the cell and keeps every selected object, so the table
-    // itself stays the only thing that can remove a row or column.
-    await page.keyboard.press('Delete');
-    await expect(hint).toBeVisible();
-    await expect(hint).toContainText('表格');
-    await expect(cell).toBeVisible();
-    await expect(deck.frame.locator('#decor')).toBeVisible();
+    // The drag left the decor past the slide's right edge. The first nudge
+    // clamps it back to the bound; the next one cannot move it at all. That
+    // clamped HTML target is the obstacle, so the selected cell must not take
+    // the blame for the no-op.
+    await page.keyboard.press('Shift+ArrowRight');
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    // A mixed nudge that moves its HTML target writes and saves without blaming
+    // the cell either.
+    await expect(hint).toHaveCount(0);
+    const clampedDecor = await deck.frame.locator('#decor').boundingBox();
+    const clampedCell = await cell.boundingBox();
+    if (!clampedDecor || !clampedCell) throw new Error('No box after the clamp nudge');
+    expect(clampedDecor.x).toBeLessThan(decorAfter.x);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(250);
+    await expect(hint).toHaveCount(0);
+    const noopDecor = await deck.frame.locator('#decor').boundingBox();
+    const noopCell = await cell.boundingBox();
+    if (!noopDecor || !noopCell) throw new Error('No box after the no-op nudge');
+    expect(
+      deviation(fromBoundingBox(clampedDecor), fromBoundingBox(noopDecor))
+    ).toBeLessThanOrEqual(1);
+    expect(
+      deviation(fromBoundingBox(clampedCell), fromBoundingBox(noopCell))
+    ).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // Delete refuses the cell and keeps every selected object, so the table
+    // itself stays the only thing that can remove a row or column. No stale
+    // hint is on screen, so the hint below can only come from Delete.
+    await expect(hint).toHaveCount(0);
+    const deckPuts: string[] = [];
+    const recordDeckPut = (request: Request) => {
+      if (
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname === '/api/deck'
+      ) {
+        deckPuts.push(request.url());
+      }
+    };
+    page.on('request', recordDeckPut);
+    const bytesBeforeDelete = await readFile(deck.path, 'utf8');
+    try {
+      await page.keyboard.press('Delete');
+      await expect(hint).toBeVisible();
+      await expect(hint).toContainText('表格');
+      await expect(cell).toBeVisible();
+      await expect(deck.frame.locator('#decor')).toBeVisible();
+      // The autosave debounce is 800 ms, so wait past it before trusting the
+      // absence of a deck PUT.
+      await page.waitForTimeout(1_000);
+      expect(deckPuts).toEqual([]);
+      expect(await readFile(deck.path, 'utf8')).toBe(bytesBeforeDelete);
+      await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+    } finally {
+      page.off('request', recordDeckPut);
+    }
   } finally {
     await deck.close();
   }
