@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { elementAtPath } from './selection.js';
 import { parseDeck } from './slide-doc.js';
 import {
+  cloneComponent,
   collectObjectHtml,
+  deleteComponentPaths,
   deleteObjectPaths,
+  pasteComponentNode,
   pasteObjectHtml,
   type PastedObjectGeometry
 } from './object-ops.js';
@@ -275,5 +278,188 @@ describe('deleteObjectPaths', () => {
 
     expect(deleteObjectPaths(master, 0, [[1, 0], [99]])).toBe(0);
     expect(slide.querySelector('[data-ppt-el="box1"]')).not.toBeNull();
+  });
+});
+
+function componentMaster(inner: string): {
+  master: Document;
+  slide: Element;
+} {
+  const master = new DOMParser().parseFromString(
+    `<main data-ppt-deck><section data-slide-id="s1">${inner}</section></main>`,
+    'text/html'
+  );
+  const slide = detectSlides(master)[0]?.element;
+  if (!slide) throw new Error('Missing component fixture slide.');
+  return { master, slide };
+}
+
+describe('cloneComponent', () => {
+  it('clones a nested element with fresh editor ids and the authored id', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><h1 id="head" data-ppt-el="e1"><span data-ppt-el="e2">x</span></h1></div>'
+    );
+    const source = master.querySelector('#head');
+    if (!source) throw new Error('Missing source element.');
+    let next = 10;
+
+    const clone = cloneComponent(source, master, () => `e${next++}`);
+
+    expect(clone.id).toBe('head');
+    expect(clone.getAttribute('data-ppt-el')).toBe('e10');
+    expect(clone.querySelector('span')?.getAttribute('data-ppt-el')).toBe('e11');
+  });
+
+  it('does not mint editor ids where the source has none', () => {
+    const { master } = componentMaster('<div id="pad"><h1 id="plain">T</h1></div>');
+    const source = master.querySelector('#plain');
+    if (!source) throw new Error('Missing source element.');
+    const nextId = vi.fn(() => 'e1');
+
+    const clone = cloneComponent(source, master, nextId);
+
+    expect(clone.hasAttribute('data-ppt-el')).toBe(false);
+    expect(nextId).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteComponentPaths', () => {
+  it('deletes a nested element by path', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><h1 id="head">T</h1><p id="lead">L</p></div>'
+    );
+
+    expect(deleteComponentPaths(master, 0, [[0, 0]])).toBe(1);
+
+    expect(master.querySelector('#head')).toBeNull();
+    expect(master.querySelector('#lead')).not.toBeNull();
+  });
+
+  it('resolves same-parent siblings before removing any element', () => {
+    const { master } = componentMaster(
+      '<div id="pad"><h1 id="a">A</h1><h2 id="b">B</h2><p id="c">C</p></div>'
+    );
+
+    expect(deleteComponentPaths(master, 0, [[0, 0], [0, 1]])).toBe(2);
+
+    expect(master.querySelector('#a')).toBeNull();
+    expect(master.querySelector('#b')).toBeNull();
+    expect(master.querySelector('#c')).not.toBeNull();
+  });
+});
+
+describe('pasteComponentNode', () => {
+  it('pastes an svg circle into its svg parent without HTML parsing', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="plot"><circle id="dot" cx="5" cy="5" r="2"/></svg>'
+    );
+    const dot = master.querySelector('#dot');
+    if (!dot) throw new Error('Missing source circle.');
+
+    const target = pasteComponentNode(master, 0, dot, [0], null);
+
+    expect(target?.path).toEqual([0, 1]);
+    expect(master.querySelectorAll('circle')).toHaveLength(2);
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted circle.');
+    expect(clone.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    expect(clone.getAttribute('transform')).toBe('translate(20 20)');
+    expect(clone.hasAttribute('style')).toBe(false);
+  });
+
+  it('post-multiplies the offset onto an authored svg transform', () => {
+    const { master, slide } = componentMaster(
+      '<svg id="plot"><rect id="bar" width="10" height="10" transform="scale(2)"/></svg>'
+    );
+    const bar = master.querySelector('#bar');
+    if (!bar) throw new Error('Missing source rect.');
+
+    const target = pasteComponentNode(master, 0, bar, [0], null);
+
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted rect.');
+    expect(clone.getAttribute('transform')).toBe('scale(2) translate(20 20)');
+    expect(clone.getAttribute('transform')?.match(/translate\(/g)).toHaveLength(
+      1
+    );
+  });
+
+  it('inserts after a slide-rooted anchor that lives inside the parent', () => {
+    const { master, slide } = componentMaster(
+      '<div id="stack"><p id="a" data-ppt-el="e1">A</p><p id="b">B</p><p id="c">C</p></div>'
+    );
+    const source = master.querySelector('#a');
+    if (!source) throw new Error('Missing source anchor.');
+
+    const target = pasteComponentNode(master, 0, source, [0], [0, 0]);
+
+    expect(target?.path).toEqual([0, 1]);
+    const parent = elementAtPath(slide, [0]);
+    if (!parent) throw new Error('Missing paste parent.');
+    expect(
+      Array.from(parent.children, (child) => child.textContent)
+    ).toEqual(['A', 'A', 'B', 'C']);
+    expect(parent.children[1]?.getAttribute('data-ppt-el')).toBe(
+      target?.elementId
+    );
+    expect(parent.children[1]?.getAttribute('data-ppt-el')).not.toBe('e1');
+    expect(parent.children[2]?.textContent).toBe('B');
+  });
+
+  it('appends when the anchor is outside the parent or null', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><p id="a">A</p></div><p id="outside">Outside</p>'
+    );
+    const source = master.querySelector('#outside');
+    if (!source) throw new Error('Missing source element.');
+
+    const foreign = pasteComponentNode(master, 0, source, [0], [1]);
+    expect(foreign?.path).toEqual([0, 1]);
+
+    const missing = pasteComponentNode(master, 0, source, [0], null);
+    expect(missing?.path).toEqual([0, 2]);
+
+    const parent = elementAtPath(slide, [0]);
+    expect(parent?.children[2]?.textContent).toBe('Outside');
+  });
+
+  it('measures an html paste inside its real parent with the parent path', () => {
+    const { master, slide } = componentMaster(
+      '<div id="pad"><p id="lead">L</p></div>'
+    );
+    const parent = elementAtPath(slide, [0]);
+    if (!parent) throw new Error('Missing paste parent.');
+    const seen: Element[] = [];
+    const measure = vi.fn(
+      (element: Element, parentPath?: readonly number[]) => {
+        seen.push(element);
+        expect(element.parentElement).toBe(parent);
+        expect(parentPath).toEqual([0]);
+        return { x: 300, y: 200, position: 'absolute' };
+      }
+    );
+    const source = master.createElement('div');
+    source.className = 'placed';
+    source.textContent = 'Placed';
+
+    const target = pasteComponentNode(master, 0, source, [0], null, measure);
+
+    expect(measure).toHaveBeenCalledTimes(1);
+    const clone = elementAtPath(slide, target?.path ?? []);
+    if (!clone) throw new Error('Missing pasted placed element.');
+    expect(seen[0]).toBe(clone);
+    expect(styleOf(clone).position).toBe('absolute');
+    expect(styleOf(clone).left).toBe('320px');
+    expect(styleOf(clone).top).toBe('220px');
+  });
+
+  it('returns null for an unknown slide or parent path', () => {
+    const { master } = componentMaster('<div id="pad"></div>');
+    const source = master.querySelector('#pad');
+    if (!source) throw new Error('Missing source element.');
+
+    expect(pasteComponentNode(master, 9, source, [], null)).toBeNull();
+    expect(pasteComponentNode(master, 0, source, [5], null)).toBeNull();
+    expect(pasteComponentNode(master, 0, source, [0, 3], null)).toBeNull();
   });
 });

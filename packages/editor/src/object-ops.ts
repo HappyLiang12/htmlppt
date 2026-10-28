@@ -1,9 +1,15 @@
 import { detectSlides } from '@htmlppt/core';
+import { isSvgInternal } from './component-target.js';
 import {
+  elementAtPath,
   topLevelObjects,
   type SelectionTarget
 } from './selection.js';
-import { containingBlockOffset, rectOf } from './transform.js';
+import {
+  applySvgTranslate,
+  containingBlockOffset,
+  rectOf
+} from './transform.js';
 
 const PIXEL_VALUE = /^(-?(?:\d+|\d*\.\d+))px$/;
 
@@ -23,25 +29,37 @@ export interface PastedObjectGeometry {
 /**
  * Reads the rendered geometry of a pasted object. The editor master document
  * is inert, so class-positioned objects only have real coordinates in the live
- * preview; callers pass a reader bridged to that iframe.
+ * preview; callers pass a reader bridged to that iframe. Nested pastes also
+ * pass the destination parent path so the reader can measure the copy inside
+ * the parent it will actually render in.
  */
 export type PastedObjectMeasure = (
-  element: Element
+  element: Element,
+  parentPath?: readonly number[]
 ) => PastedObjectGeometry | null;
 
 /**
- * Shifts a pasted object by 20 design pixels on both axes. Positioned objects
- * with finite inline pixel coordinates move those values; an axis without a
- * usable pixel value (unitless, percentage, auto, or a class-supplied
- * coordinate) falls back to the measured box so the copy lands 20 px
- * down-right of where it renders. Flow objects switch to relative positioning
- * so the offset applies without measuring the destination slide.
+ * Shifts a pasted object by 20 design pixels on both axes. SVG content moves
+ * through a post-multiplied transform because absolute geometry styles are
+ * ignored there. Positioned objects with finite inline pixel coordinates move
+ * those values; an axis without a usable pixel value (unitless, percentage,
+ * auto, or a class-supplied coordinate) falls back to the measured box so the
+ * copy lands 20 px down-right of where it renders. Flow objects switch to
+ * relative positioning so the offset applies without measuring the destination
+ * slide. Callers insert the copy first so an svg it lives inside is visible.
  */
 function offsetPastedObject(
   element: Element,
   slide: Element,
   measured: PastedObjectGeometry | null
 ): void {
+  if (isSvgInternal(element)) {
+    applySvgTranslate(element, element.getAttribute('transform') ?? '', {
+      x: 20,
+      y: 20
+    });
+    return;
+  }
   const style = (element as HTMLElement).style;
   if (!style) return;
   const position = measured?.position || style.position;
@@ -198,4 +216,88 @@ export function deleteObjectPaths(
     slide.removeChild(element);
   }
   return selected.size;
+}
+
+/**
+ * Copies a component into the master document without parsing markup, so an
+ * svg shape keeps its namespace. The authored `id` is part of the saved
+ * contract and is kept; only editor-owned `data-ppt-el` markers are refreshed,
+ * and a node without one does not gain it.
+ */
+export function cloneComponent(
+  element: Element,
+  master: Document,
+  nextId: () => string
+): Element {
+  const clone = master.importNode(element, true) as Element;
+  if (clone.hasAttribute('data-ppt-el')) {
+    clone.setAttribute('data-ppt-el', nextId());
+  }
+  for (const nested of Array.from(clone.querySelectorAll('[data-ppt-el]'))) {
+    nested.setAttribute('data-ppt-el', nextId());
+  }
+  return clone;
+}
+
+/**
+ * Removes the selected nested nodes in one mutation. Every path resolves
+ * before the first removal so same-parent sibling indices cannot shift, and a
+ * node whose ancestor was already removed has no parent left and is skipped.
+ * The slide itself and unresolvable paths are ignored.
+ */
+export function deleteComponentPaths(
+  master: Document,
+  slideIndex: number,
+  paths: readonly (readonly number[])[]
+): number {
+  const slide = detectSlides(master)[slideIndex]?.element;
+  if (!slide) return 0;
+
+  const selected = new Set<Element>();
+  for (const path of paths) {
+    if (path.length === 0) continue;
+    const element = elementAtPath(slide, path);
+    if (element && element !== slide) selected.add(element);
+  }
+  let removed = 0;
+  for (const element of selected) {
+    if (!element.parentElement) continue;
+    element.parentElement.removeChild(element);
+    removed += 1;
+  }
+  return removed;
+}
+
+/**
+ * Pastes a copied nested component into its destination parent. `afterPath`
+ * is slide-rooted; it only anchors the insert when it resolves to a direct
+ * child of the destination parent, and any other case appends. The copy is
+ * inserted before offsetting so svg content sees the svg it lives in, and the
+ * optional measurement runs with the same parent path.
+ */
+export function pasteComponentNode(
+  master: Document,
+  slideIndex: number,
+  node: Element,
+  parentPath: readonly number[],
+  afterPath: readonly number[] | null,
+  measure?: PastedObjectMeasure
+): SelectionTarget | null {
+  const slide = detectSlides(master)[slideIndex]?.element;
+  const parent = slide ? elementAtPath(slide, parentPath) : null;
+  if (!slide || !parent) return null;
+
+  const clone = cloneComponent(node, master, nextIdFactory(slide));
+  const anchor = afterPath ? elementAtPath(slide, afterPath) : null;
+  if (anchor && anchor.parentElement === parent) {
+    parent.insertBefore(clone, anchor.nextSibling);
+  } else {
+    parent.appendChild(clone);
+  }
+  offsetPastedObject(clone, slide, measure?.(clone, parentPath) ?? null);
+  return {
+    slideIndex,
+    path: [...parentPath, Array.from(parent.children).indexOf(clone)],
+    elementId: elementIdOf(clone)
+  };
 }
