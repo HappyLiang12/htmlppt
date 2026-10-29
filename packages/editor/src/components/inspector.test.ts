@@ -367,13 +367,56 @@ describe('inspector nested structural hint', () => {
   const geometry = { x: 120, y: 160, width: 240, height: 120, rotation: 0 };
   const nestedSelection = { slideIndex: 0, path: [0, 0], elementId: null };
   const COPY =
-    'Position, size, appearance, and text apply to this object. Duplicate, delete, and reorder act on top-level objects only.';
+    'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.';
+  const NESTED_MULTI_COPY =
+    'Multiple nested objects selected. Only moving with the drag or arrow keys applies; duplicate, delete, reorder, and group act on top-level objects only.';
 
   it('explains which edits a nested selection still supports', async () => {
     await render({ selection: nestedSelection, geometry }, 'en');
 
     expect(container.textContent).toContain(COPY);
     expect(container.textContent).not.toContain('read-only');
+  });
+
+  it('limits the hint when the nested selection has no geometry', async () => {
+    const LIMITED_COPY = 'Reorder and group act on top-level objects only.';
+    await render(
+      {
+        selection: nestedSelection,
+        geometry: null,
+        geometryUnavailable: true
+      },
+      'en'
+    );
+
+    const hint = container.querySelector(
+      '[data-testid="inspector-nested-structural"]'
+    );
+    expect(hint?.textContent?.trim()).toBe(LIMITED_COPY);
+    // Position and size are unavailable, so the full promise must not render.
+    expect(container.textContent).not.toContain(COPY);
+  });
+
+  it('replaces the multi hint with the nested multi explanation', async () => {
+    await render(
+      {
+        selection: nestedSelection,
+        selectionCount: 2,
+        nestedSelectionCount: 1,
+        geometry
+      },
+      'en'
+    );
+
+    expect(container.textContent).toContain(NESTED_MULTI_COPY);
+    // The generic multi hint promises align, distribute, group, and drag, none
+    // of which apply to a nested multi; the two paragraphs must not stack.
+    expect(container.textContent).not.toContain('align, distribute, group');
+    expect(container.textContent).not.toContain(COPY);
+    const hint = container.querySelector(
+      '[data-testid="inspector-nested-structural"]'
+    );
+    expect(hint?.textContent?.trim()).toBe(NESTED_MULTI_COPY);
   });
 
   it('does not show the structural hint for a top-level selection', async () => {

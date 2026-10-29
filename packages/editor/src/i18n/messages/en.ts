@@ -91,6 +91,7 @@ export const en = {
   'inspector.text': 'Text',
   'inspector.notes': 'Notes',
   'inspector.objects': 'Objects',
+  'inspector.enterComponent': 'Enter',
   'inspector.objectActions': 'Object actions',
   'inspector.noObjects': 'No objects on this slide.',
   'inspector.invalidNumber': 'Invalid number. Fix it or press Escape to cancel.',
@@ -131,7 +132,11 @@ export const en = {
   'inspector.groupHint':
     'Groups can only be moved and rotated; ungroup to resize.',
   'inspector.nestedStructuralHint':
-    'Position, size, appearance, and text apply to this object. Duplicate, delete, and reorder act on top-level objects only.',
+    'Position, size, appearance, and text apply to this object. Reorder and group act on top-level objects only.',
+  'inspector.nestedStructuralHintLimited':
+    'Reorder and group act on top-level objects only.',
+  'inspector.nestedMultiStructuralHint':
+    'Multiple nested objects selected. Only moving with the drag or arrow keys applies; duplicate, delete, reorder, and group act on top-level objects only.',
   'inspector.appearance': 'Appearance',
   'inspector.objectAppearance': 'Object appearance',
   'inspector.image': 'Image',
@@ -333,6 +338,10 @@ export const en = {
     'This object is hidden. Unhide it before editing its content.',
   'editor.hint.group':
     'Groups edit as one object. Ungroup it to edit the parts.',
+  'editor.hint.table-cell-move':
+    'This is a table cell. Select the table to move it.',
+  'editor.hint.paste-kind':
+    'This SVG component can only be pasted inside an SVG.',
   'standalone.title': 'Standalone editor',
   'standalone.description': 'No local host is connected. Open or drop an HTML deck to edit it. Browsers with File System Access write back to the original file; others can download the exported HTML.',
   'standalone.open': 'Open HTML…',

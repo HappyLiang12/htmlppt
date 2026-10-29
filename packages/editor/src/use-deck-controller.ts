@@ -20,13 +20,26 @@ import {
   type Autosave,
   type DeckRevisionEvent
 } from './live-sync';
-import { topLevelObjects, type SelectionTarget } from './selection';
+import {
+  elementAtPath,
+  SVG_NAMESPACE,
+  topLevelObjects,
+  type SelectionTarget
+} from './selection';
+import {
+  isSvgInternal,
+  isTableInternal,
+  normalizeSelectionPaths
+} from './component-target';
 import {
   collectObjectHtml,
+  deleteComponentPaths,
   deleteObjectPaths,
+  pasteComponentNode,
   pasteObjectHtml,
   type PastedObjectMeasure
 } from './object-ops';
+import { blockedPathAncestor } from './commands/objects';
 import { buildSlideSrcDoc, parseDeck } from './slide-doc';
 import { clampSlideIndex } from './slide-index';
 import type { MessageKey, Translator } from './i18n';
@@ -102,6 +115,27 @@ export interface PendingEdit {
   discard(): void;
 }
 
+interface ClipboardComponent {
+  node: Element;
+  /** The node lives in the SVG namespace, including an svg root. */
+  svg: boolean;
+  /** SVG content inside another svg; a root is not internal. */
+  internal: boolean;
+}
+
+/**
+ * Result of a paste gesture. A paste that targets no valid destination never
+ * commits. "kind-mismatch" and "table-cell" raise a hint: an SVG internal can
+ * only land inside an SVG, while HTML and an SVG root fall back to the slide;
+ * a table cell has no destination that would keep the markup valid.
+ */
+export type PasteOutcome =
+  | 'pasted'
+  | 'empty'
+  | 'kind-mismatch'
+  | 'refused'
+  | 'table-cell';
+
 export interface DeckControllerActions {
   changePendingEdit(owner: string, edit: PendingEdit | null): void;
   cancelPendingEdit(owner: string): void;
@@ -128,7 +162,7 @@ export interface DeckControllerActions {
   commitMaster(mutate: MasterCommit): Promise<void>;
   saveNow(): Promise<void>;
   copySelection(): void;
-  pasteObjects(): Promise<void>;
+  pasteObjects(): Promise<PasteOutcome>;
   duplicateSelection(): Promise<void>;
   deleteSelection(): Promise<void>;
   undo(): void;
@@ -243,7 +277,7 @@ export function useDeckController(
   const pendingEditsRef = useRef(new Map<string, PendingEdit>());
   const settlingRef = useRef(false);
   const historyRef = useRef(new History<string, number>());
-  const clipboardRef = useRef<string[]>([]);
+  const clipboardRef = useRef<ClipboardComponent[]>([]);
   const persistenceRef = useRef<DeckPersistence>(
     options.persistence ?? hostPersistence()
   );
@@ -640,7 +674,17 @@ export function useDeckController(
           unique.push(target);
         }
       }
-      update({ selection: unique[0] ?? null, selections: unique });
+      // Ancestor/descendant pairs collapse to the highest selected node, so a
+      // cross-depth multi-selection never moves the same subtree twice.
+      const uniquePaths = normalizeSelectionPaths(
+        unique.map((target) => target.path)
+      );
+      const normalized = uniquePaths
+        .map((path) =>
+          unique.find((target) => target.path.join('.') === path.join('.'))
+        )
+        .filter((target): target is SelectionTarget => target !== undefined);
+      update({ selection: normalized[0] ?? null, selections: normalized });
     },
     [settlePendingEdits, update]
   );
@@ -664,16 +708,7 @@ export function useDeckController(
       const current = stateRef.current;
       const base = current.selections;
       const sameSlide = base[0]?.slideIndex === target.slideIndex;
-      const baseIsTopLevel =
-        base.length > 0 &&
-        base.every((candidate) => candidate.path.length === 1);
-      if (
-        target.path.length !== 1 ||
-        !baseIsTopLevel ||
-        !sameSlide
-      ) {
-        // Multi-selection is top-level only: a nested target, or a nested
-        // base, collapses to the incoming target instead of mixing levels.
+      if (!sameSlide) {
         // A target on another slide starts a fresh selection rather than
         // mixing slides.
         applySelections([target]);
@@ -821,15 +856,24 @@ export function useDeckController(
   );
 
   const copySelection = useCallback(() => {
+    const targets = stateRef.current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
+    );
+    if (targets.length === 0) return;
     const slide = slidesRef.current[activeIndexRef.current];
     if (!slide) return;
-    const html = collectObjectHtml(
-      slide.element,
-      stateRef.current.selections
-        .filter((target) => target.slideIndex === activeIndexRef.current)
-        .map((target) => target.path)
-    );
-    if (html.length > 0) clipboardRef.current = html;
+    const components: ClipboardComponent[] = [];
+    for (const target of targets) {
+      const element = elementAtPath(slide.element, target.path);
+      if (!element || isTableInternal(element)) continue;
+      const svg = element.namespaceURI === SVG_NAMESPACE;
+      components.push({
+        node: element.cloneNode(true) as Element,
+        svg,
+        internal: svg && isSvgInternal(element)
+      });
+    }
+    if (components.length > 0) clipboardRef.current = components;
   }, []);
 
   const pasteHtml = useCallback(
@@ -848,7 +892,10 @@ export function useDeckController(
           html,
           measurePastedRef.current
         );
-        if (pasted.length > 0 && activeIndexRef.current === slideIndex) {
+        // A paste that produced no target must not add history, dirty the
+        // deck, or schedule an autosave.
+        if (pasted.length === 0) return false;
+        if (activeIndexRef.current === slideIndex) {
           applySelections(pasted);
         }
       });
@@ -856,43 +903,175 @@ export function useDeckController(
     [applySelections, commitMaster]
   );
 
-  const pasteObjects = useCallback(
-    () => pasteHtml(clipboardRef.current),
-    [pasteHtml]
-  );
+  const pasteObjects = useCallback(async (): Promise<PasteOutcome> => {
+    const components = clipboardRef.current;
+    if (components.length === 0) return 'empty';
+    const slide = slidesRef.current[activeIndexRef.current];
+    if (!slide) return 'empty';
+    const selected = stateRef.current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
+    );
+    // A table cell owns no valid insertion point: a component between cells or
+    // rows would produce markup the table cannot represent, so the gesture
+    // explains itself before any destination is resolved.
+    if (selected.length === 1) {
+      const target = selected[0];
+      const element =
+        target && target.path.length > 1
+          ? elementAtPath(slide.element, target.path)
+          : null;
+      if (element && isTableInternal(element)) return 'table-cell';
+    }
+    // A multi-selection is a slide-level paste only while every target is a
+    // slide child; a nested path in the mix has no unambiguous destination.
+    if (
+      selected.length > 1 &&
+      selected.some((target) => target.path.length > 1)
+    ) {
+      return 'refused';
+    }
+    const anchor = selected.length === 1 ? selected[0] : null;
+    const anchorPath = anchor?.path ?? null;
+    const parentPath =
+      anchorPath !== null && anchorPath.length > 1
+        ? anchorPath.slice(0, -1)
+        : null;
+    // A guarded subtree owns its children, so a paste into it is refused even
+    // when the kinds would match.
+    if (
+      parentPath !== null &&
+      anchorPath !== null &&
+      blockedPathAncestor(slide.element, anchorPath) !== null
+    ) {
+      return 'refused';
+    }
+    // A nested anchor offers one insertion point. A clipboard with several
+    // components would fan out multiple siblings under a component, which the
+    // nested structural rule refuses as a whole.
+    if (parentPath !== null && components.length > 1) {
+      return 'refused';
+    }
+
+    let kindMismatch = false;
+    let pastedCount = 0;
+    await commitMaster((master) => {
+      const targets: SelectionTarget[] = [];
+      const parent =
+        parentPath !== null ? elementAtPath(slide.element, parentPath) : null;
+      for (const component of components) {
+        if (parentPath !== null && anchorPath !== null && parent !== null) {
+          // Kind, not tag, decides a nested destination: HTML content lands
+          // in HTML and SVG content lands in SVG.
+          const kindsMatch =
+            component.svg === (parent.namespaceURI === SVG_NAMESPACE);
+          if (kindsMatch) {
+            const pasted = pasteComponentNode(
+              master,
+              activeIndexRef.current,
+              component.node,
+              parentPath,
+              anchorPath,
+              measurePastedRef.current
+            );
+            if (pasted) targets.push(pasted);
+            continue;
+          }
+          // An SVG internal has no slide-level destination; HTML content and
+          // an svg root keep the historical slide-level fallback.
+          if (component.internal) {
+            kindMismatch = true;
+            continue;
+          }
+        } else if (component.internal) {
+          kindMismatch = true;
+          continue;
+        }
+        const pasted = pasteComponentNode(
+          master,
+          activeIndexRef.current,
+          component.node,
+          [],
+          null,
+          measurePastedRef.current
+        );
+        if (pasted) targets.push(pasted);
+      }
+      // A paste that pasted nothing must not commit: no history entry, no
+      // dirty flag, and no autosave for a refused or skipped gesture.
+      if (targets.length === 0) return false;
+      pastedCount = targets.length;
+      applySelections(targets);
+    });
+    // An SVG internal that found no SVG destination must surface even when the
+    // rest of a mixed clipboard pasted: the hint explains the missing half.
+    if (kindMismatch) return 'kind-mismatch';
+    if (pastedCount > 0) return 'pasted';
+    return 'empty';
+  }, [applySelections, commitMaster]);
 
   const duplicateSelection = useCallback(async () => {
+    const current = stateRef.current;
     const slide = slidesRef.current[activeIndexRef.current];
     if (!slide) return;
-    const html = collectObjectHtml(
-      slide.element,
-      stateRef.current.selections
-        .filter((target) => target.slideIndex === activeIndexRef.current)
-        .map((target) => target.path)
+    const targets = current.selections.filter(
+      (target) => target.slideIndex === activeIndexRef.current
     );
-    if (html.length > 0) await pasteHtml(html);
-  }, [pasteHtml]);
+    if (targets.length === 0) return;
+    // A multi-selection that includes a nested target has no unambiguous
+    // structural duplicate, so the whole gesture is refused.
+    if (
+      targets.length > 1 &&
+      targets.some((target) => target.path.length > 1)
+    ) {
+      return;
+    }
+    if (targets.length !== 1 || targets[0].path.length < 2) {
+      // Top-level single and all-top-level multi-selections keep the string
+      // path.
+      const html = collectObjectHtml(
+        slide.element,
+        targets.map((target) => target.path)
+      );
+      if (html.length > 0) await pasteHtml(html);
+      return;
+    }
+    const target = targets[0];
+    const element = elementAtPath(slide.element, target.path);
+    if (!element || !element.parentElement || isTableInternal(element)) return;
+    if (blockedPathAncestor(slide.element, target.path) !== null) return;
+    await commitMaster((master) => {
+      const pasted = pasteComponentNode(
+        master,
+        activeIndexRef.current,
+        element,
+        target.path.slice(0, -1),
+        target.path,
+        measurePastedRef.current
+      );
+      if (!pasted) return false;
+      applySelections([pasted]);
+    });
+  }, [applySelections, commitMaster, pasteHtml]);
 
   const deleteSelection = useCallback(async () => {
     const current = stateRef.current;
     const slideIndex = activeIndexRef.current;
     const slide = slidesRef.current[slideIndex];
     if (!slide) return;
-    const objects = new Set(topLevelObjects(slide.element));
-    const paths = current.selections
-      .filter(
-        (target) =>
-          target.slideIndex === slideIndex &&
-          target.path.length === 1 &&
-          objects.has(slide.element.children[target.path[0] ?? -1] as Element)
-      )
-      .map((target) => target.path);
-    if (paths.length === 0) return;
-
-    // Clear the selection inside the mutation, before the save is awaited, so
-    // a slow save cannot clear a newer selection made after a slide switch.
+    const targets = current.selections.filter(
+      (target) => target.slideIndex === slideIndex
+    );
+    if (targets.length === 0) return;
+    const nested = targets.some((target) => target.path.length > 1);
+    if (targets.length > 1 && nested) return;
+    if (targets.length === 1 && targets[0].path.length > 1) {
+      const element = elementAtPath(slide.element, targets[0].path);
+      if (!element || isTableInternal(element) || blockedPathAncestor(slide.element, targets[0].path)) return;
+    }
     await commitMaster((master) => {
-      const removed = deleteObjectPaths(master, slideIndex, paths);
+      const removed = nested
+        ? deleteComponentPaths(master, slideIndex, targets.map((target) => target.path))
+        : deleteObjectPaths(master, slideIndex, targets.map((target) => target.path));
       if (removed > 0 && activeIndexRef.current === slideIndex) {
         applySelections([]);
       }

@@ -173,6 +173,15 @@ describe('topLevelObjects', () => {
 
     expect(topLevelObjects(body)).toEqual([heading]);
   });
+
+  it('excludes non-rendered SVG elements from objects', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    svg.append(defs, title, group);
+    expect(topLevelObjects(svg)).toEqual([group]);
+  });
 });
 
 describe('selectionFromEvent', () => {

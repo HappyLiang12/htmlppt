@@ -131,6 +131,30 @@ group) and writes nothing. A nested geometry edit does write inline styles to
 the selected element, exactly like a top-level edit; text leaves inside a
 container still edit inline.
 
+The editor's pointer target is the component, not only the slide root. A click
+resolves the innermost visible component: the deepest non-inline box, an atomic
+image or chart figure, or a guarded wrapper. Tables are atomic for geometry,
+not for selection: a click resolves the innermost `td`/`th`, while the table
+object is selected through its border, the OBJECTS row, or the breadcrumb. This
+supersedes the earlier rule that a slide-level click selected the top-level
+object. An entered context keeps the direct-child selection described above.
+SVG internals are reached by entering the `<svg>` (double-click, Enter, the
+OBJECTS chevron, or the Inspector's Enter action) and move through a
+post-multiplied `transform` translation in local user units; a shape whose
+transform is owned by CSS stays selectable but does not move. A table cell is
+selectable because the table toolbar needs it, but it has no geometry gesture
+of its own: a drag explains that the table moves as one object. A single nested
+or SVG selection supports delete, duplicate, and copy/paste inside its parent,
+with fresh `data-ppt-el` ids. HTML copies offset by 20 design px. An SVG root
+(not SVG-internal) uses the same 20 design px CSS positioning fallback, while
+an SVG-internal copy appends `translate(20 20)` in its local user units
+instead, so the rendered offset depends on the viewBox scale; when CSS owns the
+shape's transform, the copy stays inert and writes no offset attribute. A
+nested multi-selection drags but refuses structural commands, and a
+multi-component clipboard cannot paste onto a nested anchor. Component
+selection, hover, entered context, and clipboard contents are editor-only state
+and are never saved.
+
 Objects are styled with inline `style` attributes and CSS classes. The editor
 may add `position: relative` to a statically positioned slide root while
 editing; otherwise it preserves unknown HTML and CSS.

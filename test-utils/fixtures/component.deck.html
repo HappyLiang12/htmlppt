@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Component deck</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  .slide { display: none; width: 1600px; height: 900px; background: #f7f5ef; color: #17181c; font: 20px/1.4 sans-serif; }
+  .slide.active { display: block; }
+  .pad { position: absolute; left: 0; top: 0; width: 1600px; height: 900px; padding: 60px; box-sizing: border-box; }
+  .headline { position: absolute; left: 80px; top: 80px; margin: 0; font-size: 64px; }
+  .lead { position: absolute; left: 80px; top: 180px; margin: 0; width: 700px; }
+  .chips { position: absolute; left: 80px; top: 260px; display: flex; gap: 12px; }
+  .chip { border: 1px solid #333; border-radius: 999px; padding: 8px 16px; }
+  .card { position: absolute; left: 80px; top: 340px; width: 400px; padding: 24px; border: 1px solid #333; }
+  .card .icon { width: 48px; height: 48px; display: grid; place-items: center; }
+  .flow { position: absolute; left: 520px; top: 340px; display: flex; gap: 16px; }
+  .step { width: 140px; padding: 12px; border: 1px solid #333; }
+  /* The chart clears the 700px lead's line box and the decor clears the
+     chart's 500px width; the plan's origins would overlap each of them. */
+  .chart-card { position: absolute; left: 900px; top: 80px; width: 500px; margin: 0; }
+  .chart-card svg { display: block; width: 100%; height: 220px; }
+  .arrow { position: absolute; right: 60px; top: 520px; width: 240px; }
+  .table-wrap { position: absolute; left: 80px; top: 620px; }
+  table { border-collapse: collapse; width: 500px; }
+  td, th { border: 1px solid #333; padding: 8px; }
+  .group { position: absolute; left: 1100px; top: 620px; padding: 12px; border: 1px solid #333; }
+  .locked { position: absolute; left: 1300px; top: 620px; padding: 12px; border: 1px solid #333; }
+  .decor { position: absolute; left: 1400px; top: 80px; width: 160px; height: 160px; border-radius: 50%; background: #ddd; }
+  .editable { position: absolute; left: 1100px; top: 400px; padding: 8px; border: 1px dashed #999; }
+  .css-shape { position: absolute; left: 700px; top: 720px; width: 120px; height: 120px; }
+  .css-shape-b { position: absolute; left: 860px; top: 720px; width: 120px; height: 120px; }
+  .css-attr-dot { transform: rotate(20deg); }
+  /* The review's nest-wrap origin (900, 720) overlapped css-shape-b's box and
+     swallowed its centre click. This origin clears css-shape-b (ends at 980)
+     and the group/locked row above it (ends at 714). */
+  .nest-wrap { position: absolute; left: 1040px; top: 760px; width: 160px; height: 96px; }
+  .contents { display: contents; }
+</style></head>
+<body>
+<main data-ppt-deck>
+  <section class="slide active" data-slide-id="s1" data-width="1600" data-height="900">
+    <div class="pad" id="pad">
+      <h1 class="headline" id="headline" data-ppt-el="headline">Component motion <span id="inline-word">now</span></h1>
+      <p class="lead" id="lead">Drag any component.</p>
+      <div class="chips" id="chips">
+        <span class="chip" id="chip-one" data-ppt-el="chip-one">One</span>
+        <span class="chip" id="chip-two">Two</span>
+      </div>
+      <article class="card" id="card" data-ppt-el="card">
+        <div class="icon" id="icon" data-ppt-el="icon"><svg id="icon-svg" data-ppt-el="icon-svg" width="24" height="24" viewBox="0 0 24 24"><path id="icon-path" d="M4 4h16v16H4z"/></svg></div>
+        <h3 id="card-title" data-ppt-el="card-title">Card title</h3>
+        <p id="card-body">Card body</p>
+      </article>
+      <figure class="chart-card" id="chart" data-ppt-el="chart" data-ppt-chart='{"type":"bar","title":"Chart","labels":["Q1","Q2"],"series":[{"name":"S","values":[10,20]}],"colors":["#4f7cff"],"legend":false,"valueLabels":true}'>
+        <figcaption id="chart-caption">Chart</figcaption>
+        <svg id="chart-svg" viewBox="0 0 200 120"><g id="bars"><rect id="bar" x="10" y="40" width="20" height="50"/></g><circle id="dot" cx="150" cy="40" r="6"/></svg>
+      </figure>
+      <div class="flow" id="flow">
+        <div class="step" id="step-one">Step one</div>
+        <div class="step" id="step-two" data-ppt-el="step-two">Step two</div>
+      </div>
+      <div class="table-wrap"><table id="table"><tbody><tr><td id="cell-a">A1</td><td id="cell-b">B1</td></tr></tbody></table></div>
+      <div class="group" id="group" data-ppt-el="group" data-ppt-group="true"><p id="group-child">Group child</p></div>
+      <div class="locked" id="locked" data-ppt-el="locked" data-ppt-locked="true"><p id="locked-child">Locked child</p></div>
+      <div class="contents"><p id="contents-child" data-ppt-el="contents-child">Contents child</p></div>
+      <div class="decor" id="decor"></div>
+      <div class="editable" id="editable" contenteditable="true">Authored editable</div>
+      <svg class="css-shape" id="css-shape" viewBox="0 0 100 100"><circle id="css-dot" cx="50" cy="50" r="30" style="transform: rotate(45deg)"/></svg>
+      <svg class="css-shape-b" id="css-shape-b" viewBox="0 0 100 100"><circle class="css-attr-dot" id="css-dot-b" cx="50" cy="50" r="30" transform="translate(2 2)"/></svg>
+      <svg class="nest-wrap" id="nest-wrap" viewBox="0 0 200 120"><svg id="inner-svg" x="20" y="20" width="100" height="80" viewBox="0 0 50 40"><circle id="inner-dot" cx="25" cy="20" r="15"/></svg><svg id="inner-scaled" x="120" y="20" width="40" height="40" viewBox="0 0 40 40" style="scale: 1.2"><circle id="scaled-dot" cx="20" cy="20" r="15"/></svg></svg>
+    </div>
+    <svg class="arrow" id="arrow" viewBox="0 0 100 50" data-ppt-el="arrow"><path id="arrow-path" d="M0 25h80"/></svg>
+    <aside data-ppt-notes="notes"></aside>
+  </section>
+</main>
+</body></html>

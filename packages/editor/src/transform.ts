@@ -117,6 +117,217 @@ export function rectOf(element: Element, slide: Element): Rect {
 }
 
 /**
+ * The affine coefficients Chromium's `SVGMatrix` exposes after
+ * `getScreenCTM()?.inverse()`; unlike `DOMMatrix` it has no `transformPoint`.
+ * `e`/`f` are declared for shape parity but never affect a delta.
+ */
+interface MatrixLike {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e?: number;
+  f?: number;
+}
+
+function svgInverseMatrix(element: Element): MatrixLike | null {
+  const graphics = element as SVGGraphicsElement;
+  const ctm = graphics.getScreenCTM?.();
+  if (!ctm) return null;
+  try {
+    return ctm.inverse() as unknown as MatrixLike;
+  } catch {
+    // A singular CTM (for example scale(0)) has no inverse; keep the design
+    // delta rather than breaking the pointer stream.
+    return null;
+  }
+}
+
+/**
+ * Converts a design-pixel delta to the space in which the written transform
+ * acts. For a shape, `g`, `use`, or `text`, the element's own screen CTM
+ * already includes its authored transform, and its inverse maps the delta to
+ * the local user space a post-multiplied translate acts in; the translation
+ * cancels for a delta, so only `a`/`b`/`c`/`d` matter.
+ *
+ * A nested `<svg>` is a viewport, not a shape: its own CTM also includes the
+ * `x`/`y` viewport offset and the `viewBox` scale, but its transform attribute
+ * is applied in the parent's user space, outside that mapping. Using the own
+ * CTM there would shrink the delta by the viewBox scale. The nested root
+ * therefore maps through the linear part of `parentCTM * authoredAttribute`
+ * (identity when no attribute exists). A missing parent CTM (a top-level svg
+ * in HTML, or jsdom without stubs) keeps the old fallback: the element's own
+ * CTM, then the raw delta. Each axis is rounded to 3 decimals.
+ */
+export function svgUserDelta(element: Element, delta: Point): Point {
+  const parent = element.parentElement as
+    | (Element & { getScreenCTM?: () => MatrixLike | null })
+    | null;
+  const nestedSvgRoot =
+    element.tagName.toLowerCase() === 'svg' &&
+    typeof parent?.getScreenCTM === 'function';
+  const inverse = nestedSvgRoot
+    ? (nestedSvgInverseMatrix(element) ?? svgInverseMatrix(element))
+    : svgInverseMatrix(element);
+  if (!inverse) return { x: delta.x, y: delta.y };
+  return {
+    x: Math.round((inverse.a * delta.x + inverse.c * delta.y) * 1000) / 1000,
+    y: Math.round((inverse.b * delta.x + inverse.d * delta.y) * 1000) / 1000
+  };
+}
+
+/**
+ * Inverts a 2x2 linear matrix by hand. A zero determinant (for example
+ * `scale(0)` or a collapsed axis) has no inverse; the caller keeps the design
+ * delta rather than breaking the pointer stream.
+ */
+function invertLinear(matrix: MatrixLike): MatrixLike | null {
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (!Number.isFinite(determinant) || determinant === 0) return null;
+  return {
+    a: matrix.d / determinant,
+    b: -matrix.b / determinant,
+    c: -matrix.c / determinant,
+    d: matrix.a / determinant
+  };
+}
+
+/**
+ * The inverse of the linear part of the matrix a nested svg root's transform
+ * attribute acts through: `parentCTM * authoredAttribute`. The attribute is
+ * applied in the parent's user space, before the element's own viewport
+ * mapping, so the element's own CTM is the wrong source here.
+ */
+function nestedSvgInverseMatrix(element: Element): MatrixLike | null {
+  const parent = element.parentElement as
+    | (Element & { getScreenCTM?: () => MatrixLike | null })
+    | null;
+  const parentCtm = parent?.getScreenCTM?.() ?? null;
+  if (!parentCtm) return null;
+  const authored = attributeMatrix(element);
+  const [a = 1, b = 0, c = 0, d = 1] = authored ?? [];
+  return invertLinear({
+    a: parentCtm.a * a + parentCtm.c * b,
+    b: parentCtm.b * a + parentCtm.d * b,
+    c: parentCtm.a * c + parentCtm.c * d,
+    d: parentCtm.b * c + parentCtm.d * d
+  });
+}
+
+const MATRIX_2D = /^matrix\(\s*([^)]+)\)$/;
+
+/**
+ * Splits Chromium's serialized 2D matrix. The computed value is serialized
+ * with about six significant digits, so comparisons need a tolerance.
+ */
+function matrixValues(value: string): number[] | null {
+  const match = MATRIX_2D.exec(value);
+  if (!match?.[1]) return null;
+  const parts = match[1].split(',').map((part) => Number(part.trim()));
+  return parts.length === 6 && parts.every(Number.isFinite) ? parts : null;
+}
+
+/**
+ * The matrix the `transform` presentation attribute alone produces. Chromium's
+ * `SVGGraphicsElement.transform` reflects the attribute, never a CSS
+ * declaration, and jsdom does not implement it at all.
+ */
+function attributeMatrix(element: Element): number[] | null {
+  const transform = (element as SVGGraphicsElement).transform?.baseVal;
+  const matrix = transform?.consolidate()?.matrix;
+  if (!matrix) return null;
+  return [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
+}
+
+function sameMatrix(applied: readonly number[], authored: readonly number[]): boolean {
+  return applied.every((value, index) => {
+    const reference = authored[index] ?? 0;
+    return Math.abs(value - reference) <= Math.max(1e-3, Math.abs(reference) * 1e-4);
+  });
+}
+
+/** The CSS individual transform properties, in composition order. */
+const INDIVIDUAL_TRANSFORM_PROPERTIES = [
+  'translate',
+  'rotate',
+  'scale'
+] as const;
+
+/**
+ * True when CSS declares an individual transform property. These properties
+ * compose outside the `transform` presentation attribute: Chromium computes
+ * `transform: none` for a shape or nested root styled with
+ * `style="scale: 2"`, so a predicate that reads only the computed transform
+ * would classify it as attribute-owned. The defaults are an empty value,
+ * `none`, and a missing property.
+ */
+function individualTransformSet(style: CSSStyleDeclaration): boolean {
+  return INDIVIDUAL_TRANSFORM_PROPERTIES.some((property) => {
+    const normalized = (style[property] ?? '').trim();
+    return normalized !== '' && normalized !== 'none';
+  });
+}
+
+/**
+ * True when CSS owns the element's transform, so the presentation attribute is
+ * inert. An inline style always wins and is detected cheaply. A stylesheet
+ * rule can also outrank the attribute while the attribute stays in the markup:
+ * Chromium surfaces the winning transform in the computed value, and it
+ * surfaces the attribute there too when no rule matches. CSS therefore owns
+ * the transform only when the computed matrix differs from the matrix the
+ * attribute alone produces. Any CSS transform on a shape without an attribute
+ * is an override by definition; jsdom reports the declared rule here and an
+ * empty computed value for an unstyled element (the same thing as `none`).
+ *
+ * The individual `translate`, `rotate`, and `scale` properties are CSS-owned
+ * too. They compose outside the presentation attribute, so Chromium computes
+ * `transform: none` for an element that uses them; the editor cannot append a
+ * translate without changing the authored styling, so a non-default individual
+ * property is an override as well.
+ *
+ * Documented residual: a stylesheet `transform: none` over an authored
+ * attribute computes `none`, which is indistinguishable from "no CSS
+ * transform", so the attribute reads as authoritative. A computed matrix that
+ * happens to equal the attribute is likewise treated as attribute-owned;
+ * telling those apart needs CSS rule introspection.
+ */
+export function svgCssTransformOverride(element: Element): boolean {
+  const inline = styleOf(element)?.transform?.trim() ?? '';
+  if (inline !== '') return true;
+  const computed = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (!computed) return false;
+  if (individualTransformSet(computed)) return true;
+  const transform = computed.transform ?? '';
+  if (transform.trim() === '' || transform === 'none') return false;
+  const authored = attributeMatrix(element);
+  if (!authored) return true;
+  const applied = matrixValues(transform.trim());
+  return applied === null || !sameMatrix(applied, authored);
+}
+
+/**
+ * Post-multiplies a translate onto the authored transform captured at gesture
+ * start. The delta arrives in the element's local user units (`svgUserDelta`),
+ * and a trailing translate is applied in that same local space, so a rotated
+ * or scaled shape follows the pointer. The authored transform is written back
+ * verbatim, so repeated writes with the same capture keep exactly one
+ * translate. An empty or `none` authored transform becomes just the translate.
+ */
+export function applySvgTranslate(
+  element: Element,
+  authoredTransform: string,
+  delta: Point
+): void {
+  const translate = `translate(${delta.x} ${delta.y})`;
+  const authored = authoredTransform.trim();
+  const keepsAuthored = authored !== '' && authored.toLowerCase() !== 'none';
+  element.setAttribute(
+    'transform',
+    keepsAuthored ? `${authored} ${translate}` : translate
+  );
+}
+
+/**
  * Offsets all targets by the same delta, preserving relative offsets. Styling
  * is left to the caller so a gesture can snap first and pin once.
  */

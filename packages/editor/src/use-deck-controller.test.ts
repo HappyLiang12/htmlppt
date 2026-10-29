@@ -9,7 +9,8 @@ import { parseDeck } from './slide-doc.js';
 import {
   hasEditorArtifacts,
   useDeckController,
-  type DeckController
+  type DeckController,
+  type PasteOutcome
 } from './use-deck-controller.js';
 import type { MessageKey, Translator } from './i18n';
 import { zhHant } from './i18n/messages/zh-Hant';
@@ -28,6 +29,33 @@ const DECK: DeckResponse = {
 </body>
 </html>`
 };
+
+const STRUCTURED_DECK: DeckResponse = {
+  revision: 'revision-1',
+  filePath: 'structured.html',
+  html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Structured fixture</title></head>
+<body>
+<main data-ppt-deck>
+<section class="slide">
+  <div class="pad">
+    <h1>Headline</h1>
+    <p id="lead">Lead</p>
+    <table><tbody><tr><td id="cell">A1</td></tr></tbody></table>
+    <svg id="chart-svg"><circle id="dot" cx="5" cy="5" r="2"/></svg>
+  </div>
+</section>
+</main>
+</body>
+</html>`
+};
+
+/** Slide child [0] is .pad; h1 [0,0], lead [0,1], cell [0,2,0,0,0]. */
+const HEADLINE_PATH = [0, 0];
+const LEAD_PATH = [0, 1];
+const CELL_PATH = [0, 2, 0, 0, 0];
+const CIRCLE_PATH = [0, 3, 0];
 
 let container: HTMLDivElement;
 let root: Root;
@@ -189,7 +217,7 @@ describe('useDeckController', () => {
     expect(controller.state.selection).toBeNull();
   });
 
-  it('replaces a multi selection when toggling a nested or cross-slide target', async () => {
+  it('drops a nested toggle under a selected ancestor and replaces across slides', async () => {
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -201,6 +229,8 @@ describe('useDeckController', () => {
         path: [1],
         elementId: 'e2'
       });
+      // Selection normalization drops a descendant of an already selected
+      // ancestor: moving both would move the same subtree twice.
       controller.actions.toggleSelect({
         slideIndex: 0,
         path: [0, 0],
@@ -208,7 +238,8 @@ describe('useDeckController', () => {
       });
     });
     expect(controller.state.selections).toEqual([
-      { slideIndex: 0, path: [0, 0], elementId: null }
+      { slideIndex: 0, path: [0], elementId: 'e1' },
+      { slideIndex: 0, path: [1], elementId: 'e2' }
     ]);
 
     act(() => {
@@ -223,7 +254,7 @@ describe('useDeckController', () => {
     ]);
   });
 
-  it('collapses a nested base when a top-level target is shift-clicked', async () => {
+  it('keeps unrelated nested and top-level targets in a multi selection', async () => {
     await act(async () => {
       await controller.actions.load(DECK);
     });
@@ -241,9 +272,10 @@ describe('useDeckController', () => {
       });
     });
     expect(controller.state.selections).toEqual([
+      { slideIndex: 0, path: [0, 0], elementId: null },
       { slideIndex: 0, path: [1], elementId: 'e2' }
     ]);
-    expect(controller.state.selection?.path).toEqual([1]);
+    expect(controller.state.selection?.path).toEqual([0, 0]);
   });
 
   it('selects every top-level object on the active slide', async () => {
@@ -363,8 +395,201 @@ describe('useDeckController', () => {
     expect(slide()?.querySelectorAll('h1')).toHaveLength(2);
   });
 
-  it('applies slide mutations and restores them through undo and redo', async () => {
+  it('pastes an all-top-level multi-selection at slide level', async () => {
     await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.copySelection();
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    expect(controller.state.selections.map((target) => target.path)).toEqual([
+      [0],
+      [1]
+    ]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('pasted');
+    const slide = () => controller.state.slides[0]?.element;
+    const headings = slide() ? Array.from(slide()!.querySelectorAll('h1')) : [];
+    expect(headings).toHaveLength(2);
+    // A multi-selection keeps the historical slide-level destination.
+    expect(headings[1]?.parentElement).toBe(slide());
+    expect(controller.state.selection?.path).toEqual([2]);
+    expect(controller.state.dirty).toBe(true);
+  });
+
+  it('refuses a multi-selection with a nested path without committing', async () => {
+    await act(async () => {
+      await controller.actions.load(DECK);
+    });
+
+    act(() => {
+      controller.actions.select({ slideIndex: 0, path: [0], elementId: 'e1' });
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: [0, 0],
+        elementId: null
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: [1],
+        elementId: 'e2'
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([[0, 0], [1]]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('refused');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+
+    // No history entry was pushed, so undo cannot change the deck.
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('refuses a multi-component clipboard on a nested anchor', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: LEAD_PATH,
+        elementId: null
+      });
+      // Copy both nested targets, then anchor the paste on one of them. The
+      // clipboard has two kind-compatible components for one insertion point.
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: LEAD_PATH,
+        elementId: null
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([LEAD_PATH]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('refused');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    const pad = () => slide()?.querySelector('.pad');
+    expect(pad()?.childElementCount).toBe(4);
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+    expect(slide()?.querySelectorAll('#lead')).toHaveLength(1);
+
+    // No history entry was pushed, so undo cannot change the deck.
+    await act(async () => {
+      controller.actions.undo();
+    });
+    expect(pad()?.childElementCount).toBe(4);
+  });
+
+  it('refuses a table-cell paste destination before committing', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.copySelection();
+      controller.actions.select({
+        slideIndex: 0,
+        path: CELL_PATH,
+        elementId: null
+      });
+    });
+    const before = controller.state.selections;
+    expect(before.map((target) => target.path)).toEqual([CELL_PATH]);
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    expect(outcome).toBe('table-cell');
+    expect(controller.state.dirty).toBe(false);
+    expect(controller.state.selections).toEqual(before);
+    const slide = () => controller.state.slides[0]?.element;
+    // The heading must not land inside the row or the cell: neither invalid
+    // markup nor a silent success may reach the save queue.
+    expect(slide()?.querySelectorAll('tr h1')).toHaveLength(0);
+    expect(slide()?.querySelectorAll('td h1')).toHaveLength(0);
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('reports kind-mismatch when a mixed clipboard skips an svg internal', async () => {
+    await act(async () => {
+      await controller.actions.load(STRUCTURED_DECK);
+    });
+
+    act(() => {
+      controller.actions.select({
+        slideIndex: 0,
+        path: HEADLINE_PATH,
+        elementId: null
+      });
+      controller.actions.copySelection();
+      controller.actions.toggleSelect({
+        slideIndex: 0,
+        path: CIRCLE_PATH,
+        elementId: null
+      });
+      // The second copy captures both: one HTML object and one SVG internal.
+      controller.actions.copySelection();
+      // A nested anchor refuses a multi-component clipboard as a whole, so
+      // exercise the mixed-kind skip at slide level, where the HTML half still
+      // has a destination.
+      controller.actions.clearSelection();
+    });
+
+    let outcome: PasteOutcome | undefined;
+    await act(async () => {
+      outcome = await controller.actions.pasteObjects();
+    });
+    // The HTML object lands at slide level, but the skipped SVG internal must
+    // still raise the hint so the user learns half the clipboard failed.
+    expect(outcome).toBe('kind-mismatch');
+    const slide = () => controller.state.slides[0]?.element;
+    expect(slide()?.querySelectorAll('h1')).toHaveLength(2);
+    expect(slide()?.querySelectorAll('circle')).toHaveLength(1);
+    expect(controller.state.dirty).toBe(true);
+  });
+
+  it('applies slide mutations and restores them through undo and redo', async () => {    await act(async () => {
       await controller.actions.load(DECK);
     });
 

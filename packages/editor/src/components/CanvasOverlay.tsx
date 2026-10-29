@@ -18,6 +18,8 @@ export interface CanvasOverlayProps {
   boxes: readonly SelectionBox[];
   /** Active snap guides in design pixels. */
   guides: Guide[];
+  /** Preview of the component a click would select, in design pixels. */
+  hover?: { rect: Rect; label: string } | null;
   scale: number;
   /**
    * Multi selections expose outlines only; resize, rotate, and numeric
@@ -54,6 +56,7 @@ const HANDLE_POSITIONS: Record<Handle, { left: string; top: string }> = {
 export function CanvasOverlay({
   boxes,
   guides,
+  hover = null,
   scale,
   readOnly,
   handles = 'all',
@@ -66,6 +69,26 @@ export function CanvasOverlay({
       className="pointer-events-none absolute inset-0 z-10"
       data-testid="canvas-overlay"
     >
+      {hover && (
+        <div
+          data-testid="hover-outline"
+          className="pointer-events-none absolute border border-dashed border-selection/70"
+          style={{
+            left: hover.rect.x * scale,
+            top: hover.rect.y * scale,
+            width: hover.rect.width * scale,
+            height: hover.rect.height * scale
+          }}
+        >
+          <span
+            data-testid="hover-label"
+            className="absolute left-0 top-0 -translate-y-full rounded bg-selection px-1 text-[10px] font-semibold text-selection-contrast"
+          >
+            {hover.label}
+          </span>
+        </div>
+      )}
+
       {guides.map((guide, index) =>
         guide.axis === 'x' ? (
           <div

@@ -160,6 +160,10 @@ export guarantees in full.
   select or multi-select, drag, resize with snapping and alignment guides,
   rotate, nudge, align/distribute, group/ungroup, change stacking order, lock,
   hide, copy/paste/duplicate/delete, undo/redo.
+- **Components:** a click selects the innermost visible component (heading,
+  card, tab, step, icon, chart, SVG shape) and drags it in place; duplicate,
+  delete, and copy/paste work inside its parent, while table cells and
+  CSS-transformed SVG shapes explain why they do not move.
 - **Inspector:** position and size, rotation, shape fill/stroke/radius/opacity,
   shape text, image alt text and percentage crop, image replacement, chart JSON,
   slide background (color, gradient, or image), transition selection with

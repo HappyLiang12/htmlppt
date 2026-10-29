@@ -93,6 +93,7 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.text': '文字',
   'inspector.notes': '備註',
   'inspector.objects': '物件',
+  'inspector.enterComponent': '進入',
   'inspector.objectActions': '物件操作',
   'inspector.noObjects': '此頁沒有物件。',
   'inspector.invalidNumber': '數值無效，請修正或按 Escape 取消。',
@@ -128,7 +129,10 @@ export const zhHant: Record<MessageKey, string> = {
   'inspector.multiHint': '已選取 {count} 個物件；可對齊、分佈、群組，或拖曳移動。',
   'inspector.groupHint': '群組僅支援移動與旋轉；取消群組後可調整大小。',
   'inspector.nestedStructuralHint':
-    '位置、大小、外觀與文字會套用到這個物件；複製、刪除與排序只作用於最上層物件。',
+    '位置、大小、外觀與文字會套用到這個物件；排序與群組只作用於最上層物件。',
+  'inspector.nestedStructuralHintLimited': '排序與群組只作用於最上層物件。',
+  'inspector.nestedMultiStructuralHint':
+    '已選取多個巢狀物件；僅支援拖曳或方向鍵移動，複製、刪除、排序與群組只作用於最上層物件。',
   'inspector.appearance': '外觀',
   'inspector.objectAppearance': '物件外觀',
   'inspector.image': '圖片',
@@ -322,6 +326,8 @@ export const zhHant: Record<MessageKey, string> = {
   'editor.hint.locked': '這個物件已鎖定。請先解鎖，再編輯其內容。',
   'editor.hint.hidden': '這個物件已隱藏。請先顯示，再編輯其內容。',
   'editor.hint.group': '群組會作為單一物件編輯。請先取消群組，再編輯其中的元件。',
+  'editor.hint.table-cell-move': '這是表格儲存格，請選取整個表格再移動。',
+  'editor.hint.paste-kind': '這個 SVG 元件只能貼到 SVG 內。',
   'standalone.title': '獨立編輯模式',
   'standalone.description': '未連上本機 host。開啟或拖入一份 HTML 簡報即可編輯；支援 File System Access 的瀏覽器會直接寫回原檔，其他瀏覽器可下載匯出的 HTML。',
   'standalone.open': '開啟 HTML…',

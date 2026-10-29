@@ -18,6 +18,7 @@ import {
   isEnterableContainer,
   type SelectionTarget
 } from '../selection';
+import { componentLabel } from '../component-target';
 import type { DeckControllerActions } from '../use-deck-controller';
 import { EDIT_HINT_KEYS, type EditHintReason } from '../text-edit-block';
 import {
@@ -91,10 +92,21 @@ export interface InspectorProps {
   /** Number of selected objects; more than one disables geometry fields. */
   selectionCount?: number;
   /**
+   * How many selected targets sit below the slide root. A multi-selection
+   * that mixes depths still needs the nested structural explanation.
+   */
+  nestedSelectionCount?: number;
+  /**
    * A nested target whose top-level ancestor is locked, hidden, or a group.
    * The ancestor owns the subtree, so every geometry field stays disabled.
    */
   blockedByAncestor?: boolean;
+  /**
+   * The selection moves through a mechanism other than absolute geometry,
+   * such as an SVG shape's transform or a table cell's own layout. Numeric
+   * x/y/width/height/rotation would write the wrong contract.
+   */
+  geometryUnavailable?: boolean;
   /** Entered container path; absent means the slide is listed. */
   contextPath?: readonly number[];
   onEnterContext?: (path: number[]) => void;
@@ -367,7 +379,9 @@ export function Inspector({
   slide,
   selection,
   selectionCount = selection ? 1 : 0,
+  nestedSelectionCount = 0,
   blockedByAncestor = false,
+  geometryUnavailable = false,
   contextPath,
   onEnterContext,
   geometry,
@@ -397,6 +411,7 @@ export function Inspector({
   const { t } = useI18n();
   const [tab, setTab] = useState<InspectorTab>('design');
   const replaceInput = useRef<HTMLInputElement | null>(null);
+  const objectListRef = useRef<HTMLUListElement | null>(null);
   const tabRefs = useRef<Record<InspectorTab, HTMLButtonElement | null>>({
     design: null,
     text: null,
@@ -457,17 +472,35 @@ export function Inspector({
   const objects = contextElement ? summarizeObjects(contextElement) : [];
   const multi = selectionCount > 1;
   // Structural commands stay top-level only, so a nested selection still
-  // needs an explanation even though its position, size, and appearance are
-  // now editable.
+  // needs an explanation. A selection without numeric geometry (an SVG
+  // internal or a table cell) cannot promise position or size, so its hint
+  // only states the structural rule.
   const nested = selection !== null && selection.path.length > 1;
   const readOnly = multi;
   const selectedTopPath = selection?.path.slice(contextBase.length)[0];
   const geometryLocked =
     readOnly ||
     blockedByAncestor ||
+    geometryUnavailable ||
     objectActions.locked ||
     objectActions.hidden;
   const sizeLocked = geometryLocked || objectActions.group;
+
+  // A single selection below the active context can become the new editing
+  // context. Leaves, guarded subtrees, the active container itself, and a
+  // multi-selection have nothing to enter; without a handler the action has
+  // nowhere to go.
+  const selectedElement =
+    slide && selection ? elementAtPath(slide.element, selection.path) : null;
+  const canEnterSelection =
+    selection !== null &&
+    selectionCount === 1 &&
+    onEnterContext !== undefined &&
+    selection.path.join('.') !== contextBase.join('.') &&
+    selectedElement !== null &&
+    isEnterableContainer(selectedElement);
+  const enterSelectionPath =
+    canEnterSelection && selection ? [...selection.path] : null;
 
   const selectTab = (next: InspectorTab, focus: boolean) => {
     setTab(next);
@@ -580,11 +613,38 @@ export function Inspector({
         hidden={tab !== 'design'}
       >
         <section aria-label={t('inspector.objects')} className={SECTION_CLASS}>
-          <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
+          <div className="flex items-center justify-between">
+            <h3 className={HEADING_CLASS}>{t('inspector.objects')}</h3>
+            {enterSelectionPath && selectedElement && (
+              <button
+                type="button"
+                data-testid="inspector-enter-component"
+                aria-label={t('editor.context.enter', {
+                  name: componentLabel(selectedElement)
+                })}
+                onClick={() => {
+                  onEnterContext?.(enterSelectionPath);
+                  // The action unmounts with the old context; hand focus to
+                  // the new object list instead of dropping it to the body.
+                  window.requestAnimationFrame(() =>
+                    objectListRef.current?.focus()
+                  );
+                }}
+                className={ACTION_CLASS}
+              >
+                {t('inspector.enterComponent')}
+              </button>
+            )}
+          </div>
           {objects.length === 0 ? (
             <p className="text-xs text-muted">{t('inspector.noObjects')}</p>
           ) : (
-            <ul data-testid="object-list" className="flex flex-col gap-1">
+            <ul
+              ref={objectListRef}
+              tabIndex={-1}
+              data-testid="object-list"
+              className="flex flex-col gap-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
               {objects.map((object) => {
                 const selected = selectedTopPath === object.path[0];
                 const objectElement = contextElement?.children[object.index];
@@ -1055,17 +1115,36 @@ export function Inspector({
                 {t('inspector.lockedHint')}
               </p>
             ) : multi ? (
-              <p className="text-[11px] text-muted">
-                {t('inspector.multiHint', { count: selectionCount })}
-              </p>
+              nestedSelectionCount > 0 ? (
+                // Geometry is locked for a nested multi, and align, distribute,
+                // and group are top-level only, so the generic multi hint
+                // would promise gestures this selection cannot perform.
+                <p
+                  data-testid="inspector-nested-structural"
+                  className="text-[11px] text-muted"
+                >
+                  {t('inspector.nestedMultiStructuralHint')}
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted">
+                  {t('inspector.multiHint', { count: selectionCount })}
+                </p>
+              )
             ) : objectActions.group ? (
               <p data-testid="object-state-message" className="text-[11px] text-muted">
                 {t('inspector.groupHint')}
               </p>
             ) : (
               nested && (
-                <p className="text-[11px] text-muted">
-                  {t('inspector.nestedStructuralHint')}
+                <p
+                  data-testid="inspector-nested-structural"
+                  className="text-[11px] text-muted"
+                >
+                  {t(
+                    geometryUnavailable
+                      ? 'inspector.nestedStructuralHintLimited'
+                      : 'inspector.nestedStructuralHint'
+                  )}
                 </p>
               )
             )}
