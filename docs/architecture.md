@@ -256,10 +256,13 @@ and refuses guarded, table-cell, and nested multi destinations plus a
 multi-component clipboard aimed at a nested anchor. The helpers in
 `object-ops.ts` (`cloneComponent`, `deleteComponentPaths`,
 `pasteComponentNode`) refresh every `data-ppt-el` in a clone, offset it, and
-insert into the destination parent: HTML copies move 20 design px, while an SVG
-copy appends `translate(20 20)` in its local user units, so the rendered offset
-depends on the viewBox scale. Every operation goes through `commitMaster`, so
-undo, autosave, and conflict recovery are unchanged.
+insert into the destination parent. HTML copies offset by 20 design px. An SVG
+root (not SVG-internal) uses the same 20 design px CSS positioning fallback,
+while an SVG-internal copy appends `translate(20 20)` in its local user units
+instead, so the rendered offset depends on the viewBox scale; when CSS owns the
+shape's transform, the copy stays inert and writes no offset attribute. Every
+operation goes through `commitMaster`, so undo, autosave, and conflict recovery
+are unchanged.
 
 ## Presenter BroadcastChannel protocol
 

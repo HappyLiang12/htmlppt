@@ -145,12 +145,15 @@ transform is owned by CSS stays selectable but does not move. A table cell is
 selectable because the table toolbar needs it, but it has no geometry gesture
 of its own: a drag explains that the table moves as one object. A single nested
 or SVG selection supports delete, duplicate, and copy/paste inside its parent,
-with fresh `data-ppt-el` ids. HTML copies offset by 20 design px; an SVG copy
-appends `translate(20 20)` in its local user units, so the rendered offset
-depends on the viewBox scale. A nested multi-selection drags but refuses
-structural commands, and a multi-component clipboard cannot paste onto a nested
-anchor. Component selection, hover, entered context, and clipboard contents are
-editor-only state and are never saved.
+with fresh `data-ppt-el` ids. HTML copies offset by 20 design px. An SVG root
+(not SVG-internal) uses the same 20 design px CSS positioning fallback, while
+an SVG-internal copy appends `translate(20 20)` in its local user units
+instead, so the rendered offset depends on the viewBox scale; when CSS owns the
+shape's transform, the copy stays inert and writes no offset attribute. A
+nested multi-selection drags but refuses structural commands, and a
+multi-component clipboard cannot paste onto a nested anchor. Component
+selection, hover, entered context, and clipboard contents are editor-only state
+and are never saved.
 
 Objects are styled with inline `style` attributes and CSS classes. The editor
 may add `position: relative` to a statically positioned slide root while

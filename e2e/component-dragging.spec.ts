@@ -891,6 +891,24 @@ test('selects a table cell but refuses to drag or nudge it', { tag: '@feature:co
     ).toBeLessThanOrEqual(1);
     // Nothing moved and nothing was written.
     await expect(page.getByTestId('save-status')).toHaveText('已儲存');
+
+    // The mixed selection above has a cell as its primary target, so its
+    // missing chart panel proves nothing about the gate: the ungated panel
+    // never described a cell either. A chart primary target does offer the
+    // data editor, and adding a second target must hide it again. This is the
+    // leg the multi-selection gate fails: ungated, chart-edit stays visible.
+    await deck.frame.locator('#chart').click();
+    await expect(page.getByTestId('selection-outline')).toHaveCount(1);
+    await expect(
+      page.locator('[data-testid="selection-outline"][data-selected-id="chart"]')
+    ).toHaveCount(1);
+    await expect(page.getByTestId('chart-edit')).toHaveCount(1);
+    // No drag and no command here: the second target only changes what the
+    // Inspector may offer, so the chart itself must stay untouched.
+    await deck.frame.locator('#decor').click({ modifiers: ['Shift'] });
+    await expect(page.getByTestId('selection-outline')).toHaveCount(2);
+    await expect(page.getByTestId('chart-edit')).toHaveCount(0);
+    await expect(page.getByTestId('chart-object')).toHaveCount(0);
   } finally {
     await deck.close();
   }
